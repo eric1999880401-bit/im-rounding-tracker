@@ -3,9 +3,10 @@ import { signOutCurrentUser } from "../firebase/auth";
 
 interface AppLayoutProps {
   userEmail: string;
+  syncError: string;
 }
 
-function AppLayout({ userEmail }: AppLayoutProps) {
+function AppLayout({ userEmail, syncError }: AppLayoutProps) {
   return (
     <div className="app-shell">
       <aside className="sidebar no-print">
@@ -24,6 +25,7 @@ function AppLayout({ userEmail }: AppLayoutProps) {
       </aside>
 
       <main className="main-content">
+        {syncError && <p className="error-message no-print">{syncError}</p>}
         <Outlet />
       </main>
     </div>

@@ -15,10 +15,17 @@ interface PageProps {
   patients: Patient[];
   dataLoading: boolean;
   dataError: string;
+  onCreatePatient: (patient: Patient) => Promise<void>;
   onSavePatient: (patient: Patient) => Promise<void>;
 }
 
-function PatientBoardPage({ patients, dataLoading, dataError, onSavePatient }: PageProps) {
+function PatientBoardPage({
+  patients,
+  dataLoading,
+  dataError,
+  onCreatePatient,
+  onSavePatient,
+}: PageProps) {
   const [showForm, setShowForm] = useState(false);
   const [draftPatient, setDraftPatient] = useState<Patient>(emptyPatient());
   const [sortMode, setSortMode] = useState<SortMode>("bed");
@@ -26,7 +33,7 @@ function PatientBoardPage({ patients, dataLoading, dataError, onSavePatient }: P
 
   async function addPatient() {
     const now = nowIso();
-    await onSavePatient({ ...draftPatient, createdAt: now, updatedAt: now, status: "active" });
+    await onCreatePatient({ ...draftPatient, createdAt: now, updatedAt: now, status: "active" });
     setDraftPatient(emptyPatient());
     setShowForm(false);
   }

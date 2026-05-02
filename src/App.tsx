@@ -9,13 +9,18 @@ import ArchivePage from "./pages/ArchivePage";
 import PrintRoundingListPage from "./pages/PrintRoundingListPage";
 import AuthPage from "./pages/AuthPage";
 import { useAuthUser } from "./firebase/auth";
-import { savePatient, subscribeToPatients } from "./firebase/patientService";
+import { createPatient, subscribeToPatients, updatePatient } from "./firebase/patientService";
 
 function App() {
   const { user, authLoading } = useAuthUser();
   const [patients, setPatients] = useState<Patient[]>([]);
   const [dataLoading, setDataLoading] = useState(true);
   const [dataError, setDataError] = useState("");
+
+  function formatSyncError(action: string, error: unknown) {
+    const message = error instanceof Error ? error.message : "Unknown Firestore error";
+    return `${action} failed. Firestore did not save the change: ${message}`;
+  }
 
   useEffect(() => {
     if (!user) {
@@ -25,6 +30,7 @@ function App() {
     }
 
     setDataLoading(true);
+    setDataError("");
     const unsubscribe = subscribeToPatients(
       user.uid,
       (nextPatients) => {
@@ -32,7 +38,7 @@ function App() {
         setDataLoading(false);
       },
       (error) => {
-        setDataError(error.message);
+        setDataError(formatSyncError("Loading patients", error));
         setDataLoading(false);
       },
     );
@@ -40,9 +46,41 @@ function App() {
     return unsubscribe;
   }, [user]);
 
+  async function createSyncedPatient(patient: Patient) {
+    if (!user) {
+      setDataError("Creating patient failed. You must be signed in before saving patient data.");
+      return;
+    }
+
+    setDataError("");
+    try {
+      await createPatient(user.uid, patient);
+    } catch (error) {
+      const message = formatSyncError("Creating patient", error);
+      setDataError(message);
+      throw new Error(message);
+    }
+  }
+
+  async function updateSyncedPatient(patient: Patient) {
+    if (!user) {
+      setDataError("Saving patient failed. You must be signed in before saving patient data.");
+      return;
+    }
+
+    setDataError("");
+    try {
+      await updatePatient(user.uid, patient);
+    } catch (error) {
+      const message = formatSyncError("Saving patient", error);
+      setDataError(message);
+      throw new Error(message);
+    }
+  }
+
   async function saveSyncedPatient(patient: Patient) {
     if (!user) return;
-    await savePatient(user.uid, patient);
+    await updateSyncedPatient(patient);
   }
 
   if (authLoading) {
@@ -55,7 +93,7 @@ function App() {
 
   return (
     <Routes>
-      <Route element={<AppLayout userEmail={user.email ?? ""} />}>
+      <Route element={<AppLayout userEmail={user.email ?? ""} syncError={dataError} />}>
         <Route path="/" element={<Navigate to="/patients" replace />} />
         <Route
           path="/patients"
@@ -64,6 +102,7 @@ function App() {
               patients={patients}
               dataLoading={dataLoading}
               dataError={dataError}
+              onCreatePatient={createSyncedPatient}
               onSavePatient={saveSyncedPatient}
             />
           }
