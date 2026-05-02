@@ -1,0 +1,225 @@
+.print-sheet {
+  background: white;
+}
+
+.print-title {
+  border: 1px solid #1f2933;
+  border-bottom: 0;
+  display: grid;
+  gap: 5px;
+  padding: 8px 10px;
+}
+
+.print-title h1 {
+  font-size: 20px;
+  line-height: 1.1;
+  margin: 0;
+}
+
+.print-title p {
+  color: #b42318;
+  font-size: 12px;
+  font-weight: 700;
+  margin: 0;
+}
+
+.print-meta-grid {
+  display: grid;
+  gap: 4px 14px;
+  grid-template-columns: repeat(5, max-content);
+}
+
+.rounding-table {
+  background: white;
+  border: 1px solid #1f2933;
+  table-layout: fixed;
+}
+
+.rounding-table th,
+.rounding-table td {
+  border: 1px solid #1f2933;
+  line-height: 1.28;
+  overflow-wrap: anywhere;
+  vertical-align: top;
+}
+
+.rounding-table th {
+  background: #e4e7eb;
+  color: #111827;
+  font-weight: 800;
+}
+
+.print-bed {
+  font-weight: 800;
+}
+
+.print-task + .print-task {
+  margin-top: 2px;
+}
+
+.density-normal .print-title {
+  font-size: 12px;
+}
+
+.density-normal .rounding-table th,
+.density-normal .rounding-table td {
+  font-size: 11px;
+  padding: 6px;
+}
+
+.density-compact .print-title {
+  font-size: 10px;
+}
+
+.density-compact .rounding-table th,
+.density-compact .rounding-table td {
+  font-size: 9px;
+  padding: 4px;
+}
+
+.density-ultra-compact .print-title {
+  font-size: 9px;
+}
+
+.density-ultra-compact .print-title h1 {
+  font-size: 16px;
+}
+
+.density-ultra-compact .rounding-table th,
+.density-ultra-compact .rounding-table td {
+  font-size: 7.8px;
+  line-height: 1.18;
+  padding: 2px 3px;
+}
+
+.rounding-table th:nth-child(1) {
+  width: 5%;
+}
+
+.rounding-table th:nth-child(2) {
+  width: 8%;
+}
+
+.rounding-table th:nth-child(3) {
+  width: 15%;
+}
+
+.rounding-table th:nth-child(4) {
+  width: 14%;
+}
+
+.rounding-table th:nth-child(5) {
+  width: 16%;
+}
+
+.rounding-table th:nth-child(6) {
+  width: 13%;
+}
+
+.rounding-table th:nth-child(7) {
+  width: 14%;
+}
+
+.rounding-table th:nth-child(8) {
+  width: 15%;
+}
+
+@page {
+  size: A4 landscape;
+  margin: 6mm;
+}
+
+@media print {
+  html,
+  body {
+    background: white;
+    color: black;
+  }
+
+  /* Print mode removes the app frame and leaves only the clinical list. */
+  .no-print,
+  .sidebar,
+  button,
+  form,
+  input,
+  select,
+  textarea,
+  nav {
+    display: none !important;
+  }
+
+  .app-shell,
+  .main-content,
+  .page,
+  .print-page {
+    display: block;
+    margin: 0;
+    min-height: auto;
+    padding: 0;
+  }
+
+  .print-sheet {
+    display: block;
+    width: 100%;
+  }
+
+  .print-title {
+    break-after: avoid;
+    page-break-after: avoid;
+    padding: 4px 6px;
+  }
+
+  .print-title h1 {
+    font-size: 13px;
+  }
+
+  .print-title p {
+    font-size: 8px;
+  }
+
+  .print-meta-grid {
+    gap: 2px 10px;
+    grid-template-columns: repeat(5, max-content);
+  }
+
+  .rounding-table {
+    page-break-inside: auto;
+    width: 100%;
+  }
+
+  .rounding-table thead {
+    display: table-header-group;
+  }
+
+  .patient-print-row,
+  .rounding-table tr,
+  .rounding-table td,
+  .rounding-table th {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  .rounding-table th,
+  .rounding-table td {
+    color: black;
+  }
+
+  .density-normal .rounding-table th,
+  .density-normal .rounding-table td {
+    font-size: 9.5px;
+    padding: 4px;
+  }
+
+  .density-compact .rounding-table th,
+  .density-compact .rounding-table td {
+    font-size: 8.5px;
+    padding: 3px;
+  }
+
+  .density-ultra-compact .rounding-table th,
+  .density-ultra-compact .rounding-table td {
+    font-size: 7.2px;
+    line-height: 1.12;
+    padding: 2px;
+  }
+}
