@@ -1,12 +1,20 @@
 import { useState } from "react";
 import type { Patient, PrintDensity, SortMode } from "../types";
-import { getActivePatients, hasUrgentPendingTask, sortPatients } from "../utils";
+import {
+  getActiveAttendingNames,
+  getActivePatients,
+  groupPatientsByAttending,
+  hasUrgentPendingTask,
+  sortPatients,
+} from "../utils";
 
 interface PageProps {
   patients: Patient[];
 }
 
 function PrintRoundingListPage({ patients }: PageProps) {
+  const [printMode, setPrintMode] = useState("all");
+  const [selectedAttending, setSelectedAttending] = useState("");
   const [hideCompletedTasks, setHideCompletedTasks] = useState(true);
   const [hideStableDetails, setHideStableDetails] = useState(false);
   const [showOnlyActiveProblems, setShowOnlyActiveProblems] = useState(false);
@@ -15,7 +23,12 @@ function PrintRoundingListPage({ patients }: PageProps) {
   const [team, setTeam] = useState("Team A");
   const [attending, setAttending] = useState("");
   const [resident, setResident] = useState("");
-  const activePatients = sortPatients(getActivePatients(patients), sortMode);
+  const attendingNames = getActiveAttendingNames(patients);
+  const filteredActivePatients = getActivePatients(patients).filter(
+    (patient) => printMode !== "selected" || patient.attending.trim() === selectedAttending,
+  );
+  const activePatients = sortPatients(filteredActivePatients, sortMode);
+  const groupedPatients = groupPatientsByAttending(activePatients);
   const todayText = new Date().toLocaleDateString();
 
   function taskText(patient: Patient) {
@@ -38,6 +51,131 @@ function PrintRoundingListPage({ patients }: PageProps) {
       !patient.overnightEvent.trim() &&
       !patient.newLabs.trim() &&
       !patient.newImaging.trim()
+      );
+  }
+
+  function renderPrintSection(sectionPatients: Patient[], sectionAttending: string, startNewPage = false) {
+    return (
+      <section
+        className={`print-sheet ${startNewPage ? "print-attending-section" : ""}`}
+        aria-label={`Printable rounding list for ${sectionAttending}`}
+        key={sectionAttending}
+      >
+        <div className="print-title">
+          <h1>Internal Medicine Rounding List</h1>
+          <div className="print-meta-grid">
+            <span>
+              <strong>Date:</strong> {todayText}
+            </span>
+            <span>
+              <strong>Team:</strong> {team || "________"}
+            </span>
+            <span>
+              <strong>Attending:</strong> {sectionAttending || attending || "________"}
+            </span>
+            <span>
+              <strong>Resident:</strong> {resident || "________"}
+            </span>
+            <span>
+              <strong>Total active:</strong> {sectionPatients.length}
+            </span>
+          </div>
+          <p>Use de-identified data only.</p>
+        </div>
+
+        <table className="rounding-table">
+          <thead>
+            <tr>
+              <th>Bed</th>
+              <th>Pt</th>
+              <th>Dx / Problems</th>
+              <th>Sx / New Data</th>
+              <th>A/P</th>
+              <th>To-do</th>
+              <th>DC Plan</th>
+              <th>Attention / VS</th>
+            </tr>
+          </thead>
+          <tbody>
+            {sectionPatients.map((patient) => (
+              <tr className="patient-print-row" key={patient.id}>
+                <td className="print-bed">{patient.bed}</td>
+                <td>
+                  <strong>{patient.patientCode}</strong>
+                  <br />
+                  {patient.age} / {patient.sex}
+                </td>
+                <td>
+                  {!showOnlyActiveProblems && <strong>{patient.primaryDiagnosis}</strong>}
+                  <div>{patient.activeProblems || "-"}</div>
+                  <div>
+                    <strong>PMH:</strong> {patient.underlyingDiseases || "-"}
+                  </div>
+                  {printMode === "all" && (
+                    <div>
+                      <strong>Att:</strong> {patient.attending || "-"}
+                    </div>
+                  )}
+                </td>
+                <td>
+                  {shouldHideDetails(patient) ? (
+                    <span className="muted">Stable; no new data</span>
+                  ) : (
+                    <>
+                      <div>
+                        <strong>Sx:</strong> {patient.subjectiveOrChiefConcern || "-"}
+                      </div>
+                      <div>
+                        <strong>ON:</strong> {patient.overnightEvent || "-"}
+                      </div>
+                      <div>
+                        <strong>Lab:</strong> {patient.newLabs || "-"}
+                      </div>
+                      <div>
+                        <strong>Img:</strong> {patient.newImaging || "-"}
+                      </div>
+                    </>
+                  )}
+                </td>
+                <td>
+                  {shouldHideDetails(patient) ? (
+                    <span className="muted">See Dx/problems</span>
+                  ) : (
+                    <>
+                      <div>
+                        <strong>A:</strong> {patient.assessment || "-"}
+                      </div>
+                      <div>
+                        <strong>P:</strong> {patient.plan || "-"}
+                      </div>
+                    </>
+                  )}
+                </td>
+                <td>{taskText(patient)}</td>
+                <td>
+                  <div>
+                    <strong>Target:</strong> {patient.dischargeTargetDate || "TBD"}
+                  </div>
+                  <div>
+                    <strong>Plan:</strong> {patient.dischargePlan || "-"}
+                  </div>
+                  <div>
+                    <strong>Barrier:</strong> {patient.dischargeBarriers || "-"}
+                  </div>
+                </td>
+                <td>
+                  <div>
+                    <strong>Attn:</strong> {patient.specialAttention || "-"}
+                  </div>
+                  <div>
+                    <strong>VS:</strong> {patient.vsOrder || "-"}
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </section>
     );
   }
 
@@ -58,6 +196,29 @@ function PrintRoundingListPage({ patients }: PageProps) {
       </header>
 
       <section className="panel no-print print-options">
+        <label>
+          Print Mode
+          <select value={printMode} onChange={(event) => setPrintMode(event.target.value)}>
+            <option value="all">All active patients</option>
+            <option value="selected">Selected attending only</option>
+            <option value="separate">Separate pages by attending</option>
+          </select>
+        </label>
+
+        {printMode === "selected" && (
+          <label>
+            Selected Attending
+            <select value={selectedAttending} onChange={(event) => setSelectedAttending(event.target.value)}>
+              <option value="">Choose attending</option>
+              {attendingNames.map((attendingName) => (
+                <option key={attendingName} value={attendingName}>
+                  {attendingName}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+
         <label>
           Team
           <input value={team} onChange={(event) => setTeam(event.target.value)} />
@@ -119,111 +280,14 @@ function PrintRoundingListPage({ patients }: PageProps) {
         </label>
       </section>
 
-      <section className="print-sheet" aria-label="Printable rounding list">
-        <div className="print-title">
-          <h1>Internal Medicine Rounding List</h1>
-          <div className="print-meta-grid">
-            <span>
-              <strong>Date:</strong> {todayText}
-            </span>
-            <span>
-              <strong>Team:</strong> {team || "________"}
-            </span>
-            <span>
-              <strong>Attending:</strong> {attending || "________"}
-            </span>
-            <span>
-              <strong>Resident:</strong> {resident || "________"}
-            </span>
-            <span>
-              <strong>Total active:</strong> {activePatients.length}
-            </span>
-          </div>
-          <p>Use de-identified data only.</p>
-        </div>
-
-        <table className="rounding-table">
-          <thead>
-            <tr>
-              <th>Bed</th>
-              <th>Pt</th>
-              <th>Dx / Problems</th>
-              <th>New Data</th>
-              <th>A/P</th>
-              <th>To-do</th>
-              <th>DC Plan</th>
-              <th>Attention / VS</th>
-            </tr>
-          </thead>
-          <tbody>
-            {activePatients.map((patient) => (
-              <tr className="patient-print-row" key={patient.id}>
-                <td className="print-bed">{patient.bed}</td>
-                <td>
-                  <strong>{patient.patientCode}</strong>
-                  <br />
-                  {patient.age} / {patient.sex}
-                </td>
-                <td>
-                  {!showOnlyActiveProblems && <strong>{patient.primaryDiagnosis}</strong>}
-                  <div>{patient.activeProblems || "-"}</div>
-                </td>
-                <td>
-                  {shouldHideDetails(patient) ? (
-                    <span className="muted">Stable; no new data</span>
-                  ) : (
-                    <>
-                      <div>
-                        <strong>ON:</strong> {patient.overnightEvent || "-"}
-                      </div>
-                      <div>
-                        <strong>Lab:</strong> {patient.newLabs || "-"}
-                      </div>
-                      <div>
-                        <strong>Img:</strong> {patient.newImaging || "-"}
-                      </div>
-                    </>
-                  )}
-                </td>
-                <td>
-                  {shouldHideDetails(patient) ? (
-                    <span className="muted">See Dx/problems</span>
-                  ) : (
-                    <>
-                      <div>
-                        <strong>A:</strong> {patient.assessment || "-"}
-                      </div>
-                      <div>
-                        <strong>P:</strong> {patient.plan || "-"}
-                      </div>
-                    </>
-                  )}
-                </td>
-                <td>{taskText(patient)}</td>
-                <td>
-                  <div>
-                    <strong>Target:</strong> {patient.dischargeTargetDate || "TBD"}
-                  </div>
-                  <div>
-                    <strong>Plan:</strong> {patient.dischargePlan || "-"}
-                  </div>
-                  <div>
-                    <strong>Barrier:</strong> {patient.dischargeBarriers || "-"}
-                  </div>
-                </td>
-                <td>
-                  <div>
-                    <strong>Attn:</strong> {patient.specialAttention || "-"}
-                  </div>
-                  <div>
-                    <strong>VS:</strong> {patient.vsOrder || "-"}
-                  </div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </section>
+      {printMode === "separate"
+        ? Object.entries(groupedPatients).map(([sectionAttending, sectionPatients], index) =>
+            renderPrintSection(sortPatients(sectionPatients, sortMode), sectionAttending, index > 0),
+          )
+        : renderPrintSection(
+            activePatients,
+            printMode === "selected" ? selectedAttending : attending,
+          )}
     </div>
   );
 }

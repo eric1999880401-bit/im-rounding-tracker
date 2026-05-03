@@ -59,6 +59,19 @@ function PatientForm({ patient, onChange, onSubmit, submitLabel, onCancel }: Pat
       </label>
 
       <label>
+        Attending
+        <input value={patient.attending} onChange={(event) => updateField("attending", event.target.value)} />
+      </label>
+
+      <label>
+        Team / Service
+        <input
+          value={patient.teamOrService}
+          onChange={(event) => updateField("teamOrService", event.target.value)}
+        />
+      </label>
+
+      <label>
         Admission Date
         <input
           type="date"
@@ -77,6 +90,15 @@ function PatientForm({ patient, onChange, onSubmit, submitLabel, onCancel }: Pat
           <option value="discharged">Discharged</option>
           <option value="archived">Archived</option>
         </select>
+      </label>
+
+      <label className="span-2">
+        Underlying Disease / PMH
+        <textarea
+          value={patient.underlyingDiseases}
+          onChange={(event) => updateField("underlyingDiseases", event.target.value)}
+          placeholder="Example: DM, HTN, CKD, CAD, old CVA"
+        />
       </label>
 
       <label className="span-2">

@@ -4,6 +4,7 @@ import type { Patient, SortMode } from "../types";
 import {
   createTodayFromYesterday,
   emptyPatient,
+  getActiveAttendingNames,
   getActivePatients,
   hasUrgentPendingTask,
   nowIso,
@@ -29,7 +30,14 @@ function PatientBoardPage({
   const [showForm, setShowForm] = useState(false);
   const [draftPatient, setDraftPatient] = useState<Patient>(emptyPatient());
   const [sortMode, setSortMode] = useState<SortMode>("bed");
-  const activePatients = sortPatients(getActivePatients(patients), sortMode);
+  const [attendingFilter, setAttendingFilter] = useState("all");
+  const attendingNames = getActiveAttendingNames(patients);
+  const activePatients = sortPatients(
+    getActivePatients(patients).filter(
+      (patient) => attendingFilter === "all" || patient.attending.trim() === attendingFilter,
+    ),
+    sortMode,
+  );
 
   async function addPatient() {
     const now = nowIso();
@@ -75,14 +83,27 @@ function PatientBoardPage({
       <section className="panel">
         <div className="section-heading">
           <h3>Active Patients</h3>
-          <label>
-            Sort
-            <select value={sortMode} onChange={(event) => setSortMode(event.target.value as SortMode)}>
-              <option value="bed">By bed</option>
-              <option value="dischargeDate">By discharge target date</option>
-              <option value="urgentFirst">Urgent tasks first</option>
-            </select>
-          </label>
+          <div className="filter-row">
+            <label>
+              Attending
+              <select value={attendingFilter} onChange={(event) => setAttendingFilter(event.target.value)}>
+                <option value="all">All attendings</option>
+                {attendingNames.map((attendingName) => (
+                  <option key={attendingName} value={attendingName}>
+                    {attendingName}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Sort
+              <select value={sortMode} onChange={(event) => setSortMode(event.target.value as SortMode)}>
+                <option value="bed">By bed</option>
+                <option value="dischargeDate">By discharge target date</option>
+                <option value="urgentFirst">Urgent tasks first</option>
+              </select>
+            </label>
+          </div>
         </div>
         {dataLoading && <p className="muted">Loading synced patients...</p>}
         {dataError && <p className="error-message">{dataError}</p>}
@@ -110,10 +131,13 @@ function PatientBoardPage({
                   </td>
                   <td>
                     <strong>{patient.primaryDiagnosis}</strong>
+                    <div className="muted">PMH: {patient.underlyingDiseases || "-"}</div>
                     <div className="muted">{patient.activeProblems}</div>
+                    <div className="muted">Attending: {patient.attending || "Unassigned"}</div>
                   </td>
                   <td>
                     <div>{patient.overnightEvent || "No overnight update"}</div>
+                    <div className="muted">Sx: {patient.subjectiveOrChiefConcern || "-"}</div>
                     <div className="muted">
                       Labs: {patient.newLabs || "-"} | Img: {patient.newImaging || "-"}
                     </div>

@@ -211,6 +211,12 @@ textarea {
   min-width: 220px;
 }
 
+.filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
 .responsive-table {
   overflow-x: auto;
 }
@@ -298,6 +304,33 @@ th {
   color: #7b8794;
 }
 
+.presentation-grid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-top: 12px;
+}
+
+.presentation-box {
+  display: grid;
+  gap: 8px;
+}
+
+.presentation-heading {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+}
+
+.presentation-heading h4 {
+  margin: 0;
+}
+
+.presentation-box textarea {
+  min-height: 180px;
+}
+
 .print-options {
   align-items: end;
   display: grid;
@@ -330,7 +363,8 @@ th {
   }
 
   .form-grid,
-  .task-input-row {
+  .task-input-row,
+  .presentation-grid {
     grid-template-columns: 1fr;
   }
 

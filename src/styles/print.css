@@ -57,6 +57,10 @@
   margin-top: 2px;
 }
 
+.print-attending-section + .print-attending-section {
+  margin-top: 18px;
+}
+
 .density-normal .print-title {
   font-size: 12px;
 }
@@ -161,6 +165,11 @@
   .print-sheet {
     display: block;
     width: 100%;
+  }
+
+  .print-attending-section {
+    break-before: page;
+    page-break-before: always;
   }
 
   .print-title {

@@ -34,6 +34,9 @@ export interface Patient {
   patientCode: string;
   age: number;
   sex: PatientSex;
+  underlyingDiseases: string;
+  attending: string;
+  teamOrService: string;
   admissionDate: string;
   primaryDiagnosis: string;
   activeProblems: string;

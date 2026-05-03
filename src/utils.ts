@@ -12,6 +12,26 @@ export function getActivePatients(patients: Patient[]) {
   return patients.filter((patient) => patient.status === "active");
 }
 
+export function getAttendingName(patient: Patient) {
+  return patient.attending.trim() || "Unassigned attending";
+}
+
+export function getActiveAttendingNames(patients: Patient[]) {
+  const names = getActivePatients(patients)
+    .map((patient) => patient.attending.trim())
+    .filter(Boolean);
+
+  return Array.from(new Set(names)).sort((a, b) => a.localeCompare(b));
+}
+
+export function groupPatientsByAttending(patients: Patient[]) {
+  return patients.reduce<Record<string, Patient[]>>((groups, patient) => {
+    const attending = getAttendingName(patient);
+    groups[attending] = [...(groups[attending] ?? []), patient];
+    return groups;
+  }, {});
+}
+
 export function getArchivedPatients(patients: Patient[]) {
   return patients.filter(
     (patient) => patient.status === "discharged" || patient.status === "archived",
@@ -70,6 +90,9 @@ export function emptyPatient(): Patient {
     patientCode: "",
     age: 0,
     sex: "M",
+    underlyingDiseases: "",
+    attending: "",
+    teamOrService: "",
     admissionDate: "",
     primaryDiagnosis: "",
     activeProblems: "",
