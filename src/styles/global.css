@@ -304,6 +304,46 @@ th {
   color: #7b8794;
 }
 
+.important-line {
+  color: #b42318;
+  font-weight: 800;
+}
+
+.important-input {
+  border-color: #f97066;
+  color: #b42318;
+  font-weight: 700;
+}
+
+.board-subsection {
+  margin-top: 4px;
+}
+
+.board-label {
+  color: #334e68;
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.compact-items {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 3px;
+}
+
+.compact-item {
+  background: #f0f4f8;
+  border-radius: 999px;
+  color: #334e68;
+  display: inline-flex;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.2;
+  padding: 2px 6px;
+}
+
 .presentation-grid {
   display: grid;
   gap: 14px;

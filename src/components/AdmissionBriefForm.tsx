@@ -1,6 +1,6 @@
 import type { Patient } from "../types";
 
-interface DailyNoteFormProps {
+interface AdmissionBriefFormProps {
   patient: Patient;
   onChange: (patient: Patient) => void;
   onFieldBlur?: () => void;
@@ -8,13 +8,13 @@ interface DailyNoteFormProps {
   onCompositionEnd?: () => void;
 }
 
-function DailyNoteForm({
+function AdmissionBriefForm({
   patient,
   onChange,
   onFieldBlur,
   onCompositionStart,
   onCompositionEnd,
-}: DailyNoteFormProps) {
+}: AdmissionBriefFormProps) {
   function updateField<K extends keyof Patient>(field: K, value: Patient[K]) {
     onChange({ ...patient, [field]: value, updatedAt: new Date().toISOString() });
   }
@@ -29,136 +29,125 @@ function DailyNoteForm({
 
   return (
     <section className="panel">
-      <h2>Quick Daily Update</h2>
+      <h2>Admission Brief / Initial Presentation</h2>
+      <p className="muted">Use this for new admissions or first report to VS/attending.</p>
       <div className="form-grid">
         <label className="span-2">
-          Overnight Event
+          Admission Chief Concern
           <textarea
-            value={patient.overnightEvent}
-            onChange={(event) => updateField("overnightEvent", event.target.value)}
+            value={patient.admissionChiefConcern}
+            onChange={(event) => updateField("admissionChiefConcern", event.target.value)}
             onBlur={commitOnBlur}
             onCompositionStart={onCompositionStart}
             onCompositionEnd={handleCompositionEnd}
-            placeholder="Example: No acute overnight event; fever at 02:00; oxygen increased..."
           />
         </label>
+
         <label className="span-2">
-          S - Subjective / Chief Concern
+          HPI / Admission Story
           <textarea
-            value={patient.subjectiveOrChiefConcern}
-            onChange={(event) => updateField("subjectiveOrChiefConcern", event.target.value)}
+            value={patient.hpiOrAdmissionStory}
+            onChange={(event) => updateField("hpiOrAdmissionStory", event.target.value)}
             onBlur={commitOnBlur}
             onCompositionStart={onCompositionStart}
             onCompositionEnd={handleCompositionEnd}
           />
         </label>
+
+        <label>
+          Baseline Function
+          <textarea
+            value={patient.baselineFunction}
+            onChange={(event) => updateField("baselineFunction", event.target.value)}
+            onBlur={commitOnBlur}
+            onCompositionStart={onCompositionStart}
+            onCompositionEnd={handleCompositionEnd}
+          />
+        </label>
+
+        <label>
+          Admission PMH
+          <textarea
+            value={patient.admissionPMH}
+            onChange={(event) => updateField("admissionPMH", event.target.value)}
+            onBlur={commitOnBlur}
+            onCompositionStart={onCompositionStart}
+            onCompositionEnd={handleCompositionEnd}
+            placeholder="Leave blank to use PMH / Underlying Disease"
+          />
+        </label>
+
+        <label>
+          Initial Physical Exam
+          <textarea
+            value={patient.initialPhysicalExam}
+            onChange={(event) => updateField("initialPhysicalExam", event.target.value)}
+            onBlur={commitOnBlur}
+            onCompositionStart={onCompositionStart}
+            onCompositionEnd={handleCompositionEnd}
+          />
+        </label>
+
+        <label>
+          Initial Labs
+          <textarea
+            value={patient.initialLabs}
+            onChange={(event) => updateField("initialLabs", event.target.value)}
+            onBlur={commitOnBlur}
+            onCompositionStart={onCompositionStart}
+            onCompositionEnd={handleCompositionEnd}
+          />
+        </label>
+
+        <label>
+          Initial Imaging
+          <textarea
+            value={patient.initialImaging}
+            onChange={(event) => updateField("initialImaging", event.target.value)}
+            onBlur={commitOnBlur}
+            onCompositionStart={onCompositionStart}
+            onCompositionEnd={handleCompositionEnd}
+          />
+        </label>
+
+        <label>
+          Initial Assessment
+          <textarea
+            value={patient.initialAssessment}
+            onChange={(event) => updateField("initialAssessment", event.target.value)}
+            onBlur={commitOnBlur}
+            onCompositionStart={onCompositionStart}
+            onCompositionEnd={handleCompositionEnd}
+          />
+        </label>
+
         <label className="span-2">
-          Important / Red Flags
+          Initial Plan
           <textarea
-            value={patient.importantRedFlags}
-            onChange={(event) => updateField("importantRedFlags", event.target.value)}
+            value={patient.initialPlan}
+            onChange={(event) => updateField("initialPlan", event.target.value)}
             onBlur={commitOnBlur}
             onCompositionStart={onCompositionStart}
             onCompositionEnd={handleCompositionEnd}
-            placeholder="Example: ! unstable BP; ! high fall risk"
           />
         </label>
+
         <label className="span-2">
-          O - PE / Physical Examination
+          Early Hospital Course
           <textarea
-            value={patient.physicalExam}
-            onChange={(event) => updateField("physicalExam", event.target.value)}
-            onBlur={commitOnBlur}
-            onCompositionStart={onCompositionStart}
-            onCompositionEnd={handleCompositionEnd}
-            placeholder="Example: Clear breathing sounds; mild pitting edema"
-          />
-        </label>
-        <label>
-          O - Important Labs
-          <textarea
-            value={patient.newLabs}
-            onChange={(event) => updateField("newLabs", event.target.value)}
+            value={patient.earlyHospitalCourse}
+            onChange={(event) => updateField("earlyHospitalCourse", event.target.value)}
             onBlur={commitOnBlur}
             onCompositionStart={onCompositionStart}
             onCompositionEnd={handleCompositionEnd}
           />
         </label>
-        <label>
-          O - Important Imaging / Studies
-          <textarea
-            value={patient.newImaging}
-            onChange={(event) => updateField("newImaging", event.target.value)}
-            onBlur={commitOnBlur}
-            onCompositionStart={onCompositionStart}
-            onCompositionEnd={handleCompositionEnd}
-          />
-        </label>
-        <label>
-          A - Assessment
-          <textarea
-            value={patient.assessment}
-            onChange={(event) => updateField("assessment", event.target.value)}
-            onBlur={commitOnBlur}
-            onCompositionStart={onCompositionStart}
-            onCompositionEnd={handleCompositionEnd}
-          />
-        </label>
-        <label>
-          P - Plan
-          <textarea
-            value={patient.plan}
-            onChange={(event) => updateField("plan", event.target.value)}
-            onBlur={commitOnBlur}
-            onCompositionStart={onCompositionStart}
-            onCompositionEnd={handleCompositionEnd}
-          />
-        </label>
+
         <label className="span-2">
-          Discharge Plan
+          Admission Brief Notes
           <textarea
-            value={patient.dischargePlan}
-            onChange={(event) => updateField("dischargePlan", event.target.value)}
-            onBlur={commitOnBlur}
-            onCompositionStart={onCompositionStart}
-            onCompositionEnd={handleCompositionEnd}
-            placeholder="Example: Home with clinic follow-up after oxygen wean."
-          />
-        </label>
-        <label>
-          Discharge Target Date
-          <input
-            type="date"
-            value={patient.dischargeTargetDate}
-            onChange={(event) => updateField("dischargeTargetDate", event.target.value)}
-            onBlur={commitOnBlur}
-          />
-        </label>
-        <label>
-          Discharge Barriers
-          <textarea
-            value={patient.dischargeBarriers}
-            onChange={(event) => updateField("dischargeBarriers", event.target.value)}
-            onBlur={commitOnBlur}
-            onCompositionStart={onCompositionStart}
-            onCompositionEnd={handleCompositionEnd}
-          />
-        </label>
-        <label>
-          Special Attention
-          <textarea
-            value={patient.specialAttention}
-            onChange={(event) => updateField("specialAttention", event.target.value)}
-            onBlur={commitOnBlur}
-            onCompositionStart={onCompositionStart}
-            onCompositionEnd={handleCompositionEnd}
-          />
-        </label>
-        <label>
-          VS Order
-          <input
-            value={patient.vsOrder}
-            onChange={(event) => updateField("vsOrder", event.target.value)}
+            value={patient.admissionBriefNotes}
+            onChange={(event) => updateField("admissionBriefNotes", event.target.value)}
             onBlur={commitOnBlur}
             onCompositionStart={onCompositionStart}
             onCompositionEnd={handleCompositionEnd}
@@ -169,4 +158,4 @@ function DailyNoteForm({
   );
 }
 
-export default DailyNoteForm;
+export default AdmissionBriefForm;

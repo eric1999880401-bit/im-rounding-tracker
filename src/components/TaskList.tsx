@@ -5,19 +5,34 @@ import { emptyTask, nowIso } from "../utils";
 interface TaskListProps {
   tasks: PatientTask[];
   onChange: (tasks: PatientTask[]) => void;
+  onCommit?: () => void;
+  onFieldBlur?: () => void;
+  onCompositionStart?: () => void;
+  onCompositionEnd?: () => void;
 }
 
-function TaskList({ tasks, onChange }: TaskListProps) {
+function TaskList({
+  tasks,
+  onChange,
+  onCommit,
+  onFieldBlur,
+  onCompositionStart,
+  onCompositionEnd,
+}: TaskListProps) {
   const [draft, setDraft] = useState<PatientTask>(emptyTask());
 
   function addTask() {
     if (!draft.text.trim()) return;
     onChange([...tasks, { ...draft, text: draft.text.trim(), createdAt: nowIso() }]);
     setDraft(emptyTask());
+    window.setTimeout(() => onCommit?.(), 0);
   }
 
-  function updateTask(taskId: string, nextTask: PatientTask) {
+  function updateTask(taskId: string, nextTask: PatientTask, commit = false) {
     onChange(tasks.map((task) => (task.id === taskId ? nextTask : task)));
+    if (commit) {
+      window.setTimeout(() => onCommit?.(), 0);
+    }
   }
 
   function toggleDone(task: PatientTask) {
@@ -25,7 +40,15 @@ function TaskList({ tasks, onChange }: TaskListProps) {
       ...task,
       done: !task.done,
       completedAt: task.done ? "" : nowIso(),
-    });
+    }, true);
+  }
+
+  function commitOnBlur() {
+    onFieldBlur?.();
+  }
+
+  function handleCompositionEnd() {
+    onCompositionEnd?.();
   }
 
   return (
@@ -36,6 +59,8 @@ function TaskList({ tasks, onChange }: TaskListProps) {
         <input
           value={draft.text}
           onChange={(event) => setDraft({ ...draft, text: event.target.value })}
+          onCompositionStart={onCompositionStart}
+          onCompositionEnd={handleCompositionEnd}
           placeholder="Add patient-specific task"
         />
         <select
@@ -74,9 +99,12 @@ function TaskList({ tasks, onChange }: TaskListProps) {
           <div className="task-row" key={task.id}>
             <input type="checkbox" checked={task.done} onChange={() => toggleDone(task)} />
             <input
-              className={task.done ? "task-done" : ""}
+              className={`${task.done ? "task-done" : ""} ${task.text.trim().startsWith("!") ? "important-input" : ""}`}
               value={task.text}
               onChange={(event) => updateTask(task.id, { ...task, text: event.target.value })}
+              onBlur={commitOnBlur}
+              onCompositionStart={onCompositionStart}
+              onCompositionEnd={handleCompositionEnd}
             />
             <span className={`badge ${task.priority}`}>{task.priority}</span>
             <span className="badge">{task.category}</span>

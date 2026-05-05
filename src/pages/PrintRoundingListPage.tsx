@@ -1,12 +1,15 @@
 import { useState } from "react";
 import type { Patient, PrintDensity, SortMode } from "../types";
 import {
+  getActiveProblemItems,
   getActiveAttendingNames,
   getActivePatients,
+  getUnderlyingDiseaseItems,
   groupPatientsByAttending,
   hasUrgentPendingTask,
   sortPatients,
 } from "../utils";
+import { ClinicalText, CompactItemList } from "../components/ClinicalText";
 
 interface PageProps {
   patients: Patient[];
@@ -14,6 +17,7 @@ interface PageProps {
 
 function PrintRoundingListPage({ patients }: PageProps) {
   const [printMode, setPrintMode] = useState("all");
+  const [admissionBriefPrintMode, setAdmissionBriefPrintMode] = useState("compact");
   const [selectedAttending, setSelectedAttending] = useState("");
   const [hideCompletedTasks, setHideCompletedTasks] = useState(true);
   const [hideStableDetails, setHideStableDetails] = useState(false);
@@ -30,6 +34,23 @@ function PrintRoundingListPage({ patients }: PageProps) {
   const activePatients = sortPatients(filteredActivePatients, sortMode);
   const groupedPatients = groupPatientsByAttending(activePatients);
   const todayText = new Date().toLocaleDateString();
+  const shouldPrintCompactList = admissionBriefPrintMode !== "briefsOnly";
+
+  function admissionBriefPatients() {
+    if (admissionBriefPrintMode === "newAdmissions") {
+      return activePatients.filter((patient) => patient.isNewAdmission);
+    }
+
+    if (admissionBriefPrintMode === "selectedBriefs") {
+      return activePatients.filter((patient) => patient.showAdmissionBriefOnPrint);
+    }
+
+    if (admissionBriefPrintMode === "briefsOnly") {
+      return activePatients.filter((patient) => patient.isNewAdmission || patient.showAdmissionBriefOnPrint);
+    }
+
+    return [];
+  }
 
   function taskText(patient: Patient) {
     const tasks = hideCompletedTasks ? patient.tasks.filter((task) => !task.done) : patient.tasks;
@@ -37,9 +58,14 @@ function PrintRoundingListPage({ patients }: PageProps) {
     if (tasks.length === 0) return "None";
 
     return tasks.map((task) => (
-      <div key={task.id} className={`print-task ${task.done ? "task-done" : ""}`}>
+      <div
+        key={task.id}
+        className={`print-task ${task.done ? "task-done" : ""} ${
+          task.text.trim().startsWith("!") || task.priority === "urgent" ? "important-line" : ""
+        }`}
+      >
         {task.priority === "urgent" ? "[URGENT] " : ""}
-        {task.text}
+        {task.text.trim().startsWith("!") ? task.text.trim().slice(1).trim() : task.text}
         {task.dueDate ? ` (${task.dueDate})` : ""}
       </div>
     ));
@@ -48,7 +74,10 @@ function PrintRoundingListPage({ patients }: PageProps) {
   function isStableForPrint(patient: Patient) {
     return (
       !hasUrgentPendingTask(patient) &&
+      !patient.importantRedFlags.trim() &&
       !patient.overnightEvent.trim() &&
+      !patient.subjectiveOrChiefConcern.trim() &&
+      !patient.physicalExam.trim() &&
       !patient.newLabs.trim() &&
       !patient.newImaging.trim()
       );
@@ -88,12 +117,12 @@ function PrintRoundingListPage({ patients }: PageProps) {
             <tr>
               <th>Bed</th>
               <th>Pt</th>
-              <th>Dx / Problems</th>
-              <th>Sx / New Data</th>
+              <th>PMH / Problems</th>
+              <th>S / PE</th>
+              <th>Labs / Imaging</th>
               <th>A/P</th>
-              <th>To-do</th>
-              <th>DC Plan</th>
-              <th>Attention / VS</th>
+              <th>Tasks</th>
+              <th>DC / Attention</th>
             </tr>
           </thead>
           <tbody>
@@ -106,10 +135,17 @@ function PrintRoundingListPage({ patients }: PageProps) {
                   {patient.age} / {patient.sex}
                 </td>
                 <td>
-                  {!showOnlyActiveProblems && <strong>{patient.primaryDiagnosis}</strong>}
-                  <div>{patient.activeProblems || "-"}</div>
+                  {patient.importantRedFlags && (
+                    <div>
+                      <strong>Flags:</strong> <ClinicalText value={patient.importantRedFlags} maxLines={2} />
+                    </div>
+                  )}
+                  {!showOnlyActiveProblems && <strong>{patient.primaryDiagnosis || "-"}</strong>}
                   <div>
-                    <strong>PMH:</strong> {patient.underlyingDiseases || "-"}
+                    <strong>PMH:</strong> <CompactItemList items={getUnderlyingDiseaseItems(patient)} maxItems={3} />
+                  </div>
+                  <div>
+                    <strong>Problems:</strong> <CompactItemList items={getActiveProblemItems(patient)} maxItems={4} />
                   </div>
                   {printMode === "all" && (
                     <div>
@@ -123,19 +159,21 @@ function PrintRoundingListPage({ patients }: PageProps) {
                   ) : (
                     <>
                       <div>
-                        <strong>Sx:</strong> {patient.subjectiveOrChiefConcern || "-"}
+                        <strong>S:</strong> <ClinicalText value={patient.subjectiveOrChiefConcern} maxLines={2} />
                       </div>
                       <div>
-                        <strong>ON:</strong> {patient.overnightEvent || "-"}
-                      </div>
-                      <div>
-                        <strong>Lab:</strong> {patient.newLabs || "-"}
-                      </div>
-                      <div>
-                        <strong>Img:</strong> {patient.newImaging || "-"}
+                        <strong>PE:</strong> <ClinicalText value={patient.physicalExam} maxLines={2} />
                       </div>
                     </>
                   )}
+                </td>
+                <td>
+                  <div>
+                    <strong>Lab:</strong> <ClinicalText value={patient.newLabs} maxLines={3} />
+                  </div>
+                  <div>
+                    <strong>Img:</strong> <ClinicalText value={patient.newImaging} maxLines={3} />
+                  </div>
                 </td>
                 <td>
                   {shouldHideDetails(patient) ? (
@@ -143,10 +181,10 @@ function PrintRoundingListPage({ patients }: PageProps) {
                   ) : (
                     <>
                       <div>
-                        <strong>A:</strong> {patient.assessment || "-"}
+                        <strong>A:</strong> <ClinicalText value={patient.assessment} maxLines={2} />
                       </div>
                       <div>
-                        <strong>P:</strong> {patient.plan || "-"}
+                        <strong>P:</strong> <ClinicalText value={patient.plan} maxLines={2} />
                       </div>
                     </>
                   )}
@@ -157,15 +195,13 @@ function PrintRoundingListPage({ patients }: PageProps) {
                     <strong>Target:</strong> {patient.dischargeTargetDate || "TBD"}
                   </div>
                   <div>
-                    <strong>Plan:</strong> {patient.dischargePlan || "-"}
+                    <strong>Plan:</strong> <ClinicalText value={patient.dischargePlan} maxLines={2} />
                   </div>
                   <div>
                     <strong>Barrier:</strong> {patient.dischargeBarriers || "-"}
                   </div>
-                </td>
-                <td>
                   <div>
-                    <strong>Attn:</strong> {patient.specialAttention || "-"}
+                    <strong>Attn:</strong> <ClinicalText value={patient.specialAttention} maxLines={2} />
                   </div>
                   <div>
                     <strong>VS:</strong> {patient.vsOrder || "-"}
@@ -175,6 +211,84 @@ function PrintRoundingListPage({ patients }: PageProps) {
             ))}
           </tbody>
         </table>
+      </section>
+    );
+  }
+
+  function renderAdmissionBrief(patient: Patient) {
+    return (
+      <section className="print-admission-brief" key={`brief-${patient.id}`}>
+        <div className="brief-title">
+          <h2>
+            Admission Brief: {patient.bed || "-"} / {patient.patientCode || "-"}
+          </h2>
+          <p>
+            {patient.age} / {patient.sex} | Attending: {patient.attending || "-"} | Team: {patient.teamOrService || "-"}
+          </p>
+        </div>
+        <div className="brief-grid">
+          <div>
+            <strong>PMH</strong>
+            <ClinicalText value={patient.admissionPMH || patient.underlyingDiseases} />
+          </div>
+          <div>
+            <strong>Chief Concern</strong>
+            <ClinicalText value={patient.admissionChiefConcern} />
+          </div>
+          <div className="span-2">
+            <strong>HPI / Admission Story</strong>
+            <ClinicalText value={patient.hpiOrAdmissionStory} />
+          </div>
+          <div>
+            <strong>Baseline Function</strong>
+            <ClinicalText value={patient.baselineFunction} />
+          </div>
+          <div>
+            <strong>Initial PE</strong>
+            <ClinicalText value={patient.initialPhysicalExam} />
+          </div>
+          <div>
+            <strong>Initial Labs</strong>
+            <ClinicalText value={patient.initialLabs} />
+          </div>
+          <div>
+            <strong>Initial Imaging</strong>
+            <ClinicalText value={patient.initialImaging} />
+          </div>
+          <div>
+            <strong>Initial Assessment</strong>
+            <ClinicalText value={patient.initialAssessment} />
+          </div>
+          <div>
+            <strong>Initial Plan</strong>
+            <ClinicalText value={patient.initialPlan} />
+          </div>
+          <div className="span-2">
+            <strong>Early Hospital Course</strong>
+            <ClinicalText value={patient.earlyHospitalCourse} />
+          </div>
+          <div className="span-2">
+            <strong>Current Daily SOAP Update</strong>
+            <ClinicalText
+              value={[
+                patient.subjectiveOrChiefConcern.trim() ? `S: ${patient.subjectiveOrChiefConcern}` : "",
+                patient.physicalExam.trim() ? `PE: ${patient.physicalExam}` : "",
+                patient.newLabs.trim() ? `Lab: ${patient.newLabs}` : "",
+                patient.newImaging.trim() ? `Image: ${patient.newImaging}` : "",
+                patient.assessment.trim() ? `A: ${patient.assessment}` : "",
+                patient.plan.trim() ? `P: ${patient.plan}` : "",
+              ]
+                .filter(Boolean)
+                .join("\n")}
+            />
+          </div>
+          {patient.admissionBriefNotes && (
+            <div className="span-2">
+              <strong>Notes</strong>
+              <ClinicalText value={patient.admissionBriefNotes} />
+            </div>
+          )}
+        </div>
       </section>
     );
   }
@@ -197,11 +311,24 @@ function PrintRoundingListPage({ patients }: PageProps) {
 
       <section className="panel no-print print-options">
         <label>
-          Print Mode
+          Patient Scope
           <select value={printMode} onChange={(event) => setPrintMode(event.target.value)}>
             <option value="all">All active patients</option>
             <option value="selected">Selected attending only</option>
             <option value="separate">Separate pages by attending</option>
+          </select>
+        </label>
+
+        <label>
+          Print Content
+          <select
+            value={admissionBriefPrintMode}
+            onChange={(event) => setAdmissionBriefPrintMode(event.target.value)}
+          >
+            <option value="compact">Compact rounding list only</option>
+            <option value="newAdmissions">Rounding list + admission briefs for new admissions</option>
+            <option value="selectedBriefs">Rounding list + selected admission briefs</option>
+            <option value="briefsOnly">Admission briefs only</option>
           </select>
         </label>
 
@@ -280,14 +407,17 @@ function PrintRoundingListPage({ patients }: PageProps) {
         </label>
       </section>
 
-      {printMode === "separate"
-        ? Object.entries(groupedPatients).map(([sectionAttending, sectionPatients], index) =>
-            renderPrintSection(sortPatients(sectionPatients, sortMode), sectionAttending, index > 0),
-          )
-        : renderPrintSection(
-            activePatients,
-            printMode === "selected" ? selectedAttending : attending,
-          )}
+      {shouldPrintCompactList &&
+        (printMode === "separate"
+          ? Object.entries(groupedPatients).map(([sectionAttending, sectionPatients], index) =>
+              renderPrintSection(sortPatients(sectionPatients, sortMode), sectionAttending, index > 0),
+            )
+          : renderPrintSection(
+              activePatients,
+              printMode === "selected" ? selectedAttending : attending,
+            ))}
+
+      {admissionBriefPatients().map(renderAdmissionBrief)}
     </div>
   );
 }

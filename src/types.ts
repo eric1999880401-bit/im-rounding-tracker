@@ -17,6 +17,11 @@ export type PrintDensity = "normal" | "compact" | "ultra-compact";
 
 export type SortMode = "bed" | "dischargeDate" | "urgentFirst";
 
+export interface HighlightLine {
+  text: string;
+  important: boolean;
+}
+
 export interface PatientTask {
   id: string;
   text: string;
@@ -35,11 +40,29 @@ export interface Patient {
   age: number;
   sex: PatientSex;
   underlyingDiseases: string;
+  underlyingDiseaseItems: string[];
   attending: string;
   teamOrService: string;
   admissionDate: string;
   primaryDiagnosis: string;
   activeProblems: string;
+  activeProblemItems: string[];
+  admissionChiefConcern: string;
+  hpiOrAdmissionStory: string;
+  baselineFunction: string;
+  admissionPMH: string;
+  initialPhysicalExam: string;
+  initialLabs: string;
+  initialImaging: string;
+  initialAssessment: string;
+  initialPlan: string;
+  earlyHospitalCourse: string;
+  admissionBriefNotes: string;
+  isNewAdmission: boolean;
+  showAdmissionBriefOnPrint: boolean;
+  physicalExam: string;
+  hospitalCourseHighlights: string;
+  importantRedFlags: string;
   overnightEvent: string;
   subjectiveOrChiefConcern: string;
   newLabs: string;

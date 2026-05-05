@@ -57,8 +57,66 @@
   margin-top: 2px;
 }
 
+.rounding-table .important-line {
+  color: #b42318 !important;
+  font-weight: 800;
+}
+
+.rounding-table .compact-items {
+  display: block;
+  margin: 0;
+}
+
+.rounding-table .compact-item {
+  background: transparent;
+  border-radius: 0;
+  display: block;
+  font-size: inherit;
+  font-weight: inherit;
+  padding: 0;
+}
+
 .print-attending-section + .print-attending-section {
   margin-top: 18px;
+}
+
+.print-admission-brief {
+  background: white;
+  border: 1px solid #1f2933;
+  break-inside: avoid;
+  margin-top: 14px;
+  page-break-inside: avoid;
+  padding: 10px;
+}
+
+.brief-title {
+  border-bottom: 1px solid #1f2933;
+  margin-bottom: 8px;
+  padding-bottom: 6px;
+}
+
+.brief-title h2,
+.brief-title p {
+  margin: 0;
+}
+
+.brief-title h2 {
+  font-size: 16px;
+}
+
+.brief-grid {
+  display: grid;
+  gap: 8px 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.brief-grid .span-2 {
+  grid-column: span 2;
+}
+
+.brief-grid strong {
+  display: block;
+  margin-bottom: 2px;
 }
 
 .density-normal .print-title {
@@ -168,6 +226,18 @@
   }
 
   .print-attending-section {
+    break-before: page;
+    page-break-before: always;
+  }
+
+  .print-admission-brief {
+    break-before: auto;
+    font-size: 9px;
+    margin-top: 8mm;
+    page-break-before: auto;
+  }
+
+  .print-sheet + .print-admission-brief {
     break-before: page;
     page-break-before: always;
   }

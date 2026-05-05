@@ -11,6 +11,7 @@ import {
 } from "firebase/firestore";
 import type { Patient, PatientTask } from "../types";
 import { db } from "./firebase";
+import { textToItems } from "../utils";
 
 function patientsCollection(uid: string) {
   return collection(db, "users", uid, "patients");
@@ -41,11 +42,33 @@ function normalizePatient(patientId: string, data: Partial<Patient>): Patient {
     age: data.age ?? 0,
     sex: data.sex ?? "M",
     underlyingDiseases: data.underlyingDiseases ?? "",
+    underlyingDiseaseItems: Array.isArray(data.underlyingDiseaseItems)
+      ? data.underlyingDiseaseItems
+      : textToItems(data.underlyingDiseases ?? ""),
     attending: data.attending ?? "",
     teamOrService: data.teamOrService ?? "",
     admissionDate: data.admissionDate ?? "",
     primaryDiagnosis: data.primaryDiagnosis ?? "",
     activeProblems: data.activeProblems ?? "",
+    activeProblemItems: Array.isArray(data.activeProblemItems)
+      ? data.activeProblemItems
+      : textToItems(data.activeProblems ?? ""),
+    admissionChiefConcern: data.admissionChiefConcern ?? "",
+    hpiOrAdmissionStory: data.hpiOrAdmissionStory ?? "",
+    baselineFunction: data.baselineFunction ?? "",
+    admissionPMH: data.admissionPMH ?? "",
+    initialPhysicalExam: data.initialPhysicalExam ?? "",
+    initialLabs: data.initialLabs ?? "",
+    initialImaging: data.initialImaging ?? "",
+    initialAssessment: data.initialAssessment ?? "",
+    initialPlan: data.initialPlan ?? "",
+    earlyHospitalCourse: data.earlyHospitalCourse ?? "",
+    admissionBriefNotes: data.admissionBriefNotes ?? "",
+    isNewAdmission: data.isNewAdmission ?? false,
+    showAdmissionBriefOnPrint: data.showAdmissionBriefOnPrint ?? false,
+    physicalExam: data.physicalExam ?? "",
+    hospitalCourseHighlights: data.hospitalCourseHighlights ?? "",
+    importantRedFlags: data.importantRedFlags ?? "",
     overnightEvent: data.overnightEvent ?? "",
     subjectiveOrChiefConcern: data.subjectiveOrChiefConcern ?? "",
     newLabs: data.newLabs ?? "",

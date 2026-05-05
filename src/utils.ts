@@ -1,4 +1,4 @@
-import type { Patient, PatientStatus, PatientTask, SortMode } from "./types";
+import type { HighlightLine, Patient, PatientStatus, PatientTask, SortMode } from "./types";
 
 export function createId(prefix: string) {
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -10,6 +10,63 @@ export function nowIso() {
 
 export function getActivePatients(patients: Patient[]) {
   return patients.filter((patient) => patient.status === "active");
+}
+
+export function textToItems(value: string) {
+  return value
+    .split(/\r?\n|;/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+export function getUnderlyingDiseaseItems(patient: Patient) {
+  return patient.underlyingDiseaseItems.length > 0
+    ? patient.underlyingDiseaseItems
+    : textToItems(patient.underlyingDiseases);
+}
+
+export function getActiveProblemItems(patient: Patient) {
+  return patient.activeProblemItems.length > 0
+    ? patient.activeProblemItems
+    : textToItems(patient.activeProblems);
+}
+
+export function summarizeItems(items: string[], fallback = "-") {
+  if (items.length === 0) return fallback;
+  return items.join("; ");
+}
+
+export function splitHighlightLines(value: string): HighlightLine[] {
+  return value
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const important = line.startsWith("!");
+      return {
+        important,
+        text: important ? line.slice(1).trim() : line,
+      };
+    })
+    .filter((line) => line.text);
+}
+
+export function importantLines(value: string) {
+  return splitHighlightLines(value).filter((line) => line.important);
+}
+
+export function plainClinicalText(value: string, fallback = "-") {
+  const text = splitHighlightLines(value).map((line) => line.text).join("; ");
+  return text || fallback;
+}
+
+export function compactClinicalText(value: string, maxLines = 2, fallback = "-") {
+  const lines = splitHighlightLines(value);
+  if (lines.length === 0) return fallback;
+
+  const important = lines.filter((line) => line.important);
+  const normal = lines.filter((line) => !line.important);
+  return [...important, ...normal].slice(0, maxLines).map((line) => line.text).join("; ");
 }
 
 export function getAttendingName(patient: Patient) {
@@ -71,12 +128,7 @@ export function sortPatients(patients: Patient[], sortMode: SortMode) {
 export function createTodayFromYesterday(patient: Patient): Patient {
   return {
     ...patient,
-    // Keep problem list, A/P, discharge plan, and attention items.
-    // Clear fields that usually represent today's new overnight changes.
-    overnightEvent: "",
-    subjectiveOrChiefConcern: "",
-    newLabs: "",
-    newImaging: "",
+    // Keep clinically useful S/O/A/P, course, discharge, attention, and current tasks.
     updatedAt: nowIso(),
   };
 }
@@ -91,11 +143,29 @@ export function emptyPatient(): Patient {
     age: 0,
     sex: "M",
     underlyingDiseases: "",
+    underlyingDiseaseItems: [],
     attending: "",
     teamOrService: "",
     admissionDate: "",
     primaryDiagnosis: "",
     activeProblems: "",
+    activeProblemItems: [],
+    admissionChiefConcern: "",
+    hpiOrAdmissionStory: "",
+    baselineFunction: "",
+    admissionPMH: "",
+    initialPhysicalExam: "",
+    initialLabs: "",
+    initialImaging: "",
+    initialAssessment: "",
+    initialPlan: "",
+    earlyHospitalCourse: "",
+    admissionBriefNotes: "",
+    isNewAdmission: false,
+    showAdmissionBriefOnPrint: false,
+    physicalExam: "",
+    hospitalCourseHighlights: "",
+    importantRedFlags: "",
     overnightEvent: "",
     subjectiveOrChiefConcern: "",
     newLabs: "",
