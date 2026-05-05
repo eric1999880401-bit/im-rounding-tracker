@@ -17,9 +17,24 @@ export type PrintDensity = "normal" | "compact" | "ultra-compact";
 
 export type SortMode = "bed" | "dischargeDate" | "urgentFirst";
 
+export type DischargePrepStatus = "pending" | "done" | "notNeeded";
+
 export interface HighlightLine {
   text: string;
   important: boolean;
+  kind?: "normal" | "numbered" | "arrow" | "dash";
+}
+
+export interface ParsedLabItem {
+  label: string;
+  name?: string;
+  value: string;
+  unit?: string;
+  previousValue?: string;
+  group?: string;
+  important?: boolean;
+  isImportant?: boolean;
+  note?: string;
 }
 
 export interface PatientTask {
@@ -63,6 +78,11 @@ export interface Patient {
   physicalExam: string;
   hospitalCourseHighlights: string;
   importantRedFlags: string;
+  rawLabText: string;
+  parsedLabItems: ParsedLabItem[];
+  dischargeMedsStatus: DischargePrepStatus;
+  opdAppointmentStatus: DischargePrepStatus;
+  diagnosisCertificateStatus: DischargePrepStatus;
   overnightEvent: string;
   subjectiveOrChiefConcern: string;
   newLabs: string;

@@ -309,10 +309,220 @@ th {
   font-weight: 800;
 }
 
+.clinical-card {
+  background: #f8fafc;
+  border: 1px solid #d9e2ec;
+  border-radius: 6px;
+  display: block;
+  line-height: 1.25;
+  margin-top: 4px;
+  padding: 5px 7px;
+  white-space: normal;
+  width: 100%;
+}
+
+.important-clinical-card {
+  background: #fff5f4;
+  border-color: #f97066;
+  color: #b42318;
+  font-weight: 800;
+}
+
+.clinical-number-badge,
+.clinical-bullet,
+.clinical-inline-arrow {
+  background: #e4e7eb;
+  border-radius: 999px;
+  color: #334e68;
+  display: inline-flex;
+  font-size: 11px;
+  font-weight: 800;
+  justify-content: center;
+  min-width: 20px;
+  padding: 1px 5px;
+  text-align: center;
+}
+
+.clinical-card-main-row {
+  align-items: flex-start;
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+  width: 100%;
+}
+
+.clinical-card-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: break-word;
+  white-space: normal;
+  word-break: normal;
+}
+
+.clinical-card-child {
+  color: #52606d;
+  display: block;
+  font-size: 12px;
+  margin-top: 3px;
+  overflow-wrap: break-word;
+  padding-left: 28px;
+  white-space: normal;
+  width: 100%;
+  word-break: normal;
+}
+
 .important-input {
   border-color: #f97066;
   color: #b42318;
   font-weight: 700;
+}
+
+.clinical-numbered-line {
+  padding-left: 10px;
+}
+
+.clinical-arrow-line {
+  color: #52606d;
+  padding-left: 14px;
+}
+
+.clinical-dash-line {
+  padding-left: 10px;
+}
+
+.clinical-dash-line::before {
+  content: "• ";
+}
+
+.lab-tools {
+  align-self: start;
+  display: grid;
+  gap: 8px;
+}
+
+.smart-lab-panel {
+  display: grid;
+  gap: 10px;
+}
+
+.lab-editor-grid {
+  align-items: end;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: 1.2fr 0.8fr 0.7fr 0.8fr auto auto;
+}
+
+.lab-suggestion-row,
+.lab-edit-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.lab-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 5px;
+}
+
+.lab-chip {
+  align-items: baseline;
+  background: #eef6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 999px;
+  color: #1e3a8a;
+  display: inline-flex;
+  gap: 4px;
+  padding: 3px 7px;
+}
+
+.important-lab-chip {
+  background: #fff5f4;
+  border-color: #f97066;
+  color: #b42318;
+  font-weight: 800;
+}
+
+.lab-chip-name {
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.lab-chip-value {
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.lab-chip-unit,
+.lab-chip-prev {
+  color: #64748b;
+  font-size: 11px;
+}
+
+.lab-template-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.lab-template-row button {
+  min-height: 30px;
+  padding: 5px 8px;
+}
+
+.lab-preview {
+  background: #f8fafc;
+  border: 1px solid #d9e2ec;
+  border-radius: 6px;
+  font-size: 13px;
+  padding: 8px;
+}
+
+.discharge-checklist {
+  border: 1px solid #d9e2ec;
+  border-radius: 6px;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  padding: 10px;
+}
+
+.dc-alert-panel {
+  background: #fff7ed;
+  border: 1px solid #fdba74;
+  border-radius: 8px;
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+}
+
+.dc-alert-panel h3 {
+  color: #9a3412;
+  margin: 0;
+}
+
+.dc-alert-card {
+  align-items: center;
+  background: white;
+  border: 1px solid #fed7aa;
+  border-radius: 6px;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+  padding: 10px;
+}
+
+.dc-alert-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.discharge-checklist h3 {
+  grid-column: span 3;
+  margin: 0;
 }
 
 .board-subsection {
@@ -404,11 +614,17 @@ th {
 
   .form-grid,
   .task-input-row,
-  .presentation-grid {
+  .presentation-grid,
+  .discharge-checklist,
+  .lab-editor-grid {
     grid-template-columns: 1fr;
   }
 
   .span-2 {
+    grid-column: auto;
+  }
+
+  .discharge-checklist h3 {
     grid-column: auto;
   }
 
@@ -424,5 +640,10 @@ th {
 
   .task-row {
     grid-template-columns: 24px 1fr;
+  }
+
+  .dc-alert-card {
+    align-items: stretch;
+    display: grid;
   }
 }

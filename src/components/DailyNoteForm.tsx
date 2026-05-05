@@ -1,4 +1,5 @@
 import type { Patient } from "../types";
+import SmartLabPanel from "./SmartLabPanel";
 
 interface DailyNoteFormProps {
   patient: Patient;
@@ -17,6 +18,16 @@ function DailyNoteForm({
 }: DailyNoteFormProps) {
   function updateField<K extends keyof Patient>(field: K, value: Patient[K]) {
     onChange({ ...patient, [field]: value, updatedAt: new Date().toISOString() });
+  }
+
+  function updateLabs(rawValue: string, parsedLabItems = patient.parsedLabItems) {
+    onChange({
+      ...patient,
+      newLabs: rawValue,
+      rawLabText: rawValue,
+      parsedLabItems,
+      updatedAt: new Date().toISOString(),
+    });
   }
 
   function commitOnBlur() {
@@ -74,16 +85,16 @@ function DailyNoteForm({
             placeholder="Example: Clear breathing sounds; mild pitting edema"
           />
         </label>
-        <label>
-          O - Important Labs
-          <textarea
-            value={patient.newLabs}
-            onChange={(event) => updateField("newLabs", event.target.value)}
-            onBlur={commitOnBlur}
+        <div className="span-2">
+          <SmartLabPanel
+            rawValue={patient.rawLabText || patient.newLabs}
+            items={patient.parsedLabItems}
+            onChange={updateLabs}
+            onFieldBlur={commitOnBlur}
             onCompositionStart={onCompositionStart}
             onCompositionEnd={handleCompositionEnd}
           />
-        </label>
+        </div>
         <label>
           O - Important Imaging / Studies
           <textarea
@@ -125,6 +136,27 @@ function DailyNoteForm({
             placeholder="Example: Home with clinic follow-up after oxygen wean."
           />
         </label>
+        <div className="span-2 discharge-checklist">
+          <h3>Discharge Readiness Checklist</h3>
+          {[
+            ["dischargeMedsStatus", "\u51fa\u9662\u5e36\u85e5 / Discharge meds"],
+            ["opdAppointmentStatus", "\u9810\u7d04\u9580\u8a3a / OPD appointment"],
+            ["diagnosisCertificateStatus", "\u8a3a\u65b7\u66f8 / Diagnosis certificate"],
+          ].map(([field, label]) => (
+            <label key={field}>
+              {label}
+              <select
+                value={patient[field as keyof Patient] as string}
+                onChange={(event) => updateField(field as keyof Patient, event.target.value as Patient[keyof Patient])}
+                onBlur={commitOnBlur}
+              >
+                <option value="pending">Pending</option>
+                <option value="done">Done</option>
+                <option value="notNeeded">Not needed</option>
+              </select>
+            </label>
+          ))}
+        </div>
         <label>
           Discharge Target Date
           <input

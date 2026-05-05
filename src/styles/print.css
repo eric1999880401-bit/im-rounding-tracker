@@ -62,6 +62,68 @@
   font-weight: 800;
 }
 
+.rounding-table .clinical-card,
+.print-admission-brief .clinical-card {
+  background: transparent;
+  border: 1px solid #cbd5e1;
+  border-radius: 3px;
+  display: block;
+  margin-top: 2px;
+  overflow-wrap: break-word;
+  padding: 2px 4px;
+  white-space: normal;
+  width: 100%;
+  word-break: normal;
+}
+
+.rounding-table .clinical-card-main-row,
+.print-admission-brief .clinical-card-main-row {
+  display: flex;
+  gap: 3px;
+  min-width: 0;
+  width: 100%;
+}
+
+.rounding-table .clinical-card-main,
+.print-admission-brief .clinical-card-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: break-word;
+  white-space: normal;
+  word-break: normal;
+}
+
+.rounding-table .clinical-card-child,
+.print-admission-brief .clinical-card-child {
+  display: block;
+  overflow-wrap: break-word;
+  padding-left: 14px;
+  white-space: normal;
+  width: 100%;
+  word-break: normal;
+}
+
+.rounding-table .important-clinical-card,
+.print-admission-brief .important-clinical-card {
+  border-color: #b42318;
+  color: #b42318 !important;
+  font-weight: 800;
+}
+
+.rounding-table .lab-chip,
+.print-admission-brief .lab-chip {
+  background: transparent;
+  border: 1px solid #94a3b8;
+  border-radius: 3px;
+  color: black;
+  padding: 1px 3px;
+}
+
+.rounding-table .important-lab-chip {
+  border-color: #b42318;
+  color: #b42318 !important;
+}
+
 .rounding-table .compact-items {
   display: block;
   margin: 0;
@@ -87,6 +149,24 @@
   margin-top: 14px;
   page-break-inside: avoid;
   padding: 10px;
+}
+
+.print-briefs-heading {
+  background: white;
+  border: 1px solid #1f2933;
+  margin-top: 14px;
+  padding: 8px 10px;
+}
+
+.print-briefs-heading h1,
+.print-briefs-heading p {
+  margin: 0;
+}
+
+.print-briefs-heading p {
+  color: #b42318;
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .brief-title {
@@ -240,6 +320,22 @@
   .print-sheet + .print-admission-brief {
     break-before: page;
     page-break-before: always;
+  }
+
+  .print-briefs-heading {
+    font-size: 10px;
+    margin-top: 0;
+  }
+
+  .print-sheet + .print-briefs-heading {
+    break-before: page;
+    page-break-before: always;
+  }
+
+  .print-briefs-heading + .print-admission-brief {
+    break-before: auto;
+    margin-top: 4mm;
+    page-break-before: auto;
   }
 
   .print-title {

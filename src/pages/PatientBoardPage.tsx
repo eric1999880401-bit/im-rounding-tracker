@@ -8,12 +8,15 @@ import {
   getActiveAttendingNames,
   getActivePatients,
   getUnderlyingDiseaseItems,
+  hasUpcomingDischarge,
   importantLines,
   nowIso,
+  pendingDischargePrep,
   sortPatients,
 } from "../utils";
 import PatientForm from "../components/PatientForm";
 import { ClinicalText, CompactItemList } from "../components/ClinicalText";
+import { LabChips } from "../components/LabChips";
 
 interface PageProps {
   patients: Patient[];
@@ -41,6 +44,9 @@ function PatientBoardPage({
     ),
     sortMode,
   );
+  const dischargeAlerts = activePatients
+    .map((patient) => ({ patient, pending: pendingDischargePrep(patient) }))
+    .filter(({ patient, pending }) => hasUpcomingDischarge(patient) && pending.length > 0);
 
   async function addPatient() {
     const now = nowIso();
@@ -61,10 +67,25 @@ function PatientBoardPage({
     await onSavePatient(createTodayFromYesterday(patient));
   }
 
-  async function togglePatientFlag(patientId: string, field: "isNewAdmission" | "showAdmissionBriefOnPrint") {
+  async function setNewAdmission(patientId: string, isNewAdmission: boolean) {
     const patient = patients.find((item) => item.id === patientId);
     if (!patient) return;
-    await onSavePatient({ ...patient, [field]: !patient[field], updatedAt: nowIso() });
+    await onSavePatient({
+      ...patient,
+      isNewAdmission,
+      showAdmissionBriefOnPrint: isNewAdmission ? true : patient.showAdmissionBriefOnPrint,
+      updatedAt: nowIso(),
+    });
+  }
+
+  async function setAdmissionBriefPrint(patientId: string, showAdmissionBriefOnPrint: boolean) {
+    const patient = patients.find((item) => item.id === patientId);
+    if (!patient) return;
+    await onSavePatient({
+      ...patient,
+      showAdmissionBriefOnPrint,
+      updatedAt: nowIso(),
+    });
   }
 
   function importantSummary(patient: Patient) {
@@ -105,6 +126,20 @@ function PatientBoardPage({
     );
   }
 
+  function dischargeReminder(patient: Patient) {
+    const pending = pendingDischargePrep(patient);
+    if (!hasUpcomingDischarge(patient) || pending.length === 0) return "";
+    return `DC prep pending: ${pending.join(" / ")}`;
+  }
+
+  async function updateDischargePrep(
+    patient: Patient,
+    field: "dischargeMedsStatus" | "opdAppointmentStatus" | "diagnosisCertificateStatus",
+    status: Patient[typeof field],
+  ) {
+    await onSavePatient({ ...patient, [field]: status, updatedAt: nowIso() });
+  }
+
   return (
     <div className="page">
       <header className="page-header">
@@ -125,6 +160,69 @@ function PatientBoardPage({
           submitLabel="Create Patient"
           onCancel={() => setShowForm(false)}
         />
+      )}
+
+      {dischargeAlerts.length > 0 && (
+        <section className="dc-alert-panel">
+          <h3>Upcoming Discharge Prep</h3>
+          {dischargeAlerts.map(({ patient, pending }) => (
+            <div className="dc-alert-card" key={patient.id}>
+              <div>
+                <strong>
+                  Bed {patient.bed || "-"} — {patient.patientCode || "-"}
+                </strong>
+                <div>Upcoming discharge prep: {pending.join(" / ")} pending</div>
+              </div>
+              <div className="dc-alert-actions">
+                {patient.dischargeMedsStatus === "pending" && (
+                  <>
+                    <button type="button" onClick={() => updateDischargePrep(patient, "dischargeMedsStatus", "done")}>
+                      Mark meds done
+                    </button>
+                    <button
+                      type="button"
+                      className="secondary"
+                      onClick={() => updateDischargePrep(patient, "dischargeMedsStatus", "notNeeded")}
+                    >
+                      Meds N/A
+                    </button>
+                  </>
+                )}
+                {patient.opdAppointmentStatus === "pending" && (
+                  <>
+                    <button type="button" onClick={() => updateDischargePrep(patient, "opdAppointmentStatus", "done")}>
+                      Mark OPD done
+                    </button>
+                    <button
+                      type="button"
+                      className="secondary"
+                      onClick={() => updateDischargePrep(patient, "opdAppointmentStatus", "notNeeded")}
+                    >
+                      OPD N/A
+                    </button>
+                  </>
+                )}
+                {patient.diagnosisCertificateStatus === "pending" && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => updateDischargePrep(patient, "diagnosisCertificateStatus", "done")}
+                    >
+                      Mark certificate done
+                    </button>
+                    <button
+                      type="button"
+                      className="secondary"
+                      onClick={() => updateDischargePrep(patient, "diagnosisCertificateStatus", "notNeeded")}
+                    >
+                      Cert N/A
+                    </button>
+                  </>
+                )}
+              </div>
+            </div>
+          ))}
+        </section>
       )}
 
       <section className="panel">
@@ -206,7 +304,7 @@ function PatientBoardPage({
                     )}
                     <div>
                       <span className="board-label">Lab/Image</span>{" "}
-                      <ClinicalText value={patient.newLabs} maxLines={1} /> /{" "}
+                      <LabChips items={patient.parsedLabItems} maxItems={5} />
                       <ClinicalText value={patient.newImaging} maxLines={1} />
                     </div>
                     <div>
@@ -218,7 +316,10 @@ function PatientBoardPage({
                   <td>
                     {taskSummary(patient)}
                   </td>
-                  <td>{patient.dischargeTargetDate || "TBD"}</td>
+                  <td>
+                    <div>{patient.dischargeTargetDate || "TBD"}</div>
+                    {dischargeReminder(patient) && <div className="important-line">{dischargeReminder(patient)}</div>}
+                  </td>
                   <td className="table-actions">
                     <Link className="button-link" to={`/patients/${patient.id}`}>
                       Details
@@ -226,13 +327,13 @@ function PatientBoardPage({
                     <button type="button" className="secondary" onClick={() => startToday(patient.id)}>
                       Create today
                     </button>
-                    <button type="button" className="secondary" onClick={() => togglePatientFlag(patient.id, "isNewAdmission")}>
+                    <button type="button" className="secondary" onClick={() => setNewAdmission(patient.id, !patient.isNewAdmission)}>
                       {patient.isNewAdmission ? "Unmark new" : "Mark new"}
                     </button>
                     <button
                       type="button"
                       className="secondary"
-                      onClick={() => togglePatientFlag(patient.id, "showAdmissionBriefOnPrint")}
+                      onClick={() => setAdmissionBriefPrint(patient.id, !patient.showAdmissionBriefOnPrint)}
                     >
                       {patient.showAdmissionBriefOnPrint ? "Exclude brief" : "Include brief"}
                     </button>

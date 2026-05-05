@@ -35,6 +35,14 @@ function PatientForm({
     onChange({ ...patient, activeProblems: value, activeProblemItems: textToItems(value) });
   }
 
+  function updateNewAdmission(checked: boolean) {
+    onChange({
+      ...patient,
+      isNewAdmission: checked,
+      showAdmissionBriefOnPrint: checked ? true : patient.showAdmissionBriefOnPrint,
+    });
+  }
+
   function handleSubmit(event: FormEvent) {
     event.preventDefault();
     onSubmit();
@@ -147,7 +155,7 @@ function PatientForm({
         <input
           type="checkbox"
           checked={patient.isNewAdmission}
-          onChange={(event) => updateField("isNewAdmission", event.target.checked)}
+          onChange={(event) => updateNewAdmission(event.target.checked)}
           onBlur={commitOnBlur}
         />
         New admission

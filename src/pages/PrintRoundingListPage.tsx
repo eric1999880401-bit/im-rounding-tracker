@@ -7,9 +7,11 @@ import {
   getUnderlyingDiseaseItems,
   groupPatientsByAttending,
   hasUrgentPendingTask,
+  dischargePrepText,
   sortPatients,
 } from "../utils";
 import { ClinicalText, CompactItemList } from "../components/ClinicalText";
+import { LabChips } from "../components/LabChips";
 
 interface PageProps {
   patients: Patient[];
@@ -17,7 +19,7 @@ interface PageProps {
 
 function PrintRoundingListPage({ patients }: PageProps) {
   const [printMode, setPrintMode] = useState("all");
-  const [admissionBriefPrintMode, setAdmissionBriefPrintMode] = useState("compact");
+  const [admissionBriefPrintMode, setAdmissionBriefPrintMode] = useState("newAdmissions");
   const [selectedAttending, setSelectedAttending] = useState("");
   const [hideCompletedTasks, setHideCompletedTasks] = useState(true);
   const [hideStableDetails, setHideStableDetails] = useState(false);
@@ -51,6 +53,8 @@ function PrintRoundingListPage({ patients }: PageProps) {
 
     return [];
   }
+
+  const selectedAdmissionBriefPatients = admissionBriefPatients();
 
   function taskText(patient: Patient) {
     const tasks = hideCompletedTasks ? patient.tasks.filter((task) => !task.done) : patient.tasks;
@@ -91,7 +95,7 @@ function PrintRoundingListPage({ patients }: PageProps) {
         key={sectionAttending}
       >
         <div className="print-title">
-          <h1>Internal Medicine Rounding List</h1>
+          <h1>Section 1: Compact Rounding List</h1>
           <div className="print-meta-grid">
             <span>
               <strong>Date:</strong> {todayText}
@@ -169,7 +173,7 @@ function PrintRoundingListPage({ patients }: PageProps) {
                 </td>
                 <td>
                   <div>
-                    <strong>Lab:</strong> <ClinicalText value={patient.newLabs} maxLines={3} />
+                    <strong>Lab:</strong> <LabChips items={patient.parsedLabItems} maxItems={6} />
                   </div>
                   <div>
                     <strong>Img:</strong> <ClinicalText value={patient.newImaging} maxLines={3} />
@@ -201,10 +205,13 @@ function PrintRoundingListPage({ patients }: PageProps) {
                     <strong>Barrier:</strong> {patient.dischargeBarriers || "-"}
                   </div>
                   <div>
+                    <strong>DC prep:</strong> {dischargePrepText(patient)}
+                  </div>
+                  <div>
                     <strong>Attn:</strong> <ClinicalText value={patient.specialAttention} maxLines={2} />
                   </div>
                   <div>
-                    <strong>VS:</strong> {patient.vsOrder || "-"}
+                    <strong>VS:</strong> <ClinicalText value={patient.vsOrder} maxLines={1} />
                   </div>
                 </td>
               </tr>
@@ -407,6 +414,22 @@ function PrintRoundingListPage({ patients }: PageProps) {
         </label>
       </section>
 
+      {admissionBriefPrintMode !== "compact" && (
+        <section className="panel no-print">
+          <h3>Admission Brief Print Preview</h3>
+          {selectedAdmissionBriefPatients.length === 0 ? (
+            <p className="muted">No admission briefs selected for print.</p>
+          ) : (
+            <p>
+              Admission briefs to be printed:{" "}
+              {selectedAdmissionBriefPatients
+                .map((patient) => `Bed ${patient.bed || "-"} / Patient code ${patient.patientCode || "-"}`)
+                .join(", ")}
+            </p>
+          )}
+        </section>
+      )}
+
       {shouldPrintCompactList &&
         (printMode === "separate"
           ? Object.entries(groupedPatients).map(([sectionAttending, sectionPatients], index) =>
@@ -417,7 +440,13 @@ function PrintRoundingListPage({ patients }: PageProps) {
               printMode === "selected" ? selectedAttending : attending,
             ))}
 
-      {admissionBriefPatients().map(renderAdmissionBrief)}
+      {selectedAdmissionBriefPatients.length > 0 && (
+        <section className="print-briefs-heading">
+          <h1>Section 2: Admission Briefs for New Patients</h1>
+          <p>Use de-identified data only.</p>
+        </section>
+      )}
+      {selectedAdmissionBriefPatients.map(renderAdmissionBrief)}
     </div>
   );
 }

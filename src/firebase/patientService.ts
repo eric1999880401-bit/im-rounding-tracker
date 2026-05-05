@@ -11,7 +11,7 @@ import {
 } from "firebase/firestore";
 import type { Patient, PatientTask } from "../types";
 import { db } from "./firebase";
-import { textToItems } from "../utils";
+import { parseLabText, textToItems } from "../utils";
 
 function patientsCollection(uid: string) {
   return collection(db, "users", uid, "patients");
@@ -31,6 +31,21 @@ function normalizeTask(task: Partial<PatientTask>): PatientTask {
     dueDate: task.dueDate ?? "",
     createdAt: task.createdAt ?? "",
     completedAt: task.completedAt ?? "",
+  };
+}
+
+function normalizeParsedLabItem(item: Record<string, unknown>) {
+  const label = String(item.label ?? item.name ?? "");
+  return {
+    label,
+    name: String(item.name ?? label),
+    value: String(item.value ?? ""),
+    unit: String(item.unit ?? ""),
+    previousValue: String(item.previousValue ?? ""),
+    group: String(item.group ?? ""),
+    important: Boolean(item.important ?? item.isImportant ?? false),
+    isImportant: Boolean(item.isImportant ?? item.important ?? false),
+    note: String(item.note ?? ""),
   };
 }
 
@@ -69,6 +84,13 @@ function normalizePatient(patientId: string, data: Partial<Patient>): Patient {
     physicalExam: data.physicalExam ?? "",
     hospitalCourseHighlights: data.hospitalCourseHighlights ?? "",
     importantRedFlags: data.importantRedFlags ?? "",
+    rawLabText: data.rawLabText ?? data.newLabs ?? "",
+    parsedLabItems: Array.isArray(data.parsedLabItems)
+      ? data.parsedLabItems.map((item) => normalizeParsedLabItem(item as unknown as Record<string, unknown>))
+      : parseLabText(data.rawLabText ?? data.newLabs ?? ""),
+    dischargeMedsStatus: data.dischargeMedsStatus ?? "pending",
+    opdAppointmentStatus: data.opdAppointmentStatus ?? "pending",
+    diagnosisCertificateStatus: data.diagnosisCertificateStatus ?? "pending",
     overnightEvent: data.overnightEvent ?? "",
     subjectiveOrChiefConcern: data.subjectiveOrChiefConcern ?? "",
     newLabs: data.newLabs ?? "",
@@ -85,6 +107,31 @@ function normalizePatient(patientId: string, data: Partial<Patient>): Patient {
     createdAt: data.createdAt ?? "",
     updatedAt: data.updatedAt ?? "",
   };
+}
+
+function sanitizeForFirestore(value: unknown): unknown {
+  if (value === undefined) return "";
+  if (value === null) return null;
+
+  if (Array.isArray(value)) {
+    return value.map((item) => sanitizeForFirestore(item));
+  }
+
+  if (typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([key, nextValue]) => [
+        key,
+        sanitizeForFirestore(nextValue),
+      ]),
+    );
+  }
+
+  return value;
+}
+
+function preparePatientForFirestore(patient: Patient): Record<string, unknown> {
+  const normalizedPatient = normalizePatient(patient.id, patient);
+  return sanitizeForFirestore(normalizedPatient) as Record<string, unknown>;
 }
 
 export function subscribeToPatients(
@@ -108,11 +155,11 @@ export function subscribeToPatients(
 
 export function createPatient(uid: string, patient: Patient) {
   // The patient id is also the Firestore document id for easy lookup.
-  return setDoc(patientDocument(uid, patient.id), patient);
+  return setDoc(patientDocument(uid, patient.id), preparePatientForFirestore(patient));
 }
 
 export function updatePatient(uid: string, patient: Patient) {
-  return updateDoc(patientDocument(uid, patient.id), { ...patient });
+  return updateDoc(patientDocument(uid, patient.id), preparePatientForFirestore(patient));
 }
 
 export function deletePatient(uid: string, patientId: string) {
