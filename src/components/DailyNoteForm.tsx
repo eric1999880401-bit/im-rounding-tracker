@@ -8,6 +8,7 @@ interface DailyNoteFormProps {
   patient: Patient;
   onChange: (patient: Patient) => void;
   onFieldBlur?: () => void;
+  onImmediateCommit?: () => void;
   onCompositionStart?: () => void;
   onCompositionEnd?: () => void;
 }
@@ -16,6 +17,7 @@ function DailyNoteForm({
   patient,
   onChange,
   onFieldBlur,
+  onImmediateCommit,
   onCompositionStart,
   onCompositionEnd,
 }: DailyNoteFormProps) {
@@ -217,6 +219,7 @@ function DailyNoteForm({
             labReports={patient.labReports}
             onChange={updateLabs}
             onMetaChange={updateLabMeta}
+            onImmediateCommit={onImmediateCommit}
             onFieldBlur={commitOnBlur}
             onCompositionStart={onCompositionStart}
             onCompositionEnd={handleCompositionEnd}

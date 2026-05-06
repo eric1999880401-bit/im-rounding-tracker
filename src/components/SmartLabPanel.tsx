@@ -13,6 +13,7 @@ interface SmartLabPanelProps {
   labReports: LabReport[];
   onChange: (rawValue: string, items: ParsedLabItem[], labReports: LabReport[]) => void;
   onMetaChange: (labDate: string, labReportTitle: string, labReports: LabReport[], selectedRawValue?: string) => void;
+  onImmediateCommit?: () => void;
   onFieldBlur?: () => void;
   onCompositionStart?: () => void;
   onCompositionEnd?: () => void;
@@ -79,6 +80,7 @@ function SmartLabPanel({
   labReports,
   onChange,
   onMetaChange,
+  onImmediateCommit,
   onFieldBlur,
   onCompositionStart,
   onCompositionEnd,
@@ -117,14 +119,22 @@ function SmartLabPanel({
     setSuggestionsOpen(false);
   }
 
+  function commitAfterDraftUpdate() {
+    window.setTimeout(() => {
+      onImmediateCommit?.();
+    }, 0);
+  }
+
   function addItem() {
     const name = (draft.name || nameQuery).trim();
     if (!name || !draft.value.trim()) return;
 
     const nextItem: ParsedLabItem = {
       ...draft,
+      id: draft.id || `lab-item-${Date.now()}`,
       label: name,
       name,
+      displayName: name,
       value: draft.value.trim(),
       unit: draft.unit?.trim() || "",
       previousValue: draft.previousValue?.trim() || "",
@@ -139,7 +149,7 @@ function SmartLabPanel({
     const selectedTitle = reportTitleForStorage(labReportTitle);
     const existingReport = labReports.find((report) => sameReport(report, selectedDate, selectedTitle));
     const nextReport: LabReport = existingReport
-      ? { ...existingReport, date: selectedDate, title: selectedTitle, items: [...existingReport.items, nextItem] }
+      ? { ...existingReport, date: selectedDate, title: selectedTitle, rawText: rawValue, items: [...existingReport.items, nextItem] }
       : {
           id: `manual-${selectedDate}-${selectedTitle.replace(/[^A-Za-z0-9]+/g, "-")}-${Date.now()}`,
           date: selectedDate,
@@ -153,6 +163,7 @@ function SmartLabPanel({
     ]);
 
     onChange(rawValue, reports.flatMap((report) => report.items), reports);
+    commitAfterDraftUpdate();
     setDraft(emptyDraft());
     setNameQuery("");
   }
@@ -171,6 +182,7 @@ function SmartLabPanel({
         .filter((report) => report.items.length > 0 || report.rawText.trim()),
     );
     onChange(rawValue, reports.flatMap((report) => report.items), reports);
+    commitAfterDraftUpdate();
   }
 
   function insertTemplate(template: string) {

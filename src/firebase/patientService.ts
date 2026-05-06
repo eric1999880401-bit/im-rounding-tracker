@@ -54,8 +54,10 @@ function normalizeTask(task: Partial<PatientTask>): PatientTask {
 function normalizeParsedLabItem(item: Record<string, unknown>) {
   const label = String(item.label ?? item.name ?? "");
   return {
+    id: String(item.id ?? ""),
     label,
     name: String(item.name ?? label),
+    displayName: String(item.displayName ?? item.name ?? label),
     value: String(item.value ?? ""),
     unit: String(item.unit ?? ""),
     previousValue: String(item.previousValue ?? ""),

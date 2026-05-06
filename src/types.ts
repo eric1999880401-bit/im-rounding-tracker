@@ -26,8 +26,10 @@ export interface HighlightLine {
 }
 
 export interface ParsedLabItem {
+  id?: string;
   label: string;
   name?: string;
+  displayName?: string;
   value: string;
   unit?: string;
   previousValue?: string;

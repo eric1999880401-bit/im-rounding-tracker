@@ -226,6 +226,7 @@ function PatientDetailPage({
       <DailyNoteForm
         patient={currentPatient}
         onChange={updateDraft}
+        onImmediateCommit={() => void commitDraft()}
         onFieldBlur={handleFieldBlur}
         onCompositionStart={handleCompositionStart}
         onCompositionEnd={handleCompositionEnd}
