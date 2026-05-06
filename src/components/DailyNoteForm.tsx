@@ -35,11 +35,17 @@ function DailyNoteForm({
     });
   }
 
-  function updateLabMeta(labDate: string, labReportTitle: string, labReports: LabReport[]) {
+  function updateLabMeta(labDate: string, labReportTitle: string, labReports: LabReport[], selectedRawValue?: string) {
     onChange({
       ...patient,
       labDate,
       labReportTitle,
+      ...(selectedRawValue !== undefined
+        ? {
+            newLabs: selectedRawValue,
+            rawLabText: selectedRawValue,
+          }
+        : {}),
       labReports,
       parsedLabItems: labReports.flatMap((report) => report.items),
       updatedAt: new Date().toISOString(),

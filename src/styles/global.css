@@ -317,9 +317,23 @@ th {
 }
 
 .table-actions {
+  vertical-align: top;
+  width: 180px;
+}
+
+.board-action-buttons {
+  align-items: flex-start;
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+  max-width: 100%;
+}
+
+.board-action-buttons button,
+.board-action-buttons .button-link {
+  flex: 1 1 78px;
+  justify-content: center;
+  min-width: 0;
 }
 
 .task-input-row {
@@ -1114,6 +1128,25 @@ th {
   flex-wrap: wrap;
   gap: 6px;
   padding: 4px;
+}
+
+.print-lab-report-list {
+  display: grid;
+  gap: 3px;
+}
+
+.print-lab-report-group {
+  display: block;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.print-lab-date {
+  color: var(--text-muted);
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 800;
+  margin-right: 4px;
 }
 
 .presentation-grid {

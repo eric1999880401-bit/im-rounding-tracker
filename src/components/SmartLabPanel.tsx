@@ -12,7 +12,7 @@ interface SmartLabPanelProps {
   items: ParsedLabItem[];
   labReports: LabReport[];
   onChange: (rawValue: string, items: ParsedLabItem[], labReports: LabReport[]) => void;
-  onMetaChange: (labDate: string, labReportTitle: string, labReports: LabReport[]) => void;
+  onMetaChange: (labDate: string, labReportTitle: string, labReports: LabReport[], selectedRawValue?: string) => void;
   onFieldBlur?: () => void;
   onCompositionStart?: () => void;
   onCompositionEnd?: () => void;
@@ -31,6 +31,44 @@ function emptyDraft(): ParsedLabItem {
     isImportant: false,
     note: "",
   };
+}
+
+function normalizeDateForStorage(date: string) {
+  const trimmedDate = date.trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmedDate)) return trimmedDate;
+  const parsedDate = new Date(trimmedDate);
+  if (!Number.isNaN(parsedDate.getTime())) return parsedDate.toISOString().slice(0, 10);
+  return new Date().toISOString().slice(0, 10);
+}
+
+function reportTitleForStorage(title: string) {
+  return title.trim() || "Labs";
+}
+
+function sortLabReports(reports: LabReport[]) {
+  return [...reports].sort((a, b) => {
+    const dateOrder = normalizeDateForStorage(b.date).localeCompare(normalizeDateForStorage(a.date));
+    if (dateOrder !== 0) return dateOrder;
+    return reportTitleForStorage(a.title).localeCompare(reportTitleForStorage(b.title));
+  });
+}
+
+function sameReport(left: LabReport, date: string, title: string) {
+  return (
+    normalizeDateForStorage(left.date) === normalizeDateForStorage(date) &&
+    reportTitleForStorage(left.title).toLowerCase() === reportTitleForStorage(title).toLowerCase()
+  );
+}
+
+function replaceReportsForSelectedDate(currentReports: LabReport[], nextReports: LabReport[]) {
+  if (nextReports.length === 0) return currentReports;
+  const replacementKeys = new Set(
+    nextReports.map((report) => `${normalizeDateForStorage(report.date)}|${reportTitleForStorage(report.title).toLowerCase()}`),
+  );
+  const keptReports = currentReports.filter(
+    (report) => !replacementKeys.has(`${normalizeDateForStorage(report.date)}|${reportTitleForStorage(report.title).toLowerCase()}`),
+  );
+  return sortLabReports([...keptReports, ...nextReports]);
 }
 
 function SmartLabPanel({
@@ -56,17 +94,21 @@ function SmartLabPanel({
   }, [nameQuery]);
 
   function parsedReportsFor(value: string, date = labDate, title = labReportTitle) {
-    return parseLabReports(value, date, title);
+    return parseLabReports(value, normalizeDateForStorage(date), reportTitleForStorage(title));
   }
 
   function updateRaw(value: string) {
-    const reports = parsedReportsFor(value);
+    const parsedReports = parsedReportsFor(value);
+    const reports = replaceReportsForSelectedDate(labReports, parsedReports);
     onChange(value, reports.flatMap((report) => report.items), reports);
   }
 
   function updateMeta(nextDate: string, nextTitle: string) {
-    const reports = parsedReportsFor(rawValue, nextDate, nextTitle);
-    onMetaChange(nextDate, nextTitle, reports);
+    const selectedDate = normalizeDateForStorage(nextDate);
+    const selectedTitle = reportTitleForStorage(nextTitle);
+    const existingReport = labReports.find((report) => sameReport(report, selectedDate, selectedTitle));
+    const dateChanged = selectedDate !== normalizeDateForStorage(labDate);
+    onMetaChange(selectedDate, nextTitle, sortLabReports(labReports), dateChanged ? (existingReport?.rawText ?? "") : undefined);
   }
 
   function selectLab(name: string, group: string, unit = "") {
@@ -93,31 +135,42 @@ function SmartLabPanel({
       note: draft.note?.trim() || "",
     };
 
-    const reports =
-      labReports.length > 0
-        ? labReports.map((report, index) =>
-            index === 0 ? { ...report, items: [...report.items, nextItem] } : report,
-          )
-        : [
-            {
-              id: `manual-${Date.now()}`,
-              date: labDate,
-              title: labReportTitle,
-              rawText: rawValue,
-              items: [nextItem],
-            },
-          ];
+    const selectedDate = normalizeDateForStorage(labDate);
+    const selectedTitle = reportTitleForStorage(labReportTitle);
+    const existingReport = labReports.find((report) => sameReport(report, selectedDate, selectedTitle));
+    const nextReport: LabReport = existingReport
+      ? { ...existingReport, date: selectedDate, title: selectedTitle, items: [...existingReport.items, nextItem] }
+      : {
+          id: `manual-${selectedDate}-${selectedTitle.replace(/[^A-Za-z0-9]+/g, "-")}-${Date.now()}`,
+          date: selectedDate,
+          title: selectedTitle,
+          rawText: rawValue,
+          items: [nextItem],
+        };
+    const reports = sortLabReports([
+      ...labReports.filter((report) => !sameReport(report, selectedDate, selectedTitle)),
+      nextReport,
+    ]);
 
-    onChange(rawValue, [...items, nextItem], reports);
+    onChange(rawValue, reports.flatMap((report) => report.items), reports);
     setDraft(emptyDraft());
     setNameQuery("");
   }
 
   function removeItem(index: number) {
-    const nextItems = items.filter((_, itemIndex) => itemIndex !== index);
-    onChange(rawValue, nextItems, [
-      { id: `manual-${Date.now()}`, date: labDate, title: labReportTitle, rawText: rawValue, items: nextItems },
-    ]);
+    let seenIndex = -1;
+    const reports = sortLabReports(
+      labReports
+        .map((report) => {
+          const nextItems = report.items.filter(() => {
+            seenIndex += 1;
+            return seenIndex !== index;
+          });
+          return { ...report, items: nextItems };
+        })
+        .filter((report) => report.items.length > 0 || report.rawText.trim()),
+    );
+    onChange(rawValue, reports.flatMap((report) => report.items), reports);
   }
 
   function insertTemplate(template: string) {

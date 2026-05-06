@@ -369,28 +369,30 @@ function PatientBoardPage({
                     {dischargeReminder(patient) && <div className="important-line">{dischargeReminder(patient)}</div>}
                   </td>
                   <td className="table-actions">
-                    <Link className="button-link" to={`/patients/${patient.id}`}>
-                      Details
-                    </Link>
-                    <button type="button" className="secondary" onClick={() => startToday(patient.id)}>
-                      Create today
-                    </button>
-                    <button type="button" className="secondary" onClick={() => setNewAdmission(patient.id, !patient.isNewAdmission)}>
-                      {patient.isNewAdmission ? "Unmark new" : "Mark new"}
-                    </button>
-                    <button
-                      type="button"
-                      className="secondary"
-                      onClick={() => setAdmissionBriefPrint(patient.id, !patient.showAdmissionBriefOnPrint)}
-                    >
-                      {patient.showAdmissionBriefOnPrint ? "Exclude brief" : "Include brief"}
-                    </button>
-                    <button type="button" onClick={() => updateStatus(patient.id, "discharged")}>
-                      Discharge
-                    </button>
-                    <button type="button" className="secondary" onClick={() => updateStatus(patient.id, "archived")}>
-                      Archive
-                    </button>
+                    <div className="board-action-buttons">
+                      <Link className="button-link" to={`/patients/${patient.id}`}>
+                        Details
+                      </Link>
+                      <button type="button" className="secondary" onClick={() => startToday(patient.id)}>
+                        Create today
+                      </button>
+                      <button type="button" className="secondary" onClick={() => setNewAdmission(patient.id, !patient.isNewAdmission)}>
+                        {patient.isNewAdmission ? "Unmark new" : "Mark new"}
+                      </button>
+                      <button
+                        type="button"
+                        className="secondary"
+                        onClick={() => setAdmissionBriefPrint(patient.id, !patient.showAdmissionBriefOnPrint)}
+                      >
+                        {patient.showAdmissionBriefOnPrint ? "Exclude brief" : "Include brief"}
+                      </button>
+                      <button type="button" onClick={() => updateStatus(patient.id, "discharged")}>
+                        Discharge
+                      </button>
+                      <button type="button" className="secondary" onClick={() => updateStatus(patient.id, "archived")}>
+                        Archive
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}

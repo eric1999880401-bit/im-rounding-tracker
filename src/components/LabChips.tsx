@@ -18,6 +18,7 @@ export function LabChips({ items, maxItems, showMoreCount = false, onRemove }: L
     <div className="lab-chip-row">
       {visibleItems.map((item, index) => {
         const formatted = formatLabItem(item);
+        const sourceIndex = items.indexOf(item);
         return (
           <span
             className={`lab-chip ${item.important || item.isImportant ? "important-lab-chip" : ""}`}
@@ -28,8 +29,13 @@ export function LabChips({ items, maxItems, showMoreCount = false, onRemove }: L
             {item.unit && <span className="lab-chip-unit">{item.unit}</span>}
             {formatted.previous && <span className="lab-chip-prev">({formatted.previous})</span>}
             {onRemove && (
-              <button type="button" className="chip-remove-button" onClick={() => onRemove(index)} title="Remove lab">
-                ×
+              <button
+                type="button"
+                className="chip-remove-button"
+                onClick={() => onRemove(sourceIndex)}
+                title="Remove lab"
+              >
+                x
               </button>
             )}
           </span>

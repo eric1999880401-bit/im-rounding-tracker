@@ -123,6 +123,24 @@ function PrintRoundingListPage({
       ));
   }
 
+  function labReportSummary(patient: Patient) {
+    const reportsWithItems = patient.labReports.filter((report) => report.items.length > 0);
+    if (reportsWithItems.length === 0) return <LabChips items={patient.parsedLabItems} />;
+
+    const dateCount = new Set(reportsWithItems.map((report) => report.date)).size;
+    return (
+      <div className="print-lab-report-list">
+        {reportsWithItems.map((report) => (
+          <div className="print-lab-report-group" key={report.id}>
+            {dateCount > 1 && <span className="print-lab-date">{report.date}</span>}
+            {dateCount <= 1 && report.title && <span className="print-lab-date">{report.title}</span>}
+            <LabChips items={report.items} />
+          </div>
+        ))}
+      </div>
+    );
+  }
+
   function isStableForPrint(patient: Patient) {
     return (
       !hasUrgentPendingTask(patient) &&
@@ -234,7 +252,7 @@ function PrintRoundingListPage({
                 </td>
                 <td>
                   <div>
-                    <strong>Lab:</strong> <LabChips items={patient.parsedLabItems} />
+                    <strong>Lab:</strong> {labReportSummary(patient)}
                   </div>
                   <div>
                     <strong>Img:</strong> <ClinicalText value={patient.newImaging} />

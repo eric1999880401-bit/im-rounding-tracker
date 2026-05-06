@@ -248,6 +248,26 @@
   overflow: visible;
 }
 
+.rounding-table .print-lab-report-list {
+  display: grid;
+  gap: 2px;
+}
+
+.rounding-table .print-lab-report-group {
+  break-inside: avoid;
+  display: block;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.rounding-table .print-lab-date {
+  color: #374151 !important;
+  display: inline-block;
+  font-size: 9px;
+  font-weight: 800;
+  margin-right: 3px;
+}
+
 .rounding-table .objective-chip,
 .print-admission-brief .objective-chip {
   background: transparent;
