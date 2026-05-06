@@ -1,6 +1,8 @@
 import type { FormEvent } from "react";
 import type { Patient, PatientSex, PatientStatus } from "../types";
 import { textToItems } from "../utils";
+import ActiveProblemEditor from "./ActiveProblemEditor";
+import { useT } from "../i18n";
 
 interface PatientFormProps {
   patient: Patient;
@@ -23,6 +25,7 @@ function PatientForm({
   onCompositionStart,
   onCompositionEnd,
 }: PatientFormProps) {
+  const t = useT();
   function updateField<K extends keyof Patient>(field: K, value: Patient[K]) {
     onChange({ ...patient, [field]: value });
   }
@@ -59,7 +62,7 @@ function PatientForm({
   return (
     <form className="panel form-grid" onSubmit={handleSubmit}>
       <label>
-        Bed
+        {t("field.bed")}
         <input
           value={patient.bed}
           onChange={(event) => updateField("bed", event.target.value)}
@@ -70,7 +73,7 @@ function PatientForm({
       </label>
 
       <label>
-        Patient Code
+        {t("field.patientCode")}
         <input
           required
           value={patient.patientCode}
@@ -83,7 +86,7 @@ function PatientForm({
       </label>
 
       <label>
-        Age
+        {t("field.ageSex")}
         <input
           type="number"
           min="0"
@@ -107,7 +110,7 @@ function PatientForm({
       </label>
 
       <label>
-        Attending
+        {t("field.attending")}
         <input
           value={patient.attending}
           onChange={(event) => updateField("attending", event.target.value)}
@@ -129,7 +132,7 @@ function PatientForm({
       </label>
 
       <label>
-        Admission Date
+        {t("field.admissionDate")}
         <input
           type="date"
           value={patient.admissionDate}
@@ -158,7 +161,7 @@ function PatientForm({
           onChange={(event) => updateNewAdmission(event.target.checked)}
           onBlur={commitOnBlur}
         />
-        New admission
+        {t("print.newAdmission")}
       </label>
 
       <label className="checkbox-label">
@@ -168,11 +171,11 @@ function PatientForm({
           onChange={(event) => updateField("showAdmissionBriefOnPrint", event.target.checked)}
           onBlur={commitOnBlur}
         />
-        Include admission brief in print
+        {t("action.includeBrief")}
       </label>
 
       <label className="span-2">
-        Underlying Disease / PMH
+        {t("field.pmh")}
         <textarea
           value={patient.underlyingDiseases}
           onChange={(event) => updateUnderlyingDiseases(event.target.value)}
@@ -184,7 +187,7 @@ function PatientForm({
       </label>
 
       <label className="span-2">
-        Primary Diagnosis
+        {t("field.primaryDiagnosis")}
         <input
           value={patient.primaryDiagnosis}
           onChange={(event) => updateField("primaryDiagnosis", event.target.value)}
@@ -194,16 +197,17 @@ function PatientForm({
         />
       </label>
 
-      <label className="span-2">
-        Active Problems
-        <textarea
-          value={patient.activeProblems}
-          onChange={(event) => updateActiveProblems(event.target.value)}
-          onBlur={commitOnBlur}
+      <div className="span-2">
+        <ActiveProblemEditor
+          legacyText={patient.activeProblems}
+          items={patient.activeProblemStructuredItems}
+          onLegacyTextChange={updateActiveProblems}
+          onItemsChange={(items) => updateField("activeProblemStructuredItems", items)}
+          onFieldBlur={commitOnBlur}
           onCompositionStart={onCompositionStart}
           onCompositionEnd={handleCompositionEnd}
         />
-      </label>
+      </div>
 
       <div className="form-actions span-2">
         <button type="submit">{submitLabel}</button>

@@ -1,6 +1,7 @@
 import { Link } from "react-router-dom";
+import { useState } from "react";
 import type { Patient, PatientTask } from "../types";
-import { getActivePatients, getPendingTasks, hasUpcomingDischarge, nowIso, pendingDischargePrep } from "../utils";
+import { getActivePatients, hasUpcomingDischarge, nowIso, pendingDischargePrep } from "../utils";
 
 interface PageProps {
   patients: Patient[];
@@ -8,8 +9,13 @@ interface PageProps {
 }
 
 function TodayTasksPage({ patients, onSavePatient }: PageProps) {
+  const [showCompletedTasks, setShowCompletedTasks] = useState(false);
   const activePatients = getActivePatients(patients);
-  const pendingTasks = getPendingTasks(activePatients);
+  const visibleTasks = activePatients.flatMap((patient) =>
+    patient.tasks
+      .filter((task) => showCompletedTasks || !task.done)
+      .map((task) => ({ patient, task })),
+  );
   const dischargePrepReminders = activePatients
     .map((patient) => ({ patient, pending: pendingDischargePrep(patient) }))
     .filter(({ patient, pending }) => hasUpcomingDischarge(patient) && pending.length > 0);
@@ -29,6 +35,18 @@ function TodayTasksPage({ patients, onSavePatient }: PageProps) {
     });
   }
 
+  async function deleteTask(patientId: string, taskToDelete: PatientTask) {
+    if (!window.confirm(`Delete task: ${taskToDelete.text}?`)) return;
+    const patient = patients.find((item) => item.id === patientId);
+    if (!patient) return;
+
+    await onSavePatient({
+      ...patient,
+      updatedAt: nowIso(),
+      tasks: patient.tasks.filter((task) => task.id !== taskToDelete.id),
+    });
+  }
+
   async function updateDischargePrep(
     patient: Patient,
     field: "dischargeMedsStatus" | "opdAppointmentStatus" | "diagnosisCertificateStatus",
@@ -42,7 +60,6 @@ function TodayTasksPage({ patients, onSavePatient }: PageProps) {
       <header className="page-header">
         <div>
           <h2>Today Tasks</h2>
-          <p className="privacy-warning">Use de-identified data only.</p>
         </div>
       </header>
 
@@ -80,7 +97,17 @@ function TodayTasksPage({ patients, onSavePatient }: PageProps) {
       </section>
 
       <section className="panel">
-        <h3>Unfinished Tasks From Active Patients</h3>
+        <div className="section-heading">
+          <h3>{showCompletedTasks ? "Tasks From Active Patients" : "Unfinished Tasks From Active Patients"}</h3>
+          <label className="checkbox-label">
+            <input
+              type="checkbox"
+              checked={showCompletedTasks}
+              onChange={(event) => setShowCompletedTasks(event.target.checked)}
+            />
+            {showCompletedTasks ? "Show completed tasks" : "Hide completed tasks"}
+          </label>
+        </div>
         <div className="responsive-table">
           <table>
             <thead>
@@ -92,10 +119,11 @@ function TodayTasksPage({ patients, onSavePatient }: PageProps) {
                 <th>Priority</th>
                 <th>Category</th>
                 <th>Due Date</th>
+                <th>Actions</th>
               </tr>
             </thead>
             <tbody>
-              {pendingTasks.map(({ patient, task }) => (
+              {visibleTasks.map(({ patient, task }) => (
                 <tr key={`${patient.id}-${task.id}`}>
                   <td>
                     <input type="checkbox" checked={task.done} onChange={() => toggleDone(patient.id, task)} />
@@ -110,11 +138,16 @@ function TodayTasksPage({ patients, onSavePatient }: PageProps) {
                   </td>
                   <td>{task.category}</td>
                   <td>{task.dueDate}</td>
+                  <td>
+                    <button type="button" className="secondary" onClick={() => deleteTask(patient.id, task)}>
+                      Delete
+                    </button>
+                  </td>
                 </tr>
               ))}
-              {pendingTasks.length === 0 && (
+              {visibleTasks.length === 0 && (
                 <tr>
-                  <td colSpan={7}>No unfinished tasks from active patients.</td>
+                  <td colSpan={8}>{showCompletedTasks ? "No tasks from active patients." : "No unfinished tasks from active patients."}</td>
                 </tr>
               )}
             </tbody>

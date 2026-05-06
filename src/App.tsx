@@ -1,19 +1,48 @@
 import { Navigate, Route, Routes } from "react-router-dom";
 import { useEffect, useState } from "react";
-import type { Patient } from "./types";
+import type { DailyNote, DailyNotesByPatient, MiscTask, Patient, PhonebookContact, StudyTopic, UserPreferences } from "./types";
 import AppLayout from "./components/AppLayout";
 import PatientBoardPage from "./pages/PatientBoardPage";
 import PatientDetailPage from "./pages/PatientDetailPage";
 import TodayTasksPage from "./pages/TodayTasksPage";
 import ArchivePage from "./pages/ArchivePage";
 import PrintRoundingListPage from "./pages/PrintRoundingListPage";
+import SettingsPage from "./pages/SettingsPage";
+import UtilitiesPage from "./pages/UtilitiesPage";
 import AuthPage from "./pages/AuthPage";
 import { useAuthUser } from "./firebase/auth";
-import { createPatient, subscribeToPatients, updatePatient } from "./firebase/patientService";
+import { createPatient, saveDailyNote, subscribeToDailyNotes, subscribeToPatients, updatePatient } from "./firebase/patientService";
+import {
+  deleteMiscTask,
+  deletePhonebookContact,
+  deleteStudyTopic,
+  saveMiscTask,
+  savePhonebookContact,
+  saveStudyTopic,
+  subscribeToMiscTasks,
+  subscribeToPhonebook,
+  subscribeToStudyTopics,
+} from "./firebase/userUtilityService";
+import { I18nProvider } from "./i18n";
+
+const defaultPreferences: UserPreferences = { theme: "system", language: "en" };
+
+function loadPreferences() {
+  try {
+    return { ...defaultPreferences, ...JSON.parse(localStorage.getItem("im-rounding-preferences") ?? "{}") };
+  } catch {
+    return defaultPreferences;
+  }
+}
 
 function App() {
   const { user, authLoading } = useAuthUser();
   const [patients, setPatients] = useState<Patient[]>([]);
+  const [dailyNotesByPatient, setDailyNotesByPatient] = useState<DailyNotesByPatient>({});
+  const [preferences, setPreferences] = useState<UserPreferences>(loadPreferences);
+  const [phonebook, setPhonebook] = useState<PhonebookContact[]>([]);
+  const [miscTasks, setMiscTasks] = useState<MiscTask[]>([]);
+  const [studyTopics, setStudyTopics] = useState<StudyTopic[]>([]);
   const [dataLoading, setDataLoading] = useState(true);
   const [dataError, setDataError] = useState("");
 
@@ -23,8 +52,18 @@ function App() {
   }
 
   useEffect(() => {
+    localStorage.setItem("im-rounding-preferences", JSON.stringify(preferences));
+    document.documentElement.dataset.theme = preferences.theme;
+    document.documentElement.dataset.language = preferences.language;
+  }, [preferences]);
+
+  useEffect(() => {
     if (!user) {
       setPatients([]);
+      setDailyNotesByPatient({});
+      setPhonebook([]);
+      setMiscTasks([]);
+      setStudyTopics([]);
       setDataLoading(false);
       return;
     }
@@ -45,6 +84,40 @@ function App() {
 
     return unsubscribe;
   }, [user]);
+
+  useEffect(() => {
+    if (!user) return;
+    const unsubscribes = [
+      subscribeToPhonebook(user.uid, setPhonebook, (error) => setDataError(formatSyncError("Loading phonebook", error))),
+      subscribeToMiscTasks(user.uid, setMiscTasks, (error) => setDataError(formatSyncError("Loading misc tasks", error))),
+      subscribeToStudyTopics(user.uid, setStudyTopics, (error) => setDataError(formatSyncError("Loading study topics", error))),
+    ];
+    return () => unsubscribes.forEach((unsubscribe) => unsubscribe());
+  }, [user]);
+
+  useEffect(() => {
+    if (!user || patients.length === 0) {
+      setDailyNotesByPatient({});
+      return;
+    }
+
+    const unsubscribes = patients.map((patient) =>
+      subscribeToDailyNotes(
+        user.uid,
+        patient.id,
+        (patientId, notes) => {
+          setDailyNotesByPatient((current) => ({ ...current, [patientId]: notes }));
+        },
+        (error) => {
+          setDataError(formatSyncError("Loading daily notes", error));
+        },
+      ),
+    );
+
+    return () => {
+      unsubscribes.forEach((unsubscribe) => unsubscribe());
+    };
+  }, [user, patients]);
 
   async function createSyncedPatient(patient: Patient) {
     if (!user) {
@@ -83,6 +156,22 @@ function App() {
     await updateSyncedPatient(patient);
   }
 
+  async function saveSyncedDailyNote(patientId: string, note: DailyNote) {
+    if (!user) {
+      setDataError("Saving daily note failed. You must be signed in before saving patient data.");
+      return;
+    }
+
+    setDataError("");
+    try {
+      await saveDailyNote(user.uid, patientId, note);
+    } catch (error) {
+      const message = formatSyncError("Saving daily note", error);
+      setDataError(message);
+      throw new Error(message);
+    }
+  }
+
   if (authLoading) {
     return <div className="loading-screen">Checking login...</div>;
   }
@@ -92,14 +181,16 @@ function App() {
   }
 
   return (
-    <Routes>
-      <Route element={<AppLayout userEmail={user.email ?? ""} syncError={dataError} />}>
+    <I18nProvider language={preferences.language}>
+      <Routes>
+        <Route element={<AppLayout userEmail={user.email ?? ""} syncError={dataError} preferences={preferences} />}>
         <Route path="/" element={<Navigate to="/patients" replace />} />
         <Route
           path="/patients"
           element={
             <PatientBoardPage
               patients={patients}
+              dailyNotesByPatient={dailyNotesByPatient}
               dataLoading={dataLoading}
               dataError={dataError}
               onCreatePatient={createSyncedPatient}
@@ -109,7 +200,14 @@ function App() {
         />
         <Route
           path="/patients/:patientId"
-          element={<PatientDetailPage patients={patients} onSavePatient={saveSyncedPatient} />}
+          element={
+            <PatientDetailPage
+              patients={patients}
+              dailyNotesByPatient={dailyNotesByPatient}
+              onSavePatient={saveSyncedPatient}
+              onSaveDailyNote={saveSyncedDailyNote}
+            />
+          }
         />
         <Route
           path="/tasks"
@@ -121,10 +219,36 @@ function App() {
         />
         <Route
           path="/print"
-          element={<PrintRoundingListPage patients={patients} />}
+          element={
+            <PrintRoundingListPage
+              patients={patients}
+              dailyNotesByPatient={dailyNotesByPatient}
+              phonebook={phonebook}
+              miscTasks={miscTasks}
+              studyTopics={studyTopics}
+            />
+          }
         />
-      </Route>
-    </Routes>
+        <Route path="/settings" element={<SettingsPage preferences={preferences} onChange={setPreferences} />} />
+        <Route
+          path="/utilities"
+          element={
+            <UtilitiesPage
+              phonebook={phonebook}
+              miscTasks={miscTasks}
+              studyTopics={studyTopics}
+              onSaveContact={(contact) => user ? savePhonebookContact(user.uid, contact) : Promise.resolve()}
+              onDeleteContact={(id) => user ? deletePhonebookContact(user.uid, id) : Promise.resolve()}
+              onSaveMiscTask={(task) => user ? saveMiscTask(user.uid, task) : Promise.resolve()}
+              onDeleteMiscTask={(id) => user ? deleteMiscTask(user.uid, id) : Promise.resolve()}
+              onSaveStudyTopic={(topic) => user ? saveStudyTopic(user.uid, topic) : Promise.resolve()}
+              onDeleteStudyTopic={(id) => user ? deleteStudyTopic(user.uid, id) : Promise.resolve()}
+            />
+          }
+        />
+        </Route>
+      </Routes>
+    </I18nProvider>
   );
 }
 

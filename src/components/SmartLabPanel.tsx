@@ -1,12 +1,18 @@
 import { useMemo, useRef, useState } from "react";
-import type { ParsedLabItem } from "../types";
-import { labCatalog, parseLabText } from "../utils";
+import type { LabReport, ParsedLabItem } from "../types";
+import { parseLabReports } from "../utils";
+import { findLabDictionaryItem, searchLabDictionary } from "../data/labDictionary";
 import { LabChips } from "./LabChips";
+import { useT } from "../i18n";
 
 interface SmartLabPanelProps {
   rawValue: string;
+  labDate: string;
+  labReportTitle: string;
   items: ParsedLabItem[];
-  onChange: (rawValue: string, items: ParsedLabItem[]) => void;
+  labReports: LabReport[];
+  onChange: (rawValue: string, items: ParsedLabItem[], labReports: LabReport[]) => void;
+  onMetaChange: (labDate: string, labReportTitle: string, labReports: LabReport[]) => void;
   onFieldBlur?: () => void;
   onCompositionStart?: () => void;
   onCompositionEnd?: () => void;
@@ -20,6 +26,7 @@ function emptyDraft(): ParsedLabItem {
     unit: "",
     previousValue: "",
     group: "",
+    color: "",
     important: false,
     isImportant: false,
     note: "",
@@ -28,28 +35,44 @@ function emptyDraft(): ParsedLabItem {
 
 function SmartLabPanel({
   rawValue,
+  labDate,
+  labReportTitle,
   items,
+  labReports,
   onChange,
+  onMetaChange,
   onFieldBlur,
   onCompositionStart,
   onCompositionEnd,
 }: SmartLabPanelProps) {
+  const t = useT();
   const [draft, setDraft] = useState<ParsedLabItem>(emptyDraft());
   const [nameQuery, setNameQuery] = useState("");
+  const [suggestionsOpen, setSuggestionsOpen] = useState(false);
   const labTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const colorOptions = ["red", "orange", "yellow", "blue", "green", "purple"];
   const suggestions = useMemo(() => {
-    const query = nameQuery.trim().toLowerCase();
-    if (!query) return labCatalog.slice(0, 10);
-    return labCatalog.filter((item) => item.name.toLowerCase().includes(query)).slice(0, 10);
+    return searchLabDictionary(nameQuery, 12);
   }, [nameQuery]);
 
-  function updateRaw(value: string) {
-    onChange(value, parseLabText(value));
+  function parsedReportsFor(value: string, date = labDate, title = labReportTitle) {
+    return parseLabReports(value, date, title);
   }
 
-  function selectLab(name: string, group: string) {
+  function updateRaw(value: string) {
+    const reports = parsedReportsFor(value);
+    onChange(value, reports.flatMap((report) => report.items), reports);
+  }
+
+  function updateMeta(nextDate: string, nextTitle: string) {
+    const reports = parsedReportsFor(rawValue, nextDate, nextTitle);
+    onMetaChange(nextDate, nextTitle, reports);
+  }
+
+  function selectLab(name: string, group: string, unit = "") {
     setNameQuery(name);
-    setDraft({ ...draft, label: name, name, group });
+    setDraft({ ...draft, label: name, name, group, unit: draft.unit || unit });
+    setSuggestionsOpen(false);
   }
 
   function addItem() {
@@ -60,18 +83,41 @@ function SmartLabPanel({
       ...draft,
       label: name,
       name,
-      group: draft.group || labCatalog.find((item) => item.name === name)?.group || "Custom",
+      value: draft.value.trim(),
+      unit: draft.unit?.trim() || "",
+      previousValue: draft.previousValue?.trim() || "",
+      group: draft.group || findLabDictionaryItem(name)?.group || "Custom",
+      color: draft.color || "",
       important: Boolean(draft.important || draft.isImportant),
       isImportant: Boolean(draft.important || draft.isImportant),
+      note: draft.note?.trim() || "",
     };
 
-    onChange(rawValue, [...items, nextItem]);
+    const reports =
+      labReports.length > 0
+        ? labReports.map((report, index) =>
+            index === 0 ? { ...report, items: [...report.items, nextItem] } : report,
+          )
+        : [
+            {
+              id: `manual-${Date.now()}`,
+              date: labDate,
+              title: labReportTitle,
+              rawText: rawValue,
+              items: [nextItem],
+            },
+          ];
+
+    onChange(rawValue, [...items, nextItem], reports);
     setDraft(emptyDraft());
     setNameQuery("");
   }
 
   function removeItem(index: number) {
-    onChange(rawValue, items.filter((_, itemIndex) => itemIndex !== index));
+    const nextItems = items.filter((_, itemIndex) => itemIndex !== index);
+    onChange(rawValue, nextItems, [
+      { id: `manual-${Date.now()}`, date: labDate, title: labReportTitle, rawText: rawValue, items: nextItems },
+    ]);
   }
 
   function insertTemplate(template: string) {
@@ -90,10 +136,26 @@ function SmartLabPanel({
     }, 0);
   }
 
+  function markRawLabColor(color: string) {
+    const textarea = labTextareaRef.current;
+    if (!textarea) return;
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+    if (start === end) return;
+    const selectedText = rawValue.slice(start, end);
+    const markerStart = `[[${color}:`;
+    const nextValue = `${rawValue.slice(0, start)}${markerStart}${selectedText}]]${rawValue.slice(end)}`;
+    updateRaw(nextValue);
+    window.setTimeout(() => {
+      textarea.focus();
+      textarea.setSelectionRange(start + markerStart.length, end + markerStart.length);
+    }, 0);
+  }
+
   return (
     <div className="smart-lab-panel">
       <label>
-        O - Important Labs
+        O - {t("field.lab")}
         <textarea
           ref={labTextareaRef}
           value={rawValue}
@@ -101,18 +163,55 @@ function SmartLabPanel({
           onBlur={onFieldBlur}
           onCompositionStart={onCompositionStart}
           onCompositionEnd={onCompositionEnd}
-          placeholder="Example: WBC 15800 (Neu 84.7) Osm. 321(300) Cre 1.11 GFR 52.16 UA: WBC 777 LE 3+"
+          placeholder="Example: CBC/DC: WBC 3000 Neu 50&#10;metabolic: AST 20 ALT 18&#10;HbA1c 11.7% UA WBC 20 LE 1+"
         />
       </label>
 
+      <div className="color-toolbar" aria-label="Color selected lab text">
+        {colorOptions.map((color) => (
+          <button
+            type="button"
+            className={`color-tool color-tool-${color}`}
+            key={color}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => markRawLabColor(color)}
+          >
+            {color}
+          </button>
+        ))}
+      </div>
+
+      <div className="lab-report-meta">
+        <label>
+          {t("lab.date")}
+          <input
+            type="date"
+            value={labDate}
+            onChange={(event) => updateMeta(event.target.value, labReportTitle)}
+            onBlur={onFieldBlur}
+          />
+        </label>
+        <label>
+          {t("lab.group")}
+          <input
+            value={labReportTitle}
+            onChange={(event) => updateMeta(labDate, event.target.value)}
+            onBlur={onFieldBlur}
+            onCompositionStart={onCompositionStart}
+            onCompositionEnd={onCompositionEnd}
+            placeholder="Example: CBC/DC, metabolic, coag, UA"
+          />
+        </label>
+      </div>
+
       <div className="lab-template-row">
         {[
-          ["CBC", "WBC  Hb  Hct  Plt  Neu "],
-          ["Renal", "BUN  Cr  eGFR "],
-          ["Electrolytes", "Na  K  Cl  Osm "],
-          ["LFT", "AST  ALT  T-Bil  D-Bil  Alb "],
-          ["Infection", "CRP  PCT  Lactate "],
-          ["UA", "UA: WBC  RBC  LE  Nitrite  Protein "],
+          ["CBC/DC", "CBC/DC: WBC  Hb  Hct  Plt  Neu "],
+          ["Renal", "Renal: BUN  Cr  eGFR "],
+          ["Electrolytes", "Electrolytes: Na  K  Cl  Osm "],
+          ["LFT", "Liver: AST  ALT  T-Bil  D-Bil  Alb "],
+          ["Coag", "coag. PT  INR  aPTT  D-dimer "],
+          ["UA", "UA WBC  RBC  LE  Nitrite  Protein "],
         ].map(([label, template]) => (
           <button type="button" className="secondary" key={label} onClick={() => insertTemplate(template)}>
             {label}
@@ -121,25 +220,39 @@ function SmartLabPanel({
       </div>
 
       <div className="lab-editor-grid">
-        <label>
-          Lab name
+        <label className="lab-name-field">
+          {t("lab.addCustom")}
           <input
             value={nameQuery}
             onChange={(event) => {
               setNameQuery(event.target.value);
               setDraft({ ...draft, label: event.target.value, name: event.target.value });
+              setSuggestionsOpen(true);
             }}
-            list="lab-suggestions"
-            onBlur={onFieldBlur}
+            onFocus={() => setSuggestionsOpen(Boolean(nameQuery.trim()))}
+            onBlur={() => {
+              window.setTimeout(() => setSuggestionsOpen(false), 120);
+              onFieldBlur?.();
+            }}
             onCompositionStart={onCompositionStart}
             onCompositionEnd={onCompositionEnd}
             placeholder="Type w for WBC"
           />
-          <datalist id="lab-suggestions">
-            {suggestions.map((item) => (
-              <option key={`${item.group}-${item.name}`} value={item.name} />
-            ))}
-          </datalist>
+          {suggestionsOpen && suggestions.length > 0 && (
+            <div className="lab-suggestion-popover">
+              {suggestions.map((item) => (
+                <button
+                  type="button"
+                  className="secondary"
+                  key={item.key}
+                  onClick={() => selectLab(item.displayName, item.group, item.commonUnits[0] ?? "")}
+                >
+                  <span>{item.displayName}</span>
+                  <small>{item.group}</small>
+                </button>
+              ))}
+            </div>
+          )}
         </label>
 
         <label>
@@ -185,26 +298,22 @@ function SmartLabPanel({
         </button>
       </div>
 
-      <div className="lab-suggestion-row">
-        {suggestions.map((item) => (
-          <button type="button" className="secondary" key={`${item.group}-${item.name}`} onClick={() => selectLab(item.name, item.group)}>
-            {item.name}
-          </button>
-        ))}
-      </div>
-
       <div className="lab-preview">
-        <strong>Smart lab chips</strong>
-        <LabChips items={items} maxItems={12} />
-        {items.length > 0 && (
-          <div className="lab-edit-list">
-            {items.map((item, index) => (
-              <button type="button" className="secondary" key={`${item.label}-${index}`} onClick={() => removeItem(index)}>
-                Remove {item.name || item.label}
-              </button>
+        <strong>{t("lab.smartReports")}</strong>
+        {labReports.length > 0 && (
+          <div className="lab-report-list">
+            {labReports.map((report) => (
+              <div className="lab-report-card" key={report.id}>
+                <div className="lab-report-heading">
+                  <span>{report.date || labDate}</span>
+                  <strong>{report.title || labReportTitle || "Labs"}</strong>
+                </div>
+                {report.items.length > 0 ? <LabChips items={report.items} /> : <div className="muted">{report.rawText}</div>}
+              </div>
             ))}
           </div>
         )}
+        <LabChips items={items} onRemove={removeItem} />
       </div>
     </div>
   );

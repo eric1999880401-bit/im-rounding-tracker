@@ -1,27 +1,34 @@
 import { NavLink, Outlet } from "react-router-dom";
 import { signOutCurrentUser } from "../firebase/auth";
+import type { UserPreferences } from "../types";
+import { useT } from "../i18n";
 
 interface AppLayoutProps {
   userEmail: string;
   syncError: string;
+  preferences: UserPreferences;
 }
 
 function AppLayout({ userEmail, syncError }: AppLayoutProps) {
+  const t = useT();
+
   return (
     <div className="app-shell">
       <aside className="sidebar no-print">
         <h1>IM Rounding</h1>
-        <p className="privacy-warning">Use de-identified data only.</p>
         <p className="signed-in-user">{userEmail}</p>
         <nav>
-          <NavLink to="/patients">Patient Board</NavLink>
-          <NavLink to="/tasks">Today Tasks</NavLink>
-          <NavLink to="/archive">Archive</NavLink>
-          <NavLink to="/print">Print List</NavLink>
+          <NavLink to="/patients">{t("nav.patientBoard")}</NavLink>
+          <NavLink to="/tasks">{t("nav.todayTasks")}</NavLink>
+          <NavLink to="/archive">{t("nav.archive")}</NavLink>
+          <NavLink to="/print">{t("nav.printList")}</NavLink>
+          <NavLink to="/utilities">{t("nav.utilities")}</NavLink>
+          <NavLink to="/settings">{t("nav.settings")}</NavLink>
         </nav>
         <button type="button" className="secondary sign-out-button" onClick={signOutCurrentUser}>
-          Sign out
+          {t("action.signOut")}
         </button>
+        <p className="sidebar-privacy">De-identified data only.</p>
       </aside>
 
       <main className="main-content">

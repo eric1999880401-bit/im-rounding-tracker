@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { Patient, PrintDensity, SortMode } from "../types";
+import type { DailyNotesByPatient, MiscTask, Patient, PhonebookContact, PrintDensity, SortMode, StudyTopic } from "../types";
 import {
   getActiveProblemItems,
   getActiveAttendingNames,
@@ -8,16 +8,31 @@ import {
   groupPatientsByAttending,
   hasUrgentPendingTask,
   dischargePrepText,
+  patientForToday,
   sortPatients,
 } from "../utils";
 import { ClinicalText, CompactItemList } from "../components/ClinicalText";
 import { LabChips } from "../components/LabChips";
+import AssessmentPlanDisplay from "../components/AssessmentPlanDisplay";
+import ActiveProblemDisplay from "../components/ActiveProblemDisplay";
+import { useT } from "../i18n";
 
 interface PageProps {
   patients: Patient[];
+  dailyNotesByPatient?: DailyNotesByPatient;
+  phonebook?: PhonebookContact[];
+  miscTasks?: MiscTask[];
+  studyTopics?: StudyTopic[];
 }
 
-function PrintRoundingListPage({ patients }: PageProps) {
+function PrintRoundingListPage({
+  patients,
+  dailyNotesByPatient = {},
+  phonebook = [],
+  miscTasks = [],
+  studyTopics = [],
+}: PageProps) {
+  const t = useT();
   const [printMode, setPrintMode] = useState("all");
   const [admissionBriefPrintMode, setAdmissionBriefPrintMode] = useState("newAdmissions");
   const [selectedAttending, setSelectedAttending] = useState("");
@@ -29,14 +44,23 @@ function PrintRoundingListPage({ patients }: PageProps) {
   const [team, setTeam] = useState("Team A");
   const [attending, setAttending] = useState("");
   const [resident, setResident] = useState("");
+  const [includePhonebook, setIncludePhonebook] = useState(true);
+  const [includeMiscTasks, setIncludeMiscTasks] = useState(true);
+  const [includeStudyTopics, setIncludeStudyTopics] = useState(true);
   const attendingNames = getActiveAttendingNames(patients);
-  const filteredActivePatients = getActivePatients(patients).filter(
-    (patient) => printMode !== "selected" || patient.attending.trim() === selectedAttending,
-  );
+  const filteredActivePatients = getActivePatients(patients)
+    .map((patient) => patientForToday(patient, dailyNotesByPatient))
+    .filter((patient) => printMode !== "selected" || patient.attending.trim() === selectedAttending);
   const activePatients = sortPatients(filteredActivePatients, sortMode);
   const groupedPatients = groupPatientsByAttending(activePatients);
   const todayText = new Date().toLocaleDateString();
   const shouldPrintCompactList = admissionBriefPrintMode !== "briefsOnly";
+  const unfinishedMiscTasks = includeMiscTasks ? miscTasks.filter((task) => !task.done).slice(0, 6) : [];
+  const openStudyTopics = includeStudyTopics ? studyTopics.filter((topic) => !topic.done).slice(0, 5) : [];
+  const printContacts = includePhonebook ? [...phonebook].sort((a, b) => Number(b.isImportant) - Number(a.isImportant)).slice(0, 8) : [];
+  const moreContacts = includePhonebook ? Math.max(phonebook.length - printContacts.length, 0) : 0;
+  const moreMiscTasks = includeMiscTasks ? Math.max(miscTasks.filter((task) => !task.done).length - unfinishedMiscTasks.length, 0) : 0;
+  const moreStudyTopics = includeStudyTopics ? Math.max(studyTopics.filter((topic) => !topic.done).length - openStudyTopics.length, 0) : 0;
 
   function admissionBriefPatients() {
     if (admissionBriefPrintMode === "newAdmissions") {
@@ -75,6 +99,30 @@ function PrintRoundingListPage({ patients }: PageProps) {
     ));
   }
 
+  function structuredPeSummary(patient: Patient) {
+    return patient.physicalExamEntries
+      .filter((entry) => entry.finding.trim() || entry.system.trim())
+      .map((entry) => (
+        <span className={`objective-chip ${entry.isImportant ? "important-objective-chip" : ""}`} key={entry.id}>
+          {entry.date && <span className="objective-chip-label">{entry.date}</span>}
+          {entry.system && <span className="objective-chip-label">{entry.system}</span>}
+          {entry.finding || entry.note}
+        </span>
+      ));
+  }
+
+  function structuredImageSummary(patient: Patient) {
+    return patient.imageStudyEntries
+      .filter((entry) => entry.impression.trim() || entry.finding.trim() || entry.studyType.trim())
+      .map((entry) => (
+        <span className={`objective-chip ${entry.isImportant ? "important-objective-chip" : ""}`} key={entry.id}>
+          {entry.date && <span className="objective-chip-label">{entry.date}</span>}
+          {entry.studyType && <span className="objective-chip-label">{entry.studyType}</span>}
+          {entry.impression || entry.finding || entry.note}
+        </span>
+      ));
+  }
+
   function isStableForPrint(patient: Patient) {
     return (
       !hasUrgentPendingTask(patient) &&
@@ -95,7 +143,7 @@ function PrintRoundingListPage({ patients }: PageProps) {
         key={sectionAttending}
       >
         <div className="print-title">
-          <h1>Section 1: Compact Rounding List</h1>
+          <h1>{t("print.title")}</h1>
           <div className="print-meta-grid">
             <span>
               <strong>Date:</strong> {todayText}
@@ -114,6 +162,14 @@ function PrintRoundingListPage({ patients }: PageProps) {
             </span>
           </div>
           <p>Use de-identified data only.</p>
+          {(unfinishedMiscTasks.length > 0 || openStudyTopics.length > 0 || printContacts.length > 0) && (
+            <div className="print-general-notes">
+              <strong>{t("print.generalNotes")}</strong>
+              {printContacts.length > 0 && <span>{t("print.phonebook")}: {printContacts.map((contact) => `${contact.name || contact.roleOrUnit} ${contact.phone}`).join("; ")}{moreContacts ? `; +${moreContacts} more` : ""}</span>}
+              {unfinishedMiscTasks.length > 0 && <span>{t("print.miscTasks")}: {unfinishedMiscTasks.map((task) => task.text).join("; ")}{moreMiscTasks ? `; +${moreMiscTasks} more` : ""}</span>}
+              {openStudyTopics.length > 0 && <span>{t("print.studyTopics")}: {openStudyTopics.map((topic) => topic.topic).join("; ")}{moreStudyTopics ? `; +${moreStudyTopics} more` : ""}</span>}
+            </div>
+          )}
         </div>
 
         <table className="rounding-table">
@@ -140,16 +196,20 @@ function PrintRoundingListPage({ patients }: PageProps) {
                 </td>
                 <td>
                   {patient.importantRedFlags && (
-                    <div>
-                      <strong>Flags:</strong> <ClinicalText value={patient.importantRedFlags} maxLines={2} />
+                    <div className="print-red-flags">
+                      <strong>Red Flags:</strong> <ClinicalText value={patient.importantRedFlags} importantDefault />
                     </div>
                   )}
                   {!showOnlyActiveProblems && <strong>{patient.primaryDiagnosis || "-"}</strong>}
                   <div>
-                    <strong>PMH:</strong> <CompactItemList items={getUnderlyingDiseaseItems(patient)} maxItems={3} />
+                    <strong>PMH:</strong> <CompactItemList items={getUnderlyingDiseaseItems(patient)} />
                   </div>
                   <div>
-                    <strong>Problems:</strong> <CompactItemList items={getActiveProblemItems(patient)} maxItems={4} />
+                    <strong>Problems:</strong>{" "}
+                    <ActiveProblemDisplay
+                      items={patient.activeProblemStructuredItems}
+                      fallbackItems={getActiveProblemItems(patient)}
+                    />
                   </div>
                   {printMode === "all" && (
                     <div>
@@ -163,20 +223,22 @@ function PrintRoundingListPage({ patients }: PageProps) {
                   ) : (
                     <>
                       <div>
-                        <strong>S:</strong> <ClinicalText value={patient.subjectiveOrChiefConcern} maxLines={2} />
+                        <strong>S:</strong> <ClinicalText value={patient.subjectiveOrChiefConcern} />
                       </div>
                       <div>
-                        <strong>PE:</strong> <ClinicalText value={patient.physicalExam} maxLines={2} />
+                        <strong>PE:</strong> <ClinicalText value={patient.physicalExam} />
+                        <div className="objective-chip-row">{structuredPeSummary(patient)}</div>
                       </div>
                     </>
                   )}
                 </td>
                 <td>
                   <div>
-                    <strong>Lab:</strong> <LabChips items={patient.parsedLabItems} maxItems={6} />
+                    <strong>Lab:</strong> <LabChips items={patient.parsedLabItems} />
                   </div>
                   <div>
-                    <strong>Img:</strong> <ClinicalText value={patient.newImaging} maxLines={3} />
+                    <strong>Img:</strong> <ClinicalText value={patient.newImaging} />
+                    <div className="objective-chip-row">{structuredImageSummary(patient)}</div>
                   </div>
                 </td>
                 <td>
@@ -184,12 +246,11 @@ function PrintRoundingListPage({ patients }: PageProps) {
                     <span className="muted">See Dx/problems</span>
                   ) : (
                     <>
-                      <div>
-                        <strong>A:</strong> <ClinicalText value={patient.assessment} maxLines={2} />
-                      </div>
-                      <div>
-                        <strong>P:</strong> <ClinicalText value={patient.plan} maxLines={2} />
-                      </div>
+                      <AssessmentPlanDisplay
+                        items={patient.assessmentPlanItems}
+                        legacyAssessment={patient.assessment}
+                        legacyPlan={patient.plan}
+                      />
                     </>
                   )}
                 </td>
@@ -199,7 +260,7 @@ function PrintRoundingListPage({ patients }: PageProps) {
                     <strong>Target:</strong> {patient.dischargeTargetDate || "TBD"}
                   </div>
                   <div>
-                    <strong>Plan:</strong> <ClinicalText value={patient.dischargePlan} maxLines={2} />
+                    <strong>Plan:</strong> <ClinicalText value={patient.dischargePlan} />
                   </div>
                   <div>
                     <strong>Barrier:</strong> {patient.dischargeBarriers || "-"}
@@ -208,10 +269,7 @@ function PrintRoundingListPage({ patients }: PageProps) {
                     <strong>DC prep:</strong> {dischargePrepText(patient)}
                   </div>
                   <div>
-                    <strong>Attn:</strong> <ClinicalText value={patient.specialAttention} maxLines={2} />
-                  </div>
-                  <div>
-                    <strong>VS:</strong> <ClinicalText value={patient.vsOrder} maxLines={1} />
+                    <strong>VS:</strong> <ClinicalText value={patient.vsOrder} />
                   </div>
                 </td>
               </tr>
@@ -223,78 +281,43 @@ function PrintRoundingListPage({ patients }: PageProps) {
   }
 
   function renderAdmissionBrief(patient: Patient) {
+    const chiefComplaint = patient.chiefComplaint || patient.admissionChiefConcern;
+    const hpi = patient.presentIllnessOrHPI || patient.hpiOrAdmissionStory;
+    const summary = patient.admissionBriefFreeText.trim() || [chiefComplaint, hpi].filter(Boolean).join("\n");
+    const keyLabs = patient.rawLabText || patient.newLabs || patient.initialLabs;
+    const keyImages = patient.newImaging || patient.initialImaging;
+
     return (
       <section className="print-admission-brief" key={`brief-${patient.id}`}>
         <div className="brief-title">
           <h2>
-            Admission Brief: {patient.bed || "-"} / {patient.patientCode || "-"}
+            Admission Note Summary: {patient.bed || "-"} / {patient.patientCode || "-"}
           </h2>
           <p>
             {patient.age} / {patient.sex} | Attending: {patient.attending || "-"} | Team: {patient.teamOrService || "-"}
           </p>
         </div>
         <div className="brief-grid">
+          <div className="span-2">
+            <strong>Chief Concern</strong>
+            <ClinicalText value={chiefComplaint} />
+          </div>
+          <div className="span-2">
+            <strong>PI / HPI</strong>
+            <ClinicalText value={hpi} />
+          </div>
+          <div className="span-2">
+            <strong>Admission Note Summary</strong>
+            <ClinicalText value={summary} />
+          </div>
           <div>
-            <strong>PMH</strong>
+            <strong>Key PMH</strong>
             <ClinicalText value={patient.admissionPMH || patient.underlyingDiseases} />
           </div>
           <div>
-            <strong>Chief Concern</strong>
-            <ClinicalText value={patient.admissionChiefConcern} />
+            <strong>Key Labs / Images</strong>
+            <ClinicalText value={[keyLabs ? `Lab: ${keyLabs}` : "", keyImages ? `Image: ${keyImages}` : ""].filter(Boolean).join("\n")} />
           </div>
-          <div className="span-2">
-            <strong>HPI / Admission Story</strong>
-            <ClinicalText value={patient.hpiOrAdmissionStory} />
-          </div>
-          <div>
-            <strong>Baseline Function</strong>
-            <ClinicalText value={patient.baselineFunction} />
-          </div>
-          <div>
-            <strong>Initial PE</strong>
-            <ClinicalText value={patient.initialPhysicalExam} />
-          </div>
-          <div>
-            <strong>Initial Labs</strong>
-            <ClinicalText value={patient.initialLabs} />
-          </div>
-          <div>
-            <strong>Initial Imaging</strong>
-            <ClinicalText value={patient.initialImaging} />
-          </div>
-          <div>
-            <strong>Initial Assessment</strong>
-            <ClinicalText value={patient.initialAssessment} />
-          </div>
-          <div>
-            <strong>Initial Plan</strong>
-            <ClinicalText value={patient.initialPlan} />
-          </div>
-          <div className="span-2">
-            <strong>Early Hospital Course</strong>
-            <ClinicalText value={patient.earlyHospitalCourse} />
-          </div>
-          <div className="span-2">
-            <strong>Current Daily SOAP Update</strong>
-            <ClinicalText
-              value={[
-                patient.subjectiveOrChiefConcern.trim() ? `S: ${patient.subjectiveOrChiefConcern}` : "",
-                patient.physicalExam.trim() ? `PE: ${patient.physicalExam}` : "",
-                patient.newLabs.trim() ? `Lab: ${patient.newLabs}` : "",
-                patient.newImaging.trim() ? `Image: ${patient.newImaging}` : "",
-                patient.assessment.trim() ? `A: ${patient.assessment}` : "",
-                patient.plan.trim() ? `P: ${patient.plan}` : "",
-              ]
-                .filter(Boolean)
-                .join("\n")}
-            />
-          </div>
-          {patient.admissionBriefNotes && (
-            <div className="span-2">
-              <strong>Notes</strong>
-              <ClinicalText value={patient.admissionBriefNotes} />
-            </div>
-          )}
         </div>
       </section>
     );
@@ -308,11 +331,10 @@ function PrintRoundingListPage({ patients }: PageProps) {
     <div className={`page print-page density-${density}`}>
       <header className="page-header no-print">
         <div>
-          <h2>Print Rounding List</h2>
-          <p className="privacy-warning">Use de-identified data only.</p>
+          <h2>{t("print.title")}</h2>
         </div>
         <button type="button" onClick={() => window.print()}>
-          Print
+          {t("print.print")}
         </button>
       </header>
 
@@ -411,6 +433,18 @@ function PrintRoundingListPage({ patients }: PageProps) {
             <option value="compact">Compact</option>
             <option value="ultra-compact">Ultra-compact</option>
           </select>
+        </label>
+        <label className="checkbox-label">
+          <input type="checkbox" checked={includePhonebook} onChange={(event) => setIncludePhonebook(event.target.checked)} />
+          Include phonebook
+        </label>
+        <label className="checkbox-label">
+          <input type="checkbox" checked={includeMiscTasks} onChange={(event) => setIncludeMiscTasks(event.target.checked)} />
+          Include misc tasks
+        </label>
+        <label className="checkbox-label">
+          <input type="checkbox" checked={includeStudyTopics} onChange={(event) => setIncludeStudyTopics(event.target.checked)} />
+          Include study topics
         </label>
       </section>
 

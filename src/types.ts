@@ -22,7 +22,7 @@ export type DischargePrepStatus = "pending" | "done" | "notNeeded";
 export interface HighlightLine {
   text: string;
   important: boolean;
-  kind?: "normal" | "numbered" | "arrow" | "dash";
+  kind?: "normal" | "numbered" | "arrow" | "dash" | "section";
 }
 
 export interface ParsedLabItem {
@@ -32,9 +32,62 @@ export interface ParsedLabItem {
   unit?: string;
   previousValue?: string;
   group?: string;
+  color?: string;
   important?: boolean;
   isImportant?: boolean;
   note?: string;
+}
+
+export interface LabReport {
+  id: string;
+  date: string;
+  title: string;
+  rawText: string;
+  items: ParsedLabItem[];
+}
+
+export interface PhysicalExamEntry {
+  id: string;
+  date: string;
+  system: string;
+  finding: string;
+  isImportant: boolean;
+  color: string;
+  note: string;
+}
+
+export interface ImageStudyEntry {
+  id: string;
+  date: string;
+  studyType: string;
+  finding: string;
+  impression: string;
+  isImportant: boolean;
+  color: string;
+  note: string;
+}
+
+export type AssessmentPlanCategory = "activeProblem" | "underlyingDisease" | "other";
+
+export interface AssessmentPlanItem {
+  id: string;
+  problemTitle: string;
+  assessmentSummary: string;
+  evidenceOrCourseItems: string[];
+  planItems: string[];
+  category: AssessmentPlanCategory;
+  isImportant: boolean;
+  color: string;
+  order: number;
+}
+
+export interface ActiveProblemItem {
+  id: string;
+  title: string;
+  note: string;
+  isImportant: boolean;
+  color: string;
+  order: number;
 }
 
 export interface PatientTask {
@@ -46,6 +99,71 @@ export interface PatientTask {
   dueDate: string;
   createdAt: string;
   completedAt: string;
+}
+
+export interface DailyNote {
+  date: string;
+  importantRedFlags: string;
+  overnightEvents: string;
+  subjectiveOrChiefConcern: string;
+  physicalExam: string;
+  labSummary: string;
+  imageSummary: string;
+  assessment: string;
+  plan: string;
+  dischargePlan: string;
+  vsOrder: string;
+  rawLabText: string;
+  labDate: string;
+  labReportTitle: string;
+  labReports: LabReport[];
+  parsedLabItems: ParsedLabItem[];
+  physicalExamEntries: PhysicalExamEntry[];
+  imageStudyEntries: ImageStudyEntry[];
+  assessmentPlanItems: AssessmentPlanItem[];
+  updatedAt: string;
+  createdAt: string;
+}
+
+export type DailyNotesByPatient = Record<string, DailyNote[]>;
+
+export type ThemePreference = "light" | "dark" | "system";
+export type LanguagePreference = "en" | "zh-TW";
+
+export interface UserPreferences {
+  theme: ThemePreference;
+  language: LanguagePreference;
+}
+
+export interface PhonebookContact {
+  id: string;
+  name: string;
+  roleOrUnit: string;
+  phone: string;
+  note: string;
+  isImportant: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MiscTask {
+  id: string;
+  text: string;
+  done: boolean;
+  priority: TaskPriority;
+  dueDate: string;
+  note: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface StudyTopic {
+  id: string;
+  topic: string;
+  note: string;
+  done: boolean;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface Patient {
@@ -62,6 +180,10 @@ export interface Patient {
   primaryDiagnosis: string;
   activeProblems: string;
   activeProblemItems: string[];
+  activeProblemStructuredItems: ActiveProblemItem[];
+  chiefComplaint: string;
+  presentIllnessOrHPI: string;
+  admissionBriefFreeText: string;
   admissionChiefConcern: string;
   hpiOrAdmissionStory: string;
   baselineFunction: string;
@@ -79,7 +201,12 @@ export interface Patient {
   hospitalCourseHighlights: string;
   importantRedFlags: string;
   rawLabText: string;
+  labDate: string;
+  labReportTitle: string;
+  labReports: LabReport[];
   parsedLabItems: ParsedLabItem[];
+  physicalExamEntries: PhysicalExamEntry[];
+  imageStudyEntries: ImageStudyEntry[];
   dischargeMedsStatus: DischargePrepStatus;
   opdAppointmentStatus: DischargePrepStatus;
   diagnosisCertificateStatus: DischargePrepStatus;
@@ -89,6 +216,7 @@ export interface Patient {
   newImaging: string;
   assessment: string;
   plan: string;
+  assessmentPlanItems: AssessmentPlanItem[];
   dischargePlan: string;
   dischargeTargetDate: string;
   dischargeBarriers: string;

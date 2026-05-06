@@ -5,6 +5,7 @@ interface ClinicalTextProps {
   value: string;
   fallback?: string;
   maxLines?: number;
+  importantDefault?: boolean;
 }
 
 function groupLines(lines: HighlightLine[]) {
@@ -30,18 +31,58 @@ function stripArrow(text: string) {
   return text.replace(/^(->|=>|\u2192|\u21d2)\s*/, "");
 }
 
-function renderLines(lines: HighlightLine[], fallback: string) {
+const colorClassNames: Record<string, string> = {
+  red: "clinical-mark-red",
+  orange: "clinical-mark-orange",
+  yellow: "clinical-mark-yellow",
+  blue: "clinical-mark-blue",
+  green: "clinical-mark-green",
+  purple: "clinical-mark-purple",
+};
+
+function renderMarkedText(text: string) {
+  const parts: Array<{ color?: string; text: string }> = [];
+  const pattern = /\[\[(red|orange|yellow|blue|green|purple):([\s\S]*?)\]\]/gi;
+  let cursor = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = pattern.exec(text))) {
+    if (match.index > cursor) {
+      parts.push({ text: text.slice(cursor, match.index) });
+    }
+    parts.push({ color: match[1].toLowerCase(), text: match[2] });
+    cursor = match.index + match[0].length;
+  }
+
+  if (cursor < text.length) {
+    parts.push({ text: text.slice(cursor) });
+  }
+
+  return parts.map((part, index) =>
+    part.color ? (
+      <span className={`clinical-mark ${colorClassNames[part.color]}`} key={`${part.color}-${part.text}-${index}`}>
+        {part.text}
+      </span>
+    ) : (
+      <span key={`${part.text}-${index}`}>{part.text}</span>
+    ),
+  );
+}
+
+function renderLines(lines: HighlightLine[], fallback: string, importantDefault = false) {
   if (lines.length === 0) return <span className="muted">{fallback}</span>;
 
   return groupLines(lines).map((line, index) => {
     const numberMatch = line.text.match(/^(\d+)\.\s*(.*)$/);
     const displayText = numberMatch ? numberMatch[2] : line.kind === "arrow" ? stripArrow(line.text) : line.text;
+    const isImportant = importantDefault || line.important;
 
     return (
       <div
         className={[
           "clinical-card",
-          line.important ? "important-clinical-card" : "",
+          isImportant ? "important-clinical-card" : "",
+          line.kind === "section" ? "clinical-section-card" : "",
           line.kind === "dash" ? "clinical-dash-card" : "",
           line.kind === "arrow" ? "clinical-arrow-card" : "",
         ]
@@ -53,12 +94,12 @@ function renderLines(lines: HighlightLine[], fallback: string) {
           {numberMatch && <span className="clinical-number-badge">{numberMatch[1]}</span>}
           {line.kind === "dash" && <span className="clinical-bullet">{"\u2022"}</span>}
           {line.kind === "arrow" && <span className="clinical-inline-arrow">{arrowSymbol(line.text)}</span>}
-          <span className="clinical-card-main">{displayText}</span>
+          <span className="clinical-card-main">{renderMarkedText(displayText)}</span>
         </div>
 
         {line.children.map((child, childIndex) => (
           <div className="clinical-card-child" key={`${child.text}-${childIndex}`}>
-            {arrowSymbol(child.text)} {stripArrow(child.text)}
+            {arrowSymbol(child.text)} {renderMarkedText(stripArrow(child.text))}
           </div>
         ))}
       </div>
@@ -66,13 +107,13 @@ function renderLines(lines: HighlightLine[], fallback: string) {
   });
 }
 
-export function ClinicalText({ value, fallback = "-", maxLines }: ClinicalTextProps) {
+export function ClinicalText({ value, fallback = "-", maxLines, importantDefault = false }: ClinicalTextProps) {
   const lines = splitHighlightLines(value);
   const important = lines.filter((line) => line.important);
   const normal = lines.filter((line) => !line.important);
   const visibleLines = maxLines ? [...important, ...normal].slice(0, maxLines) : lines;
 
-  return <>{renderLines(visibleLines, fallback)}</>;
+  return <>{renderLines(visibleLines, fallback, importantDefault)}</>;
 }
 
 export function ClinicalCardRenderer(props: ClinicalTextProps) {
@@ -85,8 +126,8 @@ interface ItemListProps {
   maxItems?: number;
 }
 
-export function CompactItemList({ items, fallback = "-", maxItems = 4 }: ItemListProps) {
-  const visibleItems = items.slice(0, maxItems);
+export function CompactItemList({ items, fallback = "-", maxItems }: ItemListProps) {
+  const visibleItems = typeof maxItems === "number" ? items.slice(0, maxItems) : items;
 
   if (visibleItems.length === 0) return <span className="muted">{fallback}</span>;
 
@@ -97,7 +138,9 @@ export function CompactItemList({ items, fallback = "-", maxItems = 4 }: ItemLis
           {item.trim().startsWith("!") ? item.trim().slice(1).trim() : item}
         </span>
       ))}
-      {items.length > maxItems && <span className="compact-item muted">+{items.length - maxItems}</span>}
+      {typeof maxItems === "number" && items.length > maxItems && (
+        <span className="compact-item muted">+{items.length - maxItems}</span>
+      )}
     </div>
   );
 }

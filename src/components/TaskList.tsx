@@ -20,6 +20,8 @@ function TaskList({
   onCompositionEnd,
 }: TaskListProps) {
   const [draft, setDraft] = useState<PatientTask>(emptyTask());
+  const [showCompletedTasks, setShowCompletedTasks] = useState(false);
+  const visibleTasks = showCompletedTasks ? tasks : tasks.filter((task) => !task.done);
 
   function addTask() {
     if (!draft.text.trim()) return;
@@ -43,6 +45,12 @@ function TaskList({
     }, true);
   }
 
+  function deleteTask(task: PatientTask) {
+    if (!window.confirm(`Delete task: ${task.text}?`)) return;
+    onChange(tasks.filter((item) => item.id !== task.id));
+    window.setTimeout(() => onCommit?.(), 0);
+  }
+
   function commitOnBlur() {
     onFieldBlur?.();
   }
@@ -53,7 +61,17 @@ function TaskList({
 
   return (
     <section className="panel">
-      <h2>Tasks</h2>
+      <div className="section-heading">
+        <h2>Tasks</h2>
+        <label className="checkbox-label">
+          <input
+            type="checkbox"
+            checked={showCompletedTasks}
+            onChange={(event) => setShowCompletedTasks(event.target.checked)}
+          />
+          {showCompletedTasks ? "Show completed tasks" : "Hide completed tasks"}
+        </label>
+      </div>
 
       <div className="task-input-row">
         <input
@@ -94,8 +112,8 @@ function TaskList({
       </div>
 
       <div className="task-list">
-        {tasks.length === 0 && <p className="muted">No tasks yet.</p>}
-        {tasks.map((task) => (
+        {visibleTasks.length === 0 && <p className="muted">{tasks.length === 0 ? "No tasks yet." : "Completed tasks are hidden."}</p>}
+        {visibleTasks.map((task) => (
           <div className="task-row" key={task.id}>
             <input type="checkbox" checked={task.done} onChange={() => toggleDone(task)} />
             <input
@@ -109,6 +127,9 @@ function TaskList({
             <span className={`badge ${task.priority}`}>{task.priority}</span>
             <span className="badge">{task.category}</span>
             <span className="muted">{task.dueDate || "No due date"}</span>
+            <button type="button" className="secondary" onClick={() => deleteTask(task)}>
+              Delete
+            </button>
           </div>
         ))}
       </div>

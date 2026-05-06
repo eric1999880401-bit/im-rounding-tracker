@@ -21,7 +21,6 @@ function ArchivePage({ patients, onSavePatient }: PageProps) {
       <header className="page-header">
         <div>
           <h2>Archive</h2>
-          <p className="privacy-warning">Use de-identified data only.</p>
         </div>
       </header>
 

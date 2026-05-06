@@ -1,6 +1,6 @@
 import { Link } from "react-router-dom";
 import { useState } from "react";
-import type { Patient, SortMode } from "../types";
+import type { DailyNotesByPatient, Patient, SortMode } from "../types";
 import {
   createTodayFromYesterday,
   emptyPatient,
@@ -12,14 +12,18 @@ import {
   importantLines,
   nowIso,
   pendingDischargePrep,
+  patientForToday,
   sortPatients,
 } from "../utils";
 import PatientForm from "../components/PatientForm";
 import { ClinicalText, CompactItemList } from "../components/ClinicalText";
 import { LabChips } from "../components/LabChips";
+import AssessmentPlanDisplay from "../components/AssessmentPlanDisplay";
+import ActiveProblemDisplay from "../components/ActiveProblemDisplay";
 
 interface PageProps {
   patients: Patient[];
+  dailyNotesByPatient?: DailyNotesByPatient;
   dataLoading: boolean;
   dataError: string;
   onCreatePatient: (patient: Patient) => Promise<void>;
@@ -28,6 +32,7 @@ interface PageProps {
 
 function PatientBoardPage({
   patients,
+  dailyNotesByPatient = {},
   dataLoading,
   dataError,
   onCreatePatient,
@@ -41,7 +46,7 @@ function PatientBoardPage({
   const activePatients = sortPatients(
     getActivePatients(patients).filter(
       (patient) => attendingFilter === "all" || patient.attending.trim() === attendingFilter,
-    ),
+    ).map((patient) => patientForToday(patient, dailyNotesByPatient)),
     sortMode,
   );
   const dischargeAlerts = activePatients
@@ -95,9 +100,12 @@ function PatientBoardPage({
       ...importantLines(patient.physicalExam),
       ...importantLines(patient.newLabs),
       ...importantLines(patient.newImaging),
+      ...patient.assessmentPlanItems.filter((item) => item.isImportant).map((item) => ({
+        text: item.problemTitle || item.assessmentSummary,
+        important: true,
+      })),
       ...importantLines(patient.assessment),
       ...importantLines(patient.plan),
-      ...importantLines(patient.specialAttention),
     ];
 
     return important.slice(0, 4).map((line) => line.text).join("; ");
@@ -132,6 +140,30 @@ function PatientBoardPage({
     return `DC prep pending: ${pending.join(" / ")}`;
   }
 
+  function structuredPeSummary(patient: Patient) {
+    return patient.physicalExamEntries
+      .filter((entry) => entry.finding.trim() || entry.system.trim())
+      .slice(0, 3)
+      .map((entry) => (
+        <span className={`objective-chip ${entry.isImportant ? "important-objective-chip" : ""}`} key={entry.id}>
+          {entry.system && <span className="objective-chip-label">{entry.system}</span>}
+          {entry.finding || entry.note}
+        </span>
+      ));
+  }
+
+  function structuredImageSummary(patient: Patient) {
+    return patient.imageStudyEntries
+      .filter((entry) => entry.impression.trim() || entry.finding.trim() || entry.studyType.trim())
+      .slice(0, 3)
+      .map((entry) => (
+        <span className={`objective-chip ${entry.isImportant ? "important-objective-chip" : ""}`} key={entry.id}>
+          {entry.studyType && <span className="objective-chip-label">{entry.studyType}</span>}
+          {entry.impression || entry.finding || entry.note}
+        </span>
+      ));
+  }
+
   async function updateDischargePrep(
     patient: Patient,
     field: "dischargeMedsStatus" | "opdAppointmentStatus" | "diagnosisCertificateStatus",
@@ -145,7 +177,6 @@ function PatientBoardPage({
       <header className="page-header">
         <div>
           <h2>Patient Board</h2>
-          <p className="privacy-warning">Use de-identified data only.</p>
         </div>
         <button type="button" onClick={() => setShowForm(true)}>
           Add Patient
@@ -277,6 +308,12 @@ function PatientBoardPage({
                   <td>
                     {patient.isNewAdmission && <span className="badge urgent">New admission</span>}{" "}
                     {patient.showAdmissionBriefOnPrint && <span className="badge normal">Brief included</span>}
+                    {patient.importantRedFlags.trim() && (
+                      <div className="board-red-flags">
+                        <span className="board-label">Red Flags</span>
+                        <ClinicalText value={patient.importantRedFlags} maxLines={3} importantDefault />
+                      </div>
+                    )}
                     {importantSummary(patient) && (
                       <div className="important-line">Important: {importantSummary(patient)}</div>
                     )}
@@ -287,7 +324,10 @@ function PatientBoardPage({
                     </div>
                     <div className="board-subsection">
                       <span className="board-label">Problems</span>
-                      <CompactItemList items={getActiveProblemItems(patient)} />
+                      <ActiveProblemDisplay
+                        items={patient.activeProblemStructuredItems}
+                        fallbackItems={getActiveProblemItems(patient)}
+                      />
                     </div>
                     <div className="muted">Attending: {patient.attending || "Unassigned"}</div>
                   </td>
@@ -296,21 +336,29 @@ function PatientBoardPage({
                       <span className="board-label">Sx</span>{" "}
                       <ClinicalText value={patient.subjectiveOrChiefConcern} maxLines={2} />
                     </div>
-                    {(patient.physicalExam.trim() || importantLines(patient.physicalExam).length > 0) && (
+                    {(patient.physicalExam.trim() ||
+                      importantLines(patient.physicalExam).length > 0 ||
+                      patient.physicalExamEntries.length > 0) && (
                       <div>
                         <span className="board-label">PE</span>{" "}
                         <ClinicalText value={patient.physicalExam} maxLines={2} />
+                        <div className="objective-chip-row">{structuredPeSummary(patient)}</div>
                       </div>
                     )}
                     <div>
                       <span className="board-label">Lab/Image</span>{" "}
-                      <LabChips items={patient.parsedLabItems} maxItems={5} />
+                      <LabChips items={patient.parsedLabItems} />
                       <ClinicalText value={patient.newImaging} maxLines={1} />
+                      <div className="objective-chip-row">{structuredImageSummary(patient)}</div>
                     </div>
                     <div>
                       <span className="board-label">A/P</span>{" "}
-                      <ClinicalText value={patient.assessment} maxLines={1} /> /{" "}
-                      <ClinicalText value={patient.plan} maxLines={1} />
+                      <AssessmentPlanDisplay
+                        items={patient.assessmentPlanItems}
+                        legacyAssessment={patient.assessment}
+                        legacyPlan={patient.plan}
+                        compact
+                      />
                     </div>
                   </td>
                   <td>

@@ -1,12 +1,28 @@
 import type {
   DischargePrepStatus,
+  AssessmentPlanItem,
+  ActiveProblemItem,
+  DailyNote,
+  DailyNotesByPatient,
   HighlightLine,
+  ImageStudyEntry,
+  LabReport,
   ParsedLabItem,
   Patient,
+  PhysicalExamEntry,
   PatientStatus,
   PatientTask,
   SortMode,
 } from "./types";
+import {
+  findLabDictionaryItem,
+  labAliasPattern,
+  labCatalog,
+  labGroupFor,
+  normalizeLabDisplayName,
+} from "./data/labDictionary";
+
+export { labCatalog } from "./data/labDictionary";
 
 export function createId(prefix: string) {
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -14,6 +30,10 @@ export function createId(prefix: string) {
 
 export function nowIso() {
   return new Date().toISOString();
+}
+
+export function todayKey() {
+  return new Date().toISOString().slice(0, 10);
 }
 
 export function getActivePatients(patients: Patient[]) {
@@ -34,6 +54,13 @@ export function getUnderlyingDiseaseItems(patient: Patient) {
 }
 
 export function getActiveProblemItems(patient: Patient) {
+  if (patient.activeProblemStructuredItems.length > 0) {
+    return [...patient.activeProblemStructuredItems]
+      .sort((a, b) => a.order - b.order)
+      .map((item) => (item.note ? `${item.title}: ${item.note}` : item.title))
+      .filter(Boolean);
+  }
+
   return patient.activeProblemItems.length > 0
     ? patient.activeProblemItems
     : textToItems(patient.activeProblems);
@@ -54,22 +81,29 @@ export function splitHighlightLines(value: string): HighlightLine[] {
       const text = important ? line.slice(1).trim() : line;
 
       function parseLine(nextText: string): HighlightLine {
-        const kind: HighlightLine["kind"] = /^\d+\./.test(nextText)
-          ? "numbered"
-          : /^(->|=>|→|⇒)/.test(nextText)
-            ? "arrow"
-            : nextText.startsWith("-")
-              ? "dash"
-              : "normal";
+        const kind: HighlightLine["kind"] = /^=.+=$/.test(nextText)
+          ? "section"
+          : /^\d+\./.test(nextText)
+            ? "numbered"
+            : /^(->|=>|\u2192|\u21d2)/.test(nextText)
+              ? "arrow"
+              : nextText.startsWith("-")
+                ? "dash"
+                : "normal";
 
         return {
           important,
           kind,
-          text: kind === "dash" ? nextText.slice(1).trim() : nextText,
+          text:
+            kind === "dash"
+              ? nextText.slice(1).trim()
+              : kind === "section"
+                ? nextText.replace(/^=+|=+$/g, "").trim()
+                : nextText,
         };
       }
 
-      const inlineArrow = text.match(/(=>|->|→|⇒)/);
+      const inlineArrow = text.match(/(=>|->|\u2192|\u21d2)/);
       if (inlineArrow?.index && inlineArrow.index > 0) {
         const mainText = text.slice(0, inlineArrow.index).trim();
         const arrowText = `${inlineArrow[1]} ${text.slice(inlineArrow.index + inlineArrow[0].length).trim()}`;
@@ -81,13 +115,134 @@ export function splitHighlightLines(value: string): HighlightLine[] {
     .filter((line) => line.text);
 }
 
+export function stripColorMarkup(value: string) {
+  return value.replace(/\[\[(red|orange|yellow|blue|green|purple):([\s\S]*?)\]\]/gi, "$2");
+}
+
 export function importantLines(value: string) {
   return splitHighlightLines(value).filter((line) => line.important);
 }
 
 export function plainClinicalText(value: string, fallback = "-") {
-  const text = splitHighlightLines(value).map((line) => line.text).join("; ");
+  const text = splitHighlightLines(stripColorMarkup(value)).map((line) => line.text).join("; ");
   return text || fallback;
+}
+
+export function emptyAssessmentPlanItem(order = 0): AssessmentPlanItem {
+  return {
+    id: createId("ap"),
+    problemTitle: "",
+    assessmentSummary: "",
+    evidenceOrCourseItems: [],
+    planItems: [],
+    category: "activeProblem",
+    isImportant: false,
+    color: "",
+    order,
+  };
+}
+
+export function emptyActiveProblemItem(order = 0): ActiveProblemItem {
+  return {
+    id: createId("problem"),
+    title: "",
+    note: "",
+    isImportant: false,
+    color: "",
+    order,
+  };
+}
+
+export function emptyDailyNote(date = todayKey()): DailyNote {
+  const now = nowIso();
+  return {
+    date,
+    importantRedFlags: "",
+    overnightEvents: "",
+    subjectiveOrChiefConcern: "",
+    physicalExam: "",
+    labSummary: "",
+    imageSummary: "",
+    assessment: "",
+    plan: "",
+    dischargePlan: "",
+    vsOrder: "",
+    rawLabText: "",
+    labDate: date,
+    labReportTitle: "",
+    labReports: [],
+    parsedLabItems: [],
+    physicalExamEntries: [],
+    imageStudyEntries: [],
+    assessmentPlanItems: [],
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+export function dailyNoteFromPatient(patient: Patient, date = todayKey()): DailyNote {
+  const now = nowIso();
+  return {
+    ...emptyDailyNote(date),
+    importantRedFlags: patient.importantRedFlags,
+    overnightEvents: patient.overnightEvent,
+    subjectiveOrChiefConcern: patient.subjectiveOrChiefConcern,
+    physicalExam: patient.physicalExam,
+    labSummary: patient.newLabs,
+    imageSummary: patient.newImaging,
+    assessment: patient.assessment,
+    plan: patient.plan,
+    dischargePlan: patient.dischargePlan,
+    vsOrder: patient.vsOrder,
+    rawLabText: patient.rawLabText || patient.newLabs,
+    labDate: patient.labDate || date,
+    labReportTitle: patient.labReportTitle,
+    labReports: patient.labReports,
+    parsedLabItems: patient.parsedLabItems,
+    physicalExamEntries: patient.physicalExamEntries,
+    imageStudyEntries: patient.imageStudyEntries,
+    assessmentPlanItems: patient.assessmentPlanItems,
+    createdAt: patient.createdAt || now,
+    updatedAt: patient.updatedAt || now,
+  };
+}
+
+export function patientWithDailyNote(patient: Patient, note?: DailyNote): Patient {
+  if (!note) return patient;
+  return {
+    ...patient,
+    importantRedFlags: note.importantRedFlags,
+    overnightEvent: note.overnightEvents,
+    subjectiveOrChiefConcern: note.subjectiveOrChiefConcern,
+    physicalExam: note.physicalExam,
+    newLabs: note.labSummary,
+    newImaging: note.imageSummary,
+    assessment: note.assessment,
+    plan: note.plan,
+    dischargePlan: note.dischargePlan,
+    vsOrder: note.vsOrder,
+    rawLabText: note.rawLabText || note.labSummary,
+    labDate: note.labDate,
+    labReportTitle: note.labReportTitle,
+    labReports: note.labReports,
+    parsedLabItems: note.parsedLabItems,
+    physicalExamEntries: note.physicalExamEntries,
+    imageStudyEntries: note.imageStudyEntries,
+    assessmentPlanItems: note.assessmentPlanItems,
+  };
+}
+
+export function latestDailyNote(notes: DailyNote[]) {
+  return [...notes].sort((a, b) => b.date.localeCompare(a.date))[0];
+}
+
+export function noteForDateOrFallback(patient: Patient, notes: DailyNote[], date = todayKey()) {
+  return notes.find((note) => note.date === date) ?? latestDailyNote(notes) ?? dailyNoteFromPatient(patient, date);
+}
+
+export function patientForToday(patient: Patient, dailyNotesByPatient: DailyNotesByPatient = {}) {
+  const notes = dailyNotesByPatient[patient.id] ?? [];
+  return patientWithDailyNote(patient, noteForDateOrFallback(patient, notes, todayKey()));
 }
 
 export function compactClinicalText(value: string, maxLines = 2, fallback = "-") {
@@ -99,78 +254,71 @@ export function compactClinicalText(value: string, maxLines = 2, fallback = "-")
   return [...important, ...normal].slice(0, maxLines).map((line) => line.text).join("; ");
 }
 
-const labAliases: Record<string, string> = {
-  WBC: "WBC",
-  HB: "Hb",
-  HGB: "Hb",
-  PLT: "Plt",
-  NEU: "N",
-  NEUTROPHIL: "N",
-  NA: "Na",
-  K: "K",
-  CL: "Cl",
-  BUN: "BUN",
-  CR: "Cr",
-  CRE: "Cr",
-  GFR: "eGFR",
-  EGFR: "eGFR",
-  AST: "AST",
-  ALT: "ALT",
-  BIL: "Tbil",
-  TBIL: "Tbil",
-  ALP: "ALP",
-  ALB: "Alb",
-  CRP: "CRP",
-  PCT: "PCT",
-  OSM: "Osm",
-  OSMOLALITY: "Osm",
-  GLU: "Glu",
-  GLUCOSE: "Glu",
-  LE: "LE",
-  NITRITE: "Nitrite",
-  RBC: "RBC",
-  HCT: "Hct",
-  DBIL: "D-Bil",
-  LACTATE: "Lactate",
-  PT: "PT",
-  INR: "INR",
-  APTT: "aPTT",
-  DDIMER: "D-dimer",
-  HBA1C: "HbA1c",
-  PROTEIN: "Protein",
-  KETONE: "Ketone",
-  TROPONIN: "Troponin",
-  CKMB: "CK-MB",
-  BNP: "BNP",
-  PH: "pH",
-  PCO2: "pCO2",
-  HCO3: "HCO3",
-  BE: "BE",
-  SPO2: "SpO2",
-};
-
-export const labCatalog: Array<{ group: string; name: string; unit?: string }> = [
-  ...["WBC", "Neu", "Hb", "Hct", "Plt"].map((name) => ({ group: "CBC", name })),
-  ...["Na", "K", "Cl", "BUN", "Cr", "eGFR", "Osm"].map((name) => ({ group: "Renal / Electrolytes", name })),
-  ...["AST", "ALT", "ALP", "T-Bil", "D-Bil", "Alb"].map((name) => ({ group: "Liver", name })),
-  ...["CRP", "PCT", "Lactate"].map((name) => ({ group: "Inflammation / Infection", name })),
-  ...["PT", "INR", "aPTT", "D-dimer"].map((name) => ({ group: "Coagulation", name })),
-  ...["Glucose", "HbA1c"].map((name) => ({ group: "Glucose / Endocrine", name })),
-  ...["UA WBC", "UA RBC", "LE", "Nitrite", "Protein", "Ketone"].map((name) => ({ group: "Urine", name })),
-  ...["Troponin", "CK-MB", "BNP"].map((name) => ({ group: "Cardiac", name })),
-  ...["pH", "pCO2", "HCO3", "BE", "SpO2"].map((name) => ({ group: "Blood gas", name })),
-];
-
-function labGroupFor(label: string) {
-  return labCatalog.find((item) => item.name === label)?.group ?? "";
+function todayDate() {
+  return new Date().toISOString().slice(0, 10);
 }
 
-function normalizeLabKey(key: string) {
-  return labAliases[key.replace(/\./g, "").toUpperCase()] ?? key.replace(/\./g, "");
+const labValuePattern = "([<>]?[0-9]+(?:\\.[0-9]+)?%?\\+?)";
+
+function parseLabItemsFromLine(line: string, important: boolean, groupHint = "") {
+  const items: ParsedLabItem[] = [];
+  const pattern = new RegExp(`(?:^|\\b)(${labAliasPattern()})\\.?\\s*${labValuePattern}(?:\\s*\\(\\s*${labValuePattern}\\s*\\))?`, "gi");
+  const uaContext = /\b(UA|urine|urinalysis)\b/i.test(groupHint) || /\b(UA|urine|urinalysis)\s*:?\b/i.test(line);
+
+  Array.from(line.matchAll(pattern)).forEach((match) => {
+    const dictionaryItem = findLabDictionaryItem(match[1]);
+    const normalizedLabel = normalizeLabDisplayName(match[1]);
+    const dictionaryGroup = dictionaryItem?.group ?? labGroupFor(normalizedLabel);
+    const group = groupHint || dictionaryGroup;
+    const label =
+      uaContext && (normalizedLabel === "WBC" || normalizedLabel === "RBC")
+        ? `UA ${normalizedLabel}`
+        : uaContext && normalizedLabel === "Glucose"
+          ? "Glucose urine"
+        : normalizedLabel;
+    const commonUnit = dictionaryItem?.commonUnits[0] ?? "";
+
+    items.push({
+      label,
+      name: label,
+      value: match[2],
+      previousValue: match[3] ?? "",
+      group: label.startsWith("UA ") || label === "Glucose urine" ? "Urinalysis" : group,
+      important,
+      isImportant: important,
+      unit: commonUnit === "%" && match[2].includes("%") ? "" : commonUnit,
+      color: "",
+      note: "",
+    });
+  });
+
+  return items;
+}
+
+function splitLabLineTitle(line: string) {
+  const colonMatch = line.match(/^([^:]{2,32}):\s*(.+)$/);
+  if (colonMatch && !findLabDictionaryItem(colonMatch[1])) {
+    return { title: colonMatch[1].trim(), body: colonMatch[2].trim() };
+  }
+
+  const prefixMatch = line.match(/^(cbc\/dc|cbc|dc|metabolic|renal|electrolytes|liver|lft|coag|coag\.|ua|urine|cardiac|blood gas|abg|vbg)\s+(.+)$/i);
+  if (prefixMatch) {
+    return { title: prefixMatch[1].replace(/\.$/, "").trim(), body: prefixMatch[2].trim() };
+  }
+
+  return { title: "", body: line };
+}
+
+function reportId(rawText: string, index: number) {
+  return `lab-${index}-${rawText.slice(0, 24).replace(/[^A-Za-z0-9]+/g, "-")}`;
 }
 
 export function parseLabText(value: string): ParsedLabItem[] {
-  const items: ParsedLabItem[] = [];
+  return parseLabReports(value).flatMap((report) => report.items);
+}
+
+export function parseLabReports(value: string, date = todayDate(), defaultTitle = ""): LabReport[] {
+  const reports: LabReport[] = [];
 
   value.split(/\r?\n/).forEach((rawLine) => {
     const trimmedLine = rawLine.trim();
@@ -178,42 +326,20 @@ export function parseLabText(value: string): ParsedLabItem[] {
 
     const important = trimmedLine.startsWith("!");
     const line = important ? trimmedLine.slice(1).trim() : trimmedLine;
-    const uaIndex = line.toUpperCase().indexOf("UA:");
-    const beforeUa = uaIndex >= 0 ? line.slice(0, uaIndex) : line;
-    const uaText = uaIndex >= 0 ? line.slice(uaIndex + 3) : "";
-    const pattern = /\b([A-Za-z][A-Za-z.]*)\s*([<>]?[0-9]+(?:\.[0-9]+)?\+?)(?:\s*\(([0-9]+(?:\.[0-9]+)?)\))?/g;
+    const { title, body } = splitLabLineTitle(line);
+    const reportTitle = title || defaultTitle;
+    const items = parseLabItemsFromLine(body, important, reportTitle);
 
-    Array.from(beforeUa.matchAll(pattern)).forEach((match) => {
-      const label = normalizeLabKey(match[1]);
-      items.push({
-        label,
-        name: label,
-        value: match[2],
-        previousValue: match[3],
-        group: labGroupFor(label),
-        important,
-        isImportant: important,
-      });
+    reports.push({
+      id: reportId(line, reports.length),
+      date,
+      title: reportTitle,
+      rawText: rawLine,
+      items,
     });
-
-    if (uaText) {
-      Array.from(uaText.matchAll(pattern)).forEach((match) => {
-        const normalizedLabel = normalizeLabKey(match[1]);
-        const label = normalizedLabel === "WBC" || normalizedLabel === "RBC" ? `UA ${normalizedLabel}` : normalizedLabel;
-        items.push({
-          label,
-          name: label,
-          value: match[2],
-          previousValue: match[3],
-          group: "Urine",
-          important,
-          isImportant: important,
-        });
-      });
-    }
   });
 
-  return items;
+  return reports;
 }
 
 export function labSummary(items: ParsedLabItem[], fallbackText = "", maxItems = 8) {
@@ -237,7 +363,7 @@ export function labSummary(items: ParsedLabItem[], fallbackText = "", maxItems =
   }
 
   items.forEach((item) => {
-    if (used.has(item) || item.group === "Urine" || item.label === "Cr" || item.label === "eGFR") return;
+    if (used.has(item) || item.group === "Urinalysis" || item.label === "Cr" || item.label === "eGFR") return;
     const prev = item.previousValue ? `(${item.previousValue})` : "";
     result.push(`${item.group ? `${item.group} ` : ""}${item.label}${item.value}${prev}`);
     used.add(item);
@@ -250,7 +376,7 @@ export function labSummary(items: ParsedLabItem[], fallbackText = "", maxItems =
   }
 
   items
-    .filter((item) => item.group === "Urine" && !used.has(item))
+    .filter((item) => item.group === "Urinalysis" && !used.has(item))
     .forEach((item) => {
       const prev = item.previousValue ? `(${item.previousValue})` : "";
       result.push(`${item.label}${item.value}${prev}`);
@@ -268,7 +394,29 @@ export function formatLabItem(item: ParsedLabItem) {
 }
 
 export function keyLabItems(items: ParsedLabItem[], maxItems = 8) {
-  const priority = ["WBC", "Neu", "N", "Hb", "Plt", "Na", "K", "Cr", "eGFR", "Osm", "CRP", "PCT", "UA WBC", "LE"];
+  const priority = [
+    "WBC",
+    "Neu",
+    "Hb",
+    "Plt",
+    "Na",
+    "K",
+    "Cr",
+    "eGFR",
+    "Osm",
+    "HbA1c",
+    "AST",
+    "ALT",
+    "PT",
+    "aPTT",
+    "D-dimer",
+    "CRP",
+    "PCT",
+    "Lactate",
+    "UA WBC",
+    "UA RBC",
+    "LE",
+  ];
   return [...items]
     .sort((a, b) => {
       const importantOrder = Number(!(a.important || a.isImportant)) - Number(!(b.important || b.isImportant));
@@ -368,6 +516,11 @@ export function sortPatients(patients: Patient[], sortMode: SortMode) {
 export function createTodayFromYesterday(patient: Patient): Patient {
   return {
     ...patient,
+    assessmentPlanItems: patient.assessmentPlanItems.map((item) => ({
+      ...item,
+      evidenceOrCourseItems: [...item.evidenceOrCourseItems],
+      planItems: [...item.planItems],
+    })),
     // Keep clinically useful S/O/A/P, course, discharge, attention, and current tasks.
     updatedAt: nowIso(),
   };
@@ -390,6 +543,10 @@ export function emptyPatient(): Patient {
     primaryDiagnosis: "",
     activeProblems: "",
     activeProblemItems: [],
+    activeProblemStructuredItems: [],
+    chiefComplaint: "",
+    presentIllnessOrHPI: "",
+    admissionBriefFreeText: "",
     admissionChiefConcern: "",
     hpiOrAdmissionStory: "",
     baselineFunction: "",
@@ -407,7 +564,12 @@ export function emptyPatient(): Patient {
     hospitalCourseHighlights: "",
     importantRedFlags: "",
     rawLabText: "",
+    labDate: new Date().toISOString().slice(0, 10),
+    labReportTitle: "",
+    labReports: [],
     parsedLabItems: [],
+    physicalExamEntries: [],
+    imageStudyEntries: [],
     dischargeMedsStatus: "pending",
     opdAppointmentStatus: "pending",
     diagnosisCertificateStatus: "pending",
@@ -417,6 +579,7 @@ export function emptyPatient(): Patient {
     newImaging: "",
     assessment: "",
     plan: "",
+    assessmentPlanItems: [],
     dischargePlan: "",
     dischargeTargetDate: "",
     dischargeBarriers: "",

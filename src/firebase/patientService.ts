@@ -9,9 +9,18 @@ import {
   updateDoc,
   type FirestoreError,
 } from "firebase/firestore";
-import type { Patient, PatientTask } from "../types";
+import type {
+  AssessmentPlanItem,
+  ActiveProblemItem,
+  DailyNote,
+  ImageStudyEntry,
+  LabReport,
+  Patient,
+  PatientTask,
+  PhysicalExamEntry,
+} from "../types";
 import { db } from "./firebase";
-import { parseLabText, textToItems } from "../utils";
+import { parseLabReports, parseLabText, textToItems } from "../utils";
 
 function patientsCollection(uid: string) {
   return collection(db, "users", uid, "patients");
@@ -19,6 +28,14 @@ function patientsCollection(uid: string) {
 
 function patientDocument(uid: string, patientId: string) {
   return doc(db, "users", uid, "patients", patientId);
+}
+
+function dailyNotesCollection(uid: string, patientId: string) {
+  return collection(db, "users", uid, "patients", patientId, "dailyNotes");
+}
+
+function dailyNoteDocument(uid: string, patientId: string, date: string) {
+  return doc(db, "users", uid, "patients", patientId, "dailyNotes", date);
 }
 
 function normalizeTask(task: Partial<PatientTask>): PatientTask {
@@ -43,9 +60,110 @@ function normalizeParsedLabItem(item: Record<string, unknown>) {
     unit: String(item.unit ?? ""),
     previousValue: String(item.previousValue ?? ""),
     group: String(item.group ?? ""),
+    color: String(item.color ?? ""),
     important: Boolean(item.important ?? item.isImportant ?? false),
     isImportant: Boolean(item.isImportant ?? item.important ?? false),
     note: String(item.note ?? ""),
+  };
+}
+
+function normalizeLabReport(report: Partial<LabReport>): LabReport {
+  return {
+    id: report.id ?? "",
+    date: report.date ?? "",
+    title: report.title ?? "",
+    rawText: report.rawText ?? "",
+    items: Array.isArray(report.items)
+      ? report.items.map((item) => normalizeParsedLabItem(item as unknown as Record<string, unknown>))
+      : parseLabText(report.rawText ?? ""),
+  };
+}
+
+function normalizePhysicalExamEntry(entry: Partial<PhysicalExamEntry>): PhysicalExamEntry {
+  return {
+    id: entry.id ?? "",
+    date: entry.date ?? "",
+    system: entry.system ?? "",
+    finding: entry.finding ?? "",
+    isImportant: entry.isImportant ?? false,
+    color: entry.color ?? "",
+    note: entry.note ?? "",
+  };
+}
+
+function normalizeImageStudyEntry(entry: Partial<ImageStudyEntry>): ImageStudyEntry {
+  return {
+    id: entry.id ?? "",
+    date: entry.date ?? "",
+    studyType: entry.studyType ?? "",
+    finding: entry.finding ?? "",
+    impression: entry.impression ?? "",
+    isImportant: entry.isImportant ?? false,
+    color: entry.color ?? "",
+    note: entry.note ?? "",
+  };
+}
+
+function normalizeAssessmentPlanItem(item: Partial<AssessmentPlanItem>, index: number): AssessmentPlanItem {
+  return {
+    id: item.id ?? "",
+    problemTitle: item.problemTitle ?? "",
+    assessmentSummary: item.assessmentSummary ?? "",
+    evidenceOrCourseItems: Array.isArray(item.evidenceOrCourseItems) ? item.evidenceOrCourseItems.map(String) : [],
+    planItems: Array.isArray(item.planItems) ? item.planItems.map(String) : [],
+    category: item.category ?? "activeProblem",
+    isImportant: item.isImportant ?? false,
+    color: item.color ?? "",
+    order: typeof item.order === "number" ? item.order : index,
+  };
+}
+
+function normalizeActiveProblemItem(item: Partial<ActiveProblemItem>, index: number): ActiveProblemItem {
+  return {
+    id: item.id ?? "",
+    title: item.title ?? "",
+    note: item.note ?? "",
+    isImportant: item.isImportant ?? false,
+    color: item.color ?? "",
+    order: typeof item.order === "number" ? item.order : index,
+  };
+}
+
+function normalizeDailyNote(date: string, data: Partial<DailyNote>): DailyNote {
+  return {
+    date: data.date ?? date,
+    importantRedFlags: data.importantRedFlags ?? "",
+    overnightEvents: data.overnightEvents ?? "",
+    subjectiveOrChiefConcern: data.subjectiveOrChiefConcern ?? "",
+    physicalExam: data.physicalExam ?? "",
+    labSummary: data.labSummary ?? "",
+    imageSummary: data.imageSummary ?? "",
+    assessment: data.assessment ?? "",
+    plan: data.plan ?? "",
+    dischargePlan: data.dischargePlan ?? "",
+    vsOrder: data.vsOrder ?? "",
+    rawLabText: data.rawLabText ?? data.labSummary ?? "",
+    labDate: data.labDate ?? date,
+    labReportTitle: data.labReportTitle ?? "",
+    labReports: Array.isArray(data.labReports)
+      ? data.labReports.map((report) => normalizeLabReport(report as Partial<LabReport>))
+      : parseLabReports(data.rawLabText ?? data.labSummary ?? "", data.labDate ?? date, data.labReportTitle ?? ""),
+    parsedLabItems: Array.isArray(data.parsedLabItems)
+      ? data.parsedLabItems.map((item) => normalizeParsedLabItem(item as unknown as Record<string, unknown>))
+      : parseLabText(data.rawLabText ?? data.labSummary ?? ""),
+    physicalExamEntries: Array.isArray(data.physicalExamEntries)
+      ? data.physicalExamEntries.map((entry) => normalizePhysicalExamEntry(entry as Partial<PhysicalExamEntry>))
+      : [],
+    imageStudyEntries: Array.isArray(data.imageStudyEntries)
+      ? data.imageStudyEntries.map((entry) => normalizeImageStudyEntry(entry as Partial<ImageStudyEntry>))
+      : [],
+    assessmentPlanItems: Array.isArray(data.assessmentPlanItems)
+      ? data.assessmentPlanItems.map((item, index) =>
+          normalizeAssessmentPlanItem(item as Partial<AssessmentPlanItem>, index),
+        )
+      : [],
+    createdAt: data.createdAt ?? "",
+    updatedAt: data.updatedAt ?? "",
   };
 }
 
@@ -68,6 +186,14 @@ function normalizePatient(patientId: string, data: Partial<Patient>): Patient {
     activeProblemItems: Array.isArray(data.activeProblemItems)
       ? data.activeProblemItems
       : textToItems(data.activeProblems ?? ""),
+    activeProblemStructuredItems: Array.isArray(data.activeProblemStructuredItems)
+      ? data.activeProblemStructuredItems.map((item, index) =>
+          normalizeActiveProblemItem(item as Partial<ActiveProblemItem>, index),
+        )
+      : [],
+    chiefComplaint: data.chiefComplaint ?? data.admissionChiefConcern ?? "",
+    presentIllnessOrHPI: data.presentIllnessOrHPI ?? data.hpiOrAdmissionStory ?? "",
+    admissionBriefFreeText: data.admissionBriefFreeText ?? "",
     admissionChiefConcern: data.admissionChiefConcern ?? "",
     hpiOrAdmissionStory: data.hpiOrAdmissionStory ?? "",
     baselineFunction: data.baselineFunction ?? "",
@@ -85,9 +211,20 @@ function normalizePatient(patientId: string, data: Partial<Patient>): Patient {
     hospitalCourseHighlights: data.hospitalCourseHighlights ?? "",
     importantRedFlags: data.importantRedFlags ?? "",
     rawLabText: data.rawLabText ?? data.newLabs ?? "",
+    labDate: data.labDate ?? new Date().toISOString().slice(0, 10),
+    labReportTitle: data.labReportTitle ?? "",
+    labReports: Array.isArray(data.labReports)
+      ? data.labReports.map((report) => normalizeLabReport(report as Partial<LabReport>))
+      : parseLabReports(data.rawLabText ?? data.newLabs ?? "", data.labDate ?? new Date().toISOString().slice(0, 10), data.labReportTitle ?? ""),
     parsedLabItems: Array.isArray(data.parsedLabItems)
       ? data.parsedLabItems.map((item) => normalizeParsedLabItem(item as unknown as Record<string, unknown>))
       : parseLabText(data.rawLabText ?? data.newLabs ?? ""),
+    physicalExamEntries: Array.isArray(data.physicalExamEntries)
+      ? data.physicalExamEntries.map((entry) => normalizePhysicalExamEntry(entry as Partial<PhysicalExamEntry>))
+      : [],
+    imageStudyEntries: Array.isArray(data.imageStudyEntries)
+      ? data.imageStudyEntries.map((entry) => normalizeImageStudyEntry(entry as Partial<ImageStudyEntry>))
+      : [],
     dischargeMedsStatus: data.dischargeMedsStatus ?? "pending",
     opdAppointmentStatus: data.opdAppointmentStatus ?? "pending",
     diagnosisCertificateStatus: data.diagnosisCertificateStatus ?? "pending",
@@ -97,6 +234,11 @@ function normalizePatient(patientId: string, data: Partial<Patient>): Patient {
     newImaging: data.newImaging ?? "",
     assessment: data.assessment ?? "",
     plan: data.plan ?? "",
+    assessmentPlanItems: Array.isArray(data.assessmentPlanItems)
+      ? data.assessmentPlanItems.map((item, index) =>
+          normalizeAssessmentPlanItem(item as Partial<AssessmentPlanItem>, index),
+        )
+      : [],
     dischargePlan: data.dischargePlan ?? "",
     dischargeTargetDate: data.dischargeTargetDate ?? "",
     dischargeBarriers: data.dischargeBarriers ?? "",
@@ -134,6 +276,10 @@ function preparePatientForFirestore(patient: Patient): Record<string, unknown> {
   return sanitizeForFirestore(normalizedPatient) as Record<string, unknown>;
 }
 
+function prepareDailyNoteForFirestore(note: DailyNote): Record<string, unknown> {
+  return sanitizeForFirestore(normalizeDailyNote(note.date, note)) as Record<string, unknown>;
+}
+
 export function subscribeToPatients(
   uid: string,
   onPatients: (patients: Patient[]) => void,
@@ -153,6 +299,26 @@ export function subscribeToPatients(
   );
 }
 
+export function subscribeToDailyNotes(
+  uid: string,
+  patientId: string,
+  onNotes: (patientId: string, notes: DailyNote[]) => void,
+  onError: (error: FirestoreError) => void,
+) {
+  const notesQuery = query(dailyNotesCollection(uid, patientId), orderBy("date", "desc"));
+
+  return onSnapshot(
+    notesQuery,
+    (snapshot) => {
+      onNotes(
+        patientId,
+        snapshot.docs.map((noteDoc) => normalizeDailyNote(noteDoc.id, noteDoc.data() as Partial<DailyNote>)),
+      );
+    },
+    onError,
+  );
+}
+
 export function createPatient(uid: string, patient: Patient) {
   // The patient id is also the Firestore document id for easy lookup.
   return setDoc(patientDocument(uid, patient.id), preparePatientForFirestore(patient));
@@ -160,6 +326,10 @@ export function createPatient(uid: string, patient: Patient) {
 
 export function updatePatient(uid: string, patient: Patient) {
   return updateDoc(patientDocument(uid, patient.id), preparePatientForFirestore(patient));
+}
+
+export function saveDailyNote(uid: string, patientId: string, note: DailyNote) {
+  return setDoc(dailyNoteDocument(uid, patientId, note.date), prepareDailyNoteForFirestore(note));
 }
 
 export function deletePatient(uid: string, patientId: string) {
