@@ -34,6 +34,12 @@ const sourceTypes: Array<{ value: AiClinicalSourceType; label: string }> = [
   { value: "nursing", label: "Nursing note" },
 ];
 
+interface IntakeSourceBlock {
+  id: string;
+  sourceType: AiClinicalSourceType;
+  text: string;
+}
+
 type ReviewCardKind =
   | "oneLiner"
   | "chiefConcern"
@@ -141,6 +147,39 @@ function imageLine(image: AiSoapDraft["objective"]["images"][number]) {
   ].filter(hasText).join(" - ");
 }
 
+function createSourceBlock(sourceType: AiClinicalSourceType = "mixed"): IntakeSourceBlock {
+  return {
+    id: createId("ai-source"),
+    sourceType,
+    text: "",
+  };
+}
+
+function sourceTypeLabel(sourceType: AiClinicalSourceType) {
+  return sourceTypes.find((item) => item.value === sourceType)?.label ?? "Mixed text";
+}
+
+function getNonEmptySourceBlocks(blocks: IntakeSourceBlock[]) {
+  return blocks
+    .map((block) => ({ ...block, text: block.text.trim() }))
+    .filter((block) => block.text.length > 0);
+}
+
+function buildRawTextFromBlocks(blocks: IntakeSourceBlock[]) {
+  const nonEmptyBlocks = getNonEmptySourceBlocks(blocks);
+  if (nonEmptyBlocks.length === 0) return "";
+  if (nonEmptyBlocks.length === 1) return nonEmptyBlocks[0].text;
+
+  return nonEmptyBlocks
+    .map((block) => `[${sourceTypeLabel(block.sourceType)}]\n${block.text}`)
+    .join("\n\n");
+}
+
+function getEffectiveSourceType(blocks: IntakeSourceBlock[]): AiClinicalSourceType {
+  const nonEmptyBlocks = getNonEmptySourceBlocks(blocks);
+  return nonEmptyBlocks.length === 1 ? nonEmptyBlocks[0].sourceType : "mixed";
+}
+
 function buildCards(draft: AiSoapDraft): ReviewCard[] {
   const cards: ReviewCard[] = [];
   const addCard = (
@@ -201,8 +240,7 @@ function getErrorMessage(error: unknown) {
 }
 
 function AiIntakePanel({ patient, selectedDate, onApplyPatient }: AiIntakePanelProps) {
-  const [sourceType, setSourceType] = useState<AiClinicalSourceType>("mixed");
-  const [rawText, setRawText] = useState("");
+  const [sourceBlocks, setSourceBlocks] = useState<IntakeSourceBlock[]>(() => [createSourceBlock()]);
   const [deidentifiedConfirmed, setDeidentifiedConfirmed] = useState(false);
   const [storeRawText, setStoreRawText] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -212,8 +250,12 @@ function AiIntakePanel({ patient, selectedDate, onApplyPatient }: AiIntakePanelP
   const [model, setModel] = useState("");
   const [reviewCards, setReviewCards] = useState<ReviewCard[]>([]);
 
+  const rawText = useMemo(() => buildRawTextFromBlocks(sourceBlocks), [sourceBlocks]);
+  const effectiveSourceType = useMemo(() => getEffectiveSourceType(sourceBlocks), [sourceBlocks]);
+  const nonEmptyBlockCount = useMemo(() => getNonEmptySourceBlocks(sourceBlocks).length, [sourceBlocks]);
   const estimatedTokens = Math.ceil(rawText.length / 4);
   const acceptedCount = reviewCards.filter((card) => card.status === "accepted").length;
+  const reviewableCount = reviewCards.filter((card) => card.status !== "saved").length;
   const groupedCards = useMemo(() => {
     const groups = new Map<string, ReviewCard[]>();
     reviewCards.forEach((card) => {
@@ -222,6 +264,21 @@ function AiIntakePanel({ patient, selectedDate, onApplyPatient }: AiIntakePanelP
     return Array.from(groups.entries());
   }, [reviewCards]);
 
+  function updateSourceBlock(blockId: string, updater: (block: IntakeSourceBlock) => IntakeSourceBlock) {
+    setSourceBlocks((blocks) => blocks.map((block) => (block.id === blockId ? updater(block) : block)));
+  }
+
+  function addSourceBlock(sourceType: AiClinicalSourceType = "mixed") {
+    setSourceBlocks((blocks) => [...blocks, createSourceBlock(sourceType)]);
+  }
+
+  function removeSourceBlock(blockId: string) {
+    setSourceBlocks((blocks) => {
+      if (blocks.length <= 1) return blocks;
+      return blocks.filter((block) => block.id !== blockId);
+    });
+  }
+
   async function analyze() {
     setError("");
     setStatusMessage("");
@@ -229,7 +286,7 @@ function AiIntakePanel({ patient, selectedDate, onApplyPatient }: AiIntakePanelP
     try {
       const result = await analyzeClinicalText({
         patientId: patient.id,
-        sourceType,
+        sourceType: effectiveSourceType,
         rawText,
         deidentifiedConfirmed,
         storeRawText,
@@ -255,6 +312,16 @@ function AiIntakePanel({ patient, selectedDate, onApplyPatient }: AiIntakePanelP
 
   function updateCard(cardId: string, updater: (card: ReviewCard) => ReviewCard) {
     setReviewCards((cards) => cards.map((card) => (card.id === cardId ? updater(card) : card)));
+  }
+
+  function setCardsStatus(status: Extract<ReviewStatus, "accepted" | "ignored">, section?: string) {
+    setReviewCards((cards) =>
+      cards.map((card) => {
+        if (card.status === "saved") return card;
+        if (section && card.section !== section) return card;
+        return { ...card, status, isEditing: false };
+      }),
+    );
   }
 
   async function applyAcceptedItems() {
@@ -477,26 +544,70 @@ function AiIntakePanel({ patient, selectedDate, onApplyPatient }: AiIntakePanelP
       </div>
 
       <div className="ai-intake-grid">
-        <label>
-          Source type
-          <select value={sourceType} onChange={(event) => setSourceType(event.target.value as AiClinicalSourceType)}>
-            {sourceTypes.map((item) => (
-              <option key={item.value} value={item.value}>
-                {item.label}
-              </option>
-            ))}
-          </select>
-        </label>
+        <div className="ai-source-toolbar span-2">
+          <strong>Input blocks</strong>
+          <div className="form-actions">
+            <button type="button" className="secondary" onClick={() => addSourceBlock("admission")}>
+              Add admission
+            </button>
+            <button type="button" className="secondary" onClick={() => addSourceBlock("vitals")}>
+              Add V/S
+            </button>
+            <button type="button" className="secondary" onClick={() => addSourceBlock("lab")}>
+              Add lab
+            </button>
+            <button type="button" className="secondary" onClick={() => addSourceBlock("image")}>
+              Add image
+            </button>
+            <button type="button" className="secondary" onClick={() => addSourceBlock()}>
+              Add block
+            </button>
+          </div>
+        </div>
 
-        <label className="span-2">
-          De-identified clinical text
-          <textarea
-            className="ai-raw-textarea"
-            value={rawText}
-            onChange={(event) => setRawText(event.target.value)}
-            placeholder="Paste de-identified admission note, V/S, labs, image report, progress note, consult note, or mixed text."
-          />
-        </label>
+        <div className="ai-source-blocks span-2">
+          {sourceBlocks.map((block, index) => (
+            <article className="ai-source-block" key={block.id}>
+              <div className="ai-source-block-header">
+                <label>
+                  Source type
+                  <select
+                    value={block.sourceType}
+                    onChange={(event) =>
+                      updateSourceBlock(block.id, (item) => ({
+                        ...item,
+                        sourceType: event.target.value as AiClinicalSourceType,
+                      }))
+                    }
+                  >
+                    {sourceTypes.map((item) => (
+                      <option key={item.value} value={item.value}>
+                        {item.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <button
+                  type="button"
+                  className="secondary"
+                  disabled={sourceBlocks.length <= 1}
+                  onClick={() => removeSourceBlock(block.id)}
+                >
+                  Remove
+                </button>
+              </div>
+              <label>
+                De-identified clinical text {index + 1}
+                <textarea
+                  className="ai-raw-textarea"
+                  value={block.text}
+                  onChange={(event) => updateSourceBlock(block.id, (item) => ({ ...item, text: event.target.value }))}
+                  placeholder="Paste de-identified admission note, V/S, labs, image report, progress note, consult note, or mixed text."
+                />
+              </label>
+            </article>
+          ))}
+        </div>
 
         <label className="checkbox-label ai-checkbox">
           <input
@@ -517,8 +628,8 @@ function AiIntakePanel({ patient, selectedDate, onApplyPatient }: AiIntakePanelP
         </label>
 
         <div className="ai-cost-note span-2">
-          {rawText.length.toLocaleString()} / {MAX_INPUT_CHARS.toLocaleString()} characters. Approx. {estimatedTokens.toLocaleString()} input tokens.
-          Model and cost are controlled by the backend. The default model is gpt-5.4-mini.
+          {rawText.length.toLocaleString()} / {MAX_INPUT_CHARS.toLocaleString()} characters across {nonEmptyBlockCount} block(s).
+          Approx. {estimatedTokens.toLocaleString()} input tokens. Model and cost are controlled by the backend. The default model is gpt-5.4-mini.
         </div>
 
         {rawText.length > MAX_INPUT_CHARS && (
@@ -544,14 +655,42 @@ function AiIntakePanel({ patient, selectedDate, onApplyPatient }: AiIntakePanelP
         <div className="ai-draft-review">
           <div className="section-heading">
             <h3>AI Draft Review</h3>
-            <button type="button" disabled={acceptedCount === 0} onClick={() => void applyAcceptedItems()}>
-              Apply accepted items ({acceptedCount})
-            </button>
+            <div className="form-actions ai-review-toolbar">
+              <button type="button" className="secondary" disabled={reviewableCount === 0} onClick={() => setCardsStatus("accepted")}>
+                Accept all
+              </button>
+              <button type="button" className="secondary" disabled={reviewableCount === 0} onClick={() => setCardsStatus("ignored")}>
+                Ignore all
+              </button>
+              <button type="button" disabled={acceptedCount === 0} onClick={() => void applyAcceptedItems()}>
+                Apply accepted items ({acceptedCount})
+              </button>
+            </div>
           </div>
 
           {groupedCards.map(([section, cards]) => (
             <section className="ai-review-section" key={section}>
-              <h4>{section}</h4>
+              <div className="ai-review-section-heading">
+                <h4>{section}</h4>
+                <div className="form-actions">
+                  <button
+                    type="button"
+                    className="secondary"
+                    disabled={!cards.some((card) => card.status !== "saved")}
+                    onClick={() => setCardsStatus("accepted", section)}
+                  >
+                    Accept section
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary"
+                    disabled={!cards.some((card) => card.status !== "saved")}
+                    onClick={() => setCardsStatus("ignored", section)}
+                  >
+                    Ignore section
+                  </button>
+                </div>
+              </div>
               <div className="ai-review-card-grid">
                 {cards.map((card) => (
                   <article className={`ai-review-card ai-review-card-${card.status}`} key={card.id}>

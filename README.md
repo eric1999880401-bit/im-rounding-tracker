@@ -133,7 +133,7 @@ VITE_USE_FIREBASE_EMULATORS=true
 npm run dev
 ```
 
-6. Open a de-identified test patient, go to `AI Intake`, paste de-identified sample text, confirm de-identification, then click `Analyze and organize`.
+6. Open a de-identified test patient, go to `AI Intake`, paste de-identified sample text into one or more source blocks, confirm de-identification, then click `Analyze and organize`.
 
 Example de-identified sample:
 
@@ -148,7 +148,7 @@ Plan: continue antiplatelet, follow MRI brain, PT evaluation, control BP.
 Discharge issue: rehab placement pending.
 ```
 
-After review, use `Accept`, `Edit`, or `Ignore` on each draft card. Only accepted cards are written when you click `Apply accepted items`.
+After review, use `Accept`, `Edit`, or `Ignore` on each draft card. You can also use `Accept all` or `Accept section` for faster review. Only accepted cards are written when you click `Apply accepted items`.
 
 ## Push the Code to GitHub
 

@@ -953,6 +953,45 @@ input[type="checkbox"] {
   grid-template-columns: minmax(180px, 260px) minmax(0, 1fr);
 }
 
+.ai-source-toolbar {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.ai-source-toolbar .form-actions,
+.ai-review-toolbar {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.ai-source-blocks {
+  display: grid;
+  gap: 12px;
+}
+
+.ai-source-block {
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+}
+
+.ai-source-block-header,
+.ai-review-section-heading {
+  align-items: end;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+}
+
+.ai-source-block-header label {
+  flex: 1;
+}
+
 .ai-raw-textarea {
   min-height: 220px;
 }
@@ -2405,6 +2444,9 @@ tbody tr:last-child td {
   }
 
   .section-heading,
+  .ai-source-toolbar,
+  .ai-source-block-header,
+  .ai-review-section-heading,
   .quick-actions {
     align-items: stretch;
     display: grid;
