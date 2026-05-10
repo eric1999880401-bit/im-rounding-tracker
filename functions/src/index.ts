@@ -290,6 +290,36 @@ function makePrompt(sourceType: SourceType, rawText: string, patientContext: Ret
   ].join("\n");
 }
 
+function getOpenAiErrorMessage(status: number, responseBody: Record<string, unknown>) {
+  const errorInfo = responseBody.error as { code?: unknown; type?: unknown } | undefined;
+  const code = typeof errorInfo?.code === "string" ? errorInfo.code : "";
+  const type = typeof errorInfo?.type === "string" ? errorInfo.type : "";
+
+  logger.warn("OpenAI Responses API error", { status, code, type });
+
+  if (status === 401 || code === "invalid_api_key") {
+    return "OpenAI API key is invalid. Update OPENAI_API_KEY in Firebase Functions.";
+  }
+
+  if (status === 403) {
+    return "OpenAI API key is not authorized for this request.";
+  }
+
+  if (status === 404 || code === "model_not_found") {
+    return "OpenAI model is unavailable. Update OPENAI_MODEL in Firebase Functions.";
+  }
+
+  if (status === 429) {
+    return "OpenAI rate limit or quota was reached. Check the OpenAI project billing and limits.";
+  }
+
+  if (status >= 500) {
+    return "OpenAI service is temporarily unavailable. Try again later.";
+  }
+
+  return "OpenAI request failed. Check the Firebase Functions logs for details.";
+}
+
 export const analyzeClinicalText = onCall(
   {
     secrets: [OPENAI_API_KEY],
@@ -384,11 +414,7 @@ export const analyzeClinicalText = onCall(
 
     const responseBody = (await openAiResponse.json().catch(() => ({}))) as Record<string, unknown>;
     if (!openAiResponse.ok) {
-      const message =
-        (responseBody.error as { message?: string } | undefined)?.message ??
-        `OpenAI request failed with status ${openAiResponse.status}.`;
-      logger.warn("OpenAI Responses API error", { status: openAiResponse.status, message });
-      throw new HttpsError("internal", message);
+      throw new HttpsError("internal", getOpenAiErrorMessage(openAiResponse.status, responseBody));
     }
 
     const refusal = extractRefusal(responseBody);
