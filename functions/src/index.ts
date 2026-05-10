@@ -473,13 +473,17 @@ function documentInstructions(documentType: DocumentType) {
     "Do not invent missing data; mark absent or unclear details in uncertainty.",
     "Preserve dates, lab values, units, medication names, image findings, and pending items exactly when available.",
     "Use de-identified content only; do not repeat names, full MRNs, IDs, birthday, phone, address, or identifiable image details.",
+    "Do not use bullet lists unless the requested document type is iSBAR.",
   ];
 
   const byType: Record<DocumentType, string[]> = {
     admissionNote: [
-      "Create a structured admission note matching an IM new-admission brief.",
-      "Preferred section headings: CC, PI/HPI, PMH, Baseline, V/S, PE, Lab, Image, Assessment, Plan, Early course, Pending/To-do.",
-      "Also provide a conciseSummary suitable for the Admission Note Summary field.",
+      "Return exactly two sections: C.C and PI.",
+      "C.C must be one short paragraph, not a list.",
+      "PI must be a clinical case-history paragraph, not bullet points.",
+      "Do not create PMH, Baseline, V/S, PE, Lab, Image, Assessment, Plan, Early course, or Pending sections.",
+      "If PMH, V/S, lab, image, consult, or nursing data are clinically relevant to the admission story, weave them into the PI paragraph.",
+      "Use conciseSummary as a one-sentence admission summary.",
     ],
     admissionSummary: [
       "Create a short attending-rounds admission summary.",
@@ -487,15 +491,23 @@ function documentInstructions(documentType: DocumentType) {
       "Use conciseSummary as the best one-paragraph presentation.",
     ],
     dischargeHospitalCourse: [
-      "Create a hospital course draft for discharge preparation.",
-      "Organize by problem when possible, include important treatments, major tests, complications, current status, and follow-up needs.",
+      "Return exactly one section with heading Hospital Course.",
+      "Write one hospital-course paragraph only, not bullet points and not problem-by-problem headings.",
+      "Include important treatments, major tests, complications, response, current status, and unresolved key issues within that paragraph.",
+      "Do not write discharge medications, follow-up appointments, or separate assessment/plan sections unless they are essential to the course paragraph.",
+      "Keep followUpItems empty unless an item is critical to mention separately.",
     ],
     weeklySummary: [
-      "Create a weekly progress summary from SOAP notes in the selected range.",
-      "Organize by timeline and active problem, include response to treatment, pending items, and current plan.",
+      "Return exactly one section with heading Weekly Summary.",
+      "The content must start exactly with: During this week,",
+      "Write one paragraph only, not bullet points.",
+      "Summarize the selected SOAP notes chronologically with key changes, response to treatment, pending issues, and current plan.",
+      "Keep followUpItems empty unless an item is critical to mention separately.",
     ],
     isbar: [
       "Create an iSBAR handoff note with headings: Identify, Situation, Background, Assessment, Recommendation.",
+      "Review previous events from admission and SOAP history, not only today's note.",
+      "If there were important prior events, red flags, complications, major image/lab findings, procedures, treatment changes, or pending discharge issues, include them in the most relevant iSBAR section.",
       "Include contingency plans, red flags to watch, pending tasks, and when to call senior/attending.",
     ],
   };

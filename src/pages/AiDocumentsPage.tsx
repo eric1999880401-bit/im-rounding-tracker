@@ -50,7 +50,47 @@ function sectionContent(draft: AiDocumentDraft | null, headings: string[]) {
   )?.content.trim() ?? "";
 }
 
+function normalizeParagraph(value: string) {
+  return value
+    .split(/\r?\n/)
+    .map((line) => line.replace(/^[-*•]\s*/, "").trim())
+    .filter(Boolean)
+    .join(" ");
+}
+
+function ensureWeeklyOpening(value: string) {
+  const paragraph = normalizeParagraph(value);
+  if (!paragraph) return "";
+  return paragraph.toLowerCase().startsWith("during this week")
+    ? paragraph.replace(/^during this week/i, "During this week")
+    : `During this week, ${paragraph.charAt(0).toLowerCase()}${paragraph.slice(1)}`;
+}
+
 function formatDocumentDraft(draft: AiDocumentDraft) {
+  if (draft.documentType === "admissionNote") {
+    const cc = normalizeParagraph(sectionContent(draft, ["c.c", "cc", "chief"]));
+    const pi = normalizeParagraph(sectionContent(draft, ["pi", "hpi", "present illness"]));
+    return [
+      "C.C",
+      cc || draft.conciseSummary.trim(),
+      "",
+      "PI",
+      pi || draft.sections.map((section) => section.content).join(" "),
+    ].join("\n").trim();
+  }
+
+  if (draft.documentType === "dischargeHospitalCourse") {
+    return normalizeParagraph(sectionContent(draft, ["hospital course", "course"]) || draft.conciseSummary);
+  }
+
+  if (draft.documentType === "weeklySummary") {
+    return ensureWeeklyOpening(sectionContent(draft, ["weekly summary", "summary"]) || draft.conciseSummary);
+  }
+
+  if (draft.documentType === "admissionSummary") {
+    return normalizeParagraph(draft.conciseSummary || draft.sections.map((section) => section.content).join(" "));
+  }
+
   const lines = [
     draft.title.trim(),
     "",
@@ -150,20 +190,10 @@ function AiDocumentsPage({ patients, dailyNotesByPatient = {}, onSavePatient }: 
     if (documentType === "admissionNote") {
       nextPatient.generatedAdmissionNote = editableText;
       nextPatient.admissionBriefNotes = editableText;
-      nextPatient.admissionBriefFreeText = appendIfBlank(nextPatient.admissionBriefFreeText, summary);
-      nextPatient.chiefComplaint = appendIfBlank(nextPatient.chiefComplaint, sectionContent(draft, ["cc", "chief"]));
+      nextPatient.chiefComplaint = appendIfBlank(nextPatient.chiefComplaint, sectionContent(draft, ["c.c", "cc", "chief"]));
       nextPatient.admissionChiefConcern = appendIfBlank(nextPatient.admissionChiefConcern, nextPatient.chiefComplaint);
-      nextPatient.presentIllnessOrHPI = appendIfBlank(nextPatient.presentIllnessOrHPI, sectionContent(draft, ["hpi", "pi"]));
+      nextPatient.presentIllnessOrHPI = appendIfBlank(nextPatient.presentIllnessOrHPI, sectionContent(draft, ["hpi", "pi", "present illness"]));
       nextPatient.hpiOrAdmissionStory = appendIfBlank(nextPatient.hpiOrAdmissionStory, nextPatient.presentIllnessOrHPI);
-      nextPatient.admissionPMH = appendIfBlank(nextPatient.admissionPMH, sectionContent(draft, ["pmh"]));
-      nextPatient.baselineFunction = appendIfBlank(nextPatient.baselineFunction, sectionContent(draft, ["baseline"]));
-      nextPatient.initialPhysicalExam = appendIfBlank(nextPatient.initialPhysicalExam, sectionContent(draft, ["pe", "physical"]));
-      nextPatient.initialLabs = appendIfBlank(nextPatient.initialLabs, sectionContent(draft, ["lab"]));
-      nextPatient.initialImaging = appendIfBlank(nextPatient.initialImaging, sectionContent(draft, ["image", "imaging", "cxr", "ct", "mri"]));
-      nextPatient.initialAssessment = appendIfBlank(nextPatient.initialAssessment, sectionContent(draft, ["assessment"]));
-      nextPatient.initialPlan = appendIfBlank(nextPatient.initialPlan, sectionContent(draft, ["plan"]));
-      nextPatient.earlyHospitalCourse = appendIfBlank(nextPatient.earlyHospitalCourse, sectionContent(draft, ["course"]));
-      nextPatient.oneLiner = appendIfBlank(nextPatient.oneLiner, summary);
     }
 
     if (documentType === "admissionSummary") {
