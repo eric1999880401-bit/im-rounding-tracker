@@ -284,6 +284,121 @@ textarea {
   min-width: 220px;
 }
 
+.patient-detail-header {
+  display: grid;
+  gap: 10px;
+}
+
+.detail-id-block {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.detail-id-block strong {
+  background: var(--chip-bg);
+  border: 1px solid var(--chip-border);
+  border-radius: 6px;
+  color: var(--chip-text);
+  font-size: 18px;
+  padding: 4px 8px;
+}
+
+.detail-id-block span {
+  color: var(--text);
+  font-weight: 700;
+}
+
+.detail-header-grid {
+  display: grid;
+  gap: 4px 12px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.detail-header-red-flags {
+  background: var(--danger-bg);
+  border: 1px solid var(--danger-text);
+  border-radius: 6px;
+  color: var(--danger-text);
+  display: grid;
+  gap: 4px;
+  padding: 8px;
+}
+
+.detail-date-bar {
+  align-items: end;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.detail-date-bar label,
+.detail-date-controls label {
+  min-width: 180px;
+}
+
+.detail-date-bar p {
+  flex: 1 1 260px;
+  margin: 0;
+}
+
+.detail-tabs-shell {
+  padding: 8px;
+}
+
+.detail-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.detail-tabs button {
+  min-height: 32px;
+  padding: 6px 10px;
+}
+
+.detail-tabs button.active {
+  background: var(--button-bg);
+  color: var(--button-text);
+}
+
+.detail-date-controls {
+  align-items: end;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.auto-summary-panel {
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  display: grid;
+  gap: 10px;
+  padding: 10px;
+}
+
+.auto-summary-grid {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.auto-summary-item {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 8px;
+}
+
+.auto-summary-item strong {
+  color: var(--text);
+}
+
 .filter-row {
   display: flex;
   flex-wrap: wrap;
@@ -1218,6 +1333,7 @@ th {
   .form-grid,
   .task-input-row,
   .presentation-grid,
+  .auto-summary-grid,
   .discharge-checklist,
   .lab-editor-grid,
   .lab-report-meta,

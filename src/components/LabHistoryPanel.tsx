@@ -1,5 +1,5 @@
 import type { DailyNote, Patient } from "../types";
-import { dailyNoteFromPatient } from "../utils";
+import { dailyNoteFromPatient, formatDateLabel, normalizeDateKey } from "../utils";
 import { formatLabItem } from "../utils";
 
 interface LabHistoryPanelProps {
@@ -31,10 +31,26 @@ function LabHistoryPanel({ patient, notes }: LabHistoryPanelProps) {
   const rows = new Map<string, Array<{ date: string; value: string; previousValue?: string }>>();
 
   allNotes.forEach((note) => {
+    const reportsWithItems = note.labReports.filter((report) => report.items.length > 0);
+
+    if (reportsWithItems.length > 0) {
+      reportsWithItems.forEach((report) => {
+        const reportDate = normalizeDateKey(report.date, normalizeDateKey(note.labDate || note.date));
+        report.items.forEach((item) => {
+          const label = item.name || item.label;
+          const values = rows.get(label) ?? [];
+          values.push({ date: reportDate, value: item.value, previousValue: item.previousValue });
+          rows.set(label, values);
+        });
+      });
+      return;
+    }
+
+    const fallbackDate = normalizeDateKey(note.labDate || note.date);
     note.parsedLabItems.forEach((item) => {
       const label = item.name || item.label;
       const values = rows.get(label) ?? [];
-      values.push({ date: note.date, value: item.value, previousValue: item.previousValue });
+      values.push({ date: fallbackDate, value: item.value, previousValue: item.previousValue });
       rows.set(label, values);
     });
   });
@@ -65,7 +81,7 @@ function LabHistoryPanel({ patient, notes }: LabHistoryPanelProps) {
                 <tbody>
                   {ordered.map((item) => (
                     <tr key={`${label}-${item.date}-${item.value}`}>
-                      <td>{item.date}</td>
+                      <td>{formatDateLabel(item.date)}</td>
                       <td>
                         {item.value}
                         {item.previousValue ? ` (prev ${item.previousValue})` : ""}

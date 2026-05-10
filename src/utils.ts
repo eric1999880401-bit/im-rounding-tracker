@@ -33,7 +33,33 @@ export function nowIso() {
 }
 
 export function todayKey() {
-  return new Date().toISOString().slice(0, 10);
+  const today = new Date();
+  const year = today.getFullYear();
+  const month = String(today.getMonth() + 1).padStart(2, "0");
+  const day = String(today.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+export function normalizeDateKey(input: unknown, fallback = todayKey()) {
+  if (input instanceof Date && !Number.isNaN(input.getTime())) {
+    const year = input.getFullYear();
+    const month = String(input.getMonth() + 1).padStart(2, "0");
+    const day = String(input.getDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+  }
+
+  const value = String(input ?? "").trim();
+  const dateMatch = value.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
+  if (dateMatch) {
+    const [, year, month, day] = dateMatch;
+    return `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
+  }
+
+  return fallback;
+}
+
+export function formatDateLabel(dateKey: string) {
+  return normalizeDateKey(dateKey).replace(/-/g, "/");
 }
 
 export function getActivePatients(patients: Patient[]) {
@@ -236,13 +262,241 @@ export function latestDailyNote(notes: DailyNote[]) {
   return [...notes].sort((a, b) => b.date.localeCompare(a.date))[0];
 }
 
+function hasText(value: string | undefined) {
+  return Boolean(value?.trim());
+}
+
+function hasItems<T>(items: T[] | undefined) {
+  return Array.isArray(items) && items.length > 0;
+}
+
+function latestNoteWith(notes: DailyNote[], predicate: (note: DailyNote) => boolean) {
+  return [...notes].filter(predicate).sort((a, b) => b.date.localeCompare(a.date))[0];
+}
+
+export function getLatestNonEmptyDailyNote(notes: DailyNote[]) {
+  return latestNoteWith(notes, (note) =>
+    hasText(note.importantRedFlags) ||
+    hasText(note.overnightEvents) ||
+    hasText(note.subjectiveOrChiefConcern) ||
+    hasText(note.physicalExam) ||
+    hasText(note.labSummary) ||
+    hasText(note.rawLabText) ||
+    hasItems(note.labReports) ||
+    hasItems(note.parsedLabItems) ||
+    hasText(note.imageSummary) ||
+    hasItems(note.imageStudyEntries) ||
+    hasText(note.assessment) ||
+    hasText(note.plan) ||
+    hasItems(note.assessmentPlanItems) ||
+    hasText(note.dischargePlan) ||
+    hasText(note.vsOrder),
+  );
+}
+
+function displayString(
+  patientValue: string,
+  todayNote: DailyNote | undefined,
+  notes: DailyNote[],
+  noteField: keyof DailyNote,
+) {
+  const todayValue = String(todayNote?.[noteField] ?? "");
+  if (hasText(todayValue)) return todayValue;
+  const latestValue = String(latestNoteWith(notes, (note) => hasText(String(note[noteField] ?? "")))?.[noteField] ?? "");
+  if (hasText(latestValue)) return latestValue;
+  return patientValue;
+}
+
+function displayArray<T>(
+  patientValue: T[],
+  todayNote: DailyNote | undefined,
+  notes: DailyNote[],
+  noteField: keyof DailyNote,
+) {
+  if (hasItems(patientValue)) return patientValue;
+  const todayValue = todayNote?.[noteField];
+  if (Array.isArray(todayValue) && todayValue.length > 0) return todayValue as T[];
+  const latestValue = latestNoteWith(notes, (note) => {
+    const value = note[noteField];
+    return Array.isArray(value) && value.length > 0;
+  })?.[noteField];
+  if (Array.isArray(latestValue) && latestValue.length > 0) return latestValue as T[];
+  return patientValue;
+}
+
 export function noteForDateOrFallback(patient: Patient, notes: DailyNote[], date = todayKey()) {
-  return notes.find((note) => note.date === date) ?? latestDailyNote(notes) ?? dailyNoteFromPatient(patient, date);
+  return notes.find((note) => note.date === date) ?? getLatestNonEmptyDailyNote(notes) ?? dailyNoteFromPatient(patient, date);
+}
+
+export function patientForDate(patient: Patient, dailyNotesByPatient: DailyNotesByPatient = {}, date = todayKey()) {
+  const notes = dailyNotesByPatient[patient.id] ?? [];
+  const todayNote = notes.find((note) => note.date === date);
+  const latestLabTextNote = latestNoteWith(notes, (note) => hasText(note.rawLabText) || hasText(note.labSummary));
+  const latestLabItemsNote = latestNoteWith(notes, (note) => hasItems(note.parsedLabItems));
+  const latestLabReportsNote = latestNoteWith(notes, (note) => hasItems(note.labReports));
+
+  return {
+    ...patient,
+    importantRedFlags: displayString(patient.importantRedFlags, todayNote, notes, "importantRedFlags"),
+    overnightEvent: displayString(patient.overnightEvent, todayNote, notes, "overnightEvents"),
+    subjectiveOrChiefConcern: displayString(patient.subjectiveOrChiefConcern, todayNote, notes, "subjectiveOrChiefConcern"),
+    physicalExam: displayString(patient.physicalExam, todayNote, notes, "physicalExam"),
+    newLabs: hasItems(patient.labReports)
+      ? patient.newLabs
+      : displayString(patient.newLabs, todayNote, notes, "labSummary"),
+    rawLabText: hasItems(patient.labReports)
+      ? patient.rawLabText
+      : String(
+          todayNote?.rawLabText?.trim()
+            ? todayNote.rawLabText
+            : todayNote?.labSummary?.trim()
+              ? todayNote.labSummary
+              : latestLabTextNote?.rawLabText?.trim()
+                ? latestLabTextNote.rawLabText
+                : latestLabTextNote?.labSummary ?? patient.rawLabText,
+        ),
+    labDate: todayNote?.labDate || latestLabReportsNote?.labDate || latestLabTextNote?.labDate || patient.labDate,
+    labReportTitle: todayNote?.labReportTitle || latestLabReportsNote?.labReportTitle || latestLabTextNote?.labReportTitle || patient.labReportTitle,
+    labReports: displayArray<LabReport>(patient.labReports, todayNote, notes, "labReports"),
+    parsedLabItems: hasItems(patient.labReports)
+      ? patient.labReports.flatMap((report) => report.items)
+      : hasItems(patient.parsedLabItems)
+      ? patient.parsedLabItems
+      : Array.isArray(todayNote?.parsedLabItems) && todayNote.parsedLabItems.length > 0
+        ? todayNote.parsedLabItems
+        : latestLabItemsNote?.parsedLabItems ?? patient.parsedLabItems,
+    newImaging: hasItems(patient.imageStudyEntries)
+      ? patient.newImaging
+      : displayString(patient.newImaging, todayNote, notes, "imageSummary"),
+    physicalExamEntries: displayArray<PhysicalExamEntry>(patient.physicalExamEntries, todayNote, notes, "physicalExamEntries"),
+    imageStudyEntries: displayArray<ImageStudyEntry>(patient.imageStudyEntries, todayNote, notes, "imageStudyEntries"),
+    assessment: hasItems(patient.assessmentPlanItems)
+      ? patient.assessment
+      : displayString(patient.assessment, todayNote, notes, "assessment"),
+    plan: hasItems(patient.assessmentPlanItems)
+      ? patient.plan
+      : displayString(patient.plan, todayNote, notes, "plan"),
+    assessmentPlanItems: displayArray<AssessmentPlanItem>(patient.assessmentPlanItems, todayNote, notes, "assessmentPlanItems"),
+    dischargePlan: displayString(patient.dischargePlan, todayNote, notes, "dischargePlan"),
+    vsOrder: displayString(patient.vsOrder, todayNote, notes, "vsOrder"),
+  };
 }
 
 export function patientForToday(patient: Patient, dailyNotesByPatient: DailyNotesByPatient = {}) {
+  return patientForDate(patient, dailyNotesByPatient, todayKey());
+}
+
+export interface PatientDisplaySummary {
+  patient: Patient;
+  identity: {
+    bed: string;
+    patientCode: string;
+    age: number;
+    sex: Patient["sex"];
+    attending: string;
+    primaryDiagnosis: string;
+  };
+  redFlags: string;
+  underlyingDiseases: string[];
+  activeProblems: string[];
+  subjective: string;
+  physicalExam: string;
+  physicalExamEntries: PhysicalExamEntry[];
+  latestLabs: {
+    reports: LabReport[];
+    items: ParsedLabItem[];
+    text: string;
+  };
+  latestImages: {
+    text: string;
+    entries: ImageStudyEntry[];
+  };
+  assessmentPlanItems: AssessmentPlanItem[];
+  assessment: string;
+  plan: string;
+  tasks: PatientTask[];
+  dischargeChecklist: {
+    meds: DischargePrepStatus;
+    opd: DischargePrepStatus;
+    certificate: DischargePrepStatus;
+  };
+  dischargePlan: string;
+  dischargeTargetDate: string;
+  admissionSummary: string;
+  sourceLabels: {
+    todayNoteIsEmpty: boolean;
+  };
+}
+
+export function getPatientDisplaySummary(
+  patient: Patient,
+  dailyNotesByPatient: DailyNotesByPatient = {},
+  date = todayKey(),
+): PatientDisplaySummary {
   const notes = dailyNotesByPatient[patient.id] ?? [];
-  return patientWithDailyNote(patient, noteForDateOrFallback(patient, notes, todayKey()));
+  const todayNote = notes.find((note) => note.date === date);
+  const displayPatient = patientForDate(patient, dailyNotesByPatient, date);
+  const latestRedFlagNote = latestNoteWith(notes, (note) => hasText(note.importantRedFlags));
+
+  const redFlags = hasText(todayNote?.importantRedFlags)
+    ? todayNote?.importantRedFlags ?? ""
+    : hasText(patient.importantRedFlags)
+      ? patient.importantRedFlags
+      : latestRedFlagNote?.importantRedFlags ?? "";
+
+  const labReports = hasItems(patient.labReports) ? patient.labReports : displayPatient.labReports;
+  const labItems = hasItems(labReports)
+    ? labReports.flatMap((report) => report.items)
+    : displayPatient.parsedLabItems;
+  const imageEntries = hasItems(patient.imageStudyEntries) ? patient.imageStudyEntries : displayPatient.imageStudyEntries;
+
+  return {
+    patient: {
+      ...displayPatient,
+      importantRedFlags: redFlags,
+      labReports,
+      parsedLabItems: labItems,
+      imageStudyEntries: imageEntries,
+    },
+    identity: {
+      bed: patient.bed,
+      patientCode: patient.patientCode,
+      age: patient.age,
+      sex: patient.sex,
+      attending: patient.attending,
+      primaryDiagnosis: patient.primaryDiagnosis,
+    },
+    redFlags,
+    underlyingDiseases: getUnderlyingDiseaseItems(patient),
+    activeProblems: getActiveProblemItems(patient),
+    subjective: displayPatient.subjectiveOrChiefConcern,
+    physicalExam: displayPatient.physicalExam,
+    physicalExamEntries: hasItems(patient.physicalExamEntries) ? patient.physicalExamEntries : displayPatient.physicalExamEntries,
+    latestLabs: {
+      reports: labReports,
+      items: labItems,
+      text: displayPatient.rawLabText || displayPatient.newLabs,
+    },
+    latestImages: {
+      text: displayPatient.newImaging,
+      entries: imageEntries,
+    },
+    assessmentPlanItems: hasItems(patient.assessmentPlanItems) ? patient.assessmentPlanItems : displayPatient.assessmentPlanItems,
+    assessment: displayPatient.assessment,
+    plan: displayPatient.plan,
+    tasks: patient.tasks,
+    dischargeChecklist: {
+      meds: patient.dischargeMedsStatus,
+      opd: patient.opdAppointmentStatus,
+      certificate: patient.diagnosisCertificateStatus,
+    },
+    dischargePlan: displayPatient.dischargePlan,
+    dischargeTargetDate: patient.dischargeTargetDate,
+    admissionSummary: patient.admissionBriefFreeText || patient.chiefComplaint || patient.presentIllnessOrHPI,
+    sourceLabels: {
+      todayNoteIsEmpty: Boolean(!todayNote && getLatestNonEmptyDailyNote(notes)),
+    },
+  };
 }
 
 export function compactClinicalText(value: string, maxLines = 2, fallback = "-") {
@@ -255,7 +509,7 @@ export function compactClinicalText(value: string, maxLines = 2, fallback = "-")
 }
 
 function todayDate() {
-  return new Date().toISOString().slice(0, 10);
+  return todayKey();
 }
 
 const labValuePattern = "([<>]?[0-9]+(?:\\.[0-9]+)?%?\\+?)";
@@ -564,7 +818,7 @@ export function emptyPatient(): Patient {
     hospitalCourseHighlights: "",
     importantRedFlags: "",
     rawLabText: "",
-    labDate: new Date().toISOString().slice(0, 10),
+    labDate: todayKey(),
     labReportTitle: "",
     labReports: [],
     parsedLabItems: [],

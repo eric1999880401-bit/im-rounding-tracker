@@ -204,6 +204,7 @@ function App() {
             <PatientDetailPage
               patients={patients}
               dailyNotesByPatient={dailyNotesByPatient}
+              dataLoading={dataLoading}
               onSavePatient={saveSyncedPatient}
               onSaveDailyNote={saveSyncedDailyNote}
             />

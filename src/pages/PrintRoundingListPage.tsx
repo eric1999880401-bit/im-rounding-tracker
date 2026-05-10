@@ -1,17 +1,19 @@
 import { useState } from "react";
+import type { ReactNode } from "react";
 import type { DailyNotesByPatient, MiscTask, Patient, PhonebookContact, PrintDensity, SortMode, StudyTopic } from "../types";
 import {
   getActiveProblemItems,
   getActiveAttendingNames,
   getActivePatients,
+  getPatientDisplaySummary,
   getUnderlyingDiseaseItems,
   groupPatientsByAttending,
-  hasUrgentPendingTask,
   dischargePrepText,
-  patientForToday,
+  formatDateLabel,
+  plainClinicalText,
   sortPatients,
 } from "../utils";
-import { ClinicalText, CompactItemList } from "../components/ClinicalText";
+import { ClinicalText } from "../components/ClinicalText";
 import { LabChips } from "../components/LabChips";
 import AssessmentPlanDisplay from "../components/AssessmentPlanDisplay";
 import ActiveProblemDisplay from "../components/ActiveProblemDisplay";
@@ -37,8 +39,6 @@ function PrintRoundingListPage({
   const [admissionBriefPrintMode, setAdmissionBriefPrintMode] = useState("newAdmissions");
   const [selectedAttending, setSelectedAttending] = useState("");
   const [hideCompletedTasks, setHideCompletedTasks] = useState(true);
-  const [hideStableDetails, setHideStableDetails] = useState(false);
-  const [showOnlyActiveProblems, setShowOnlyActiveProblems] = useState(false);
   const [density, setDensity] = useState<PrintDensity>("compact");
   const [sortMode, setSortMode] = useState<SortMode>("bed");
   const [team, setTeam] = useState("Team A");
@@ -49,18 +49,15 @@ function PrintRoundingListPage({
   const [includeStudyTopics, setIncludeStudyTopics] = useState(true);
   const attendingNames = getActiveAttendingNames(patients);
   const filteredActivePatients = getActivePatients(patients)
-    .map((patient) => patientForToday(patient, dailyNotesByPatient))
+    .map((patient) => getPatientDisplaySummary(patient, dailyNotesByPatient).patient)
     .filter((patient) => printMode !== "selected" || patient.attending.trim() === selectedAttending);
   const activePatients = sortPatients(filteredActivePatients, sortMode);
   const groupedPatients = groupPatientsByAttending(activePatients);
   const todayText = new Date().toLocaleDateString();
   const shouldPrintCompactList = admissionBriefPrintMode !== "briefsOnly";
-  const unfinishedMiscTasks = includeMiscTasks ? miscTasks.filter((task) => !task.done).slice(0, 6) : [];
-  const openStudyTopics = includeStudyTopics ? studyTopics.filter((topic) => !topic.done).slice(0, 5) : [];
-  const printContacts = includePhonebook ? [...phonebook].sort((a, b) => Number(b.isImportant) - Number(a.isImportant)).slice(0, 8) : [];
-  const moreContacts = includePhonebook ? Math.max(phonebook.length - printContacts.length, 0) : 0;
-  const moreMiscTasks = includeMiscTasks ? Math.max(miscTasks.filter((task) => !task.done).length - unfinishedMiscTasks.length, 0) : 0;
-  const moreStudyTopics = includeStudyTopics ? Math.max(studyTopics.filter((topic) => !topic.done).length - openStudyTopics.length, 0) : 0;
+  const unfinishedMiscTasks = includeMiscTasks ? miscTasks.filter((task) => !task.done) : [];
+  const openStudyTopics = includeStudyTopics ? studyTopics.filter((topic) => !topic.done) : [];
+  const printContacts = includePhonebook ? [...phonebook].sort((a, b) => Number(b.isImportant) - Number(a.isImportant)) : [];
 
   function admissionBriefPatients() {
     if (admissionBriefPrintMode === "newAdmissions") {
@@ -78,62 +75,45 @@ function PrintRoundingListPage({
     return [];
   }
 
-  const selectedAdmissionBriefPatients = admissionBriefPatients();
+  const selectedAdmissionBriefCandidates = admissionBriefPatients();
+  const selectedAdmissionBriefPatients = selectedAdmissionBriefCandidates.filter(hasMeaningfulAdmissionBrief);
+  const emptyAdmissionBriefPatients = selectedAdmissionBriefCandidates.filter((patient) => !hasMeaningfulAdmissionBrief(patient));
 
-  function taskText(patient: Patient) {
-    const tasks = hideCompletedTasks ? patient.tasks.filter((task) => !task.done) : patient.tasks;
-
-    if (tasks.length === 0) return "None";
-
-    return tasks.map((task) => (
-      <div
-        key={task.id}
-        className={`print-task ${task.done ? "task-done" : ""} ${
-          task.text.trim().startsWith("!") || task.priority === "urgent" ? "important-line" : ""
-        }`}
-      >
-        {task.priority === "urgent" ? "[URGENT] " : ""}
-        {task.text.trim().startsWith("!") ? task.text.trim().slice(1).trim() : task.text}
-        {task.dueDate ? ` (${task.dueDate})` : ""}
-      </div>
-    ));
+  function hasMeaningfulAdmissionBrief(patient: Patient) {
+    return Boolean(
+      (patient.chiefComplaint || patient.admissionChiefConcern).trim() ||
+        (patient.presentIllnessOrHPI || patient.hpiOrAdmissionStory).trim() ||
+        patient.admissionBriefFreeText.trim(),
+    );
   }
 
-  function structuredPeSummary(patient: Patient) {
-    return patient.physicalExamEntries
-      .filter((entry) => entry.finding.trim() || entry.system.trim())
-      .map((entry) => (
-        <span className={`objective-chip ${entry.isImportant ? "important-objective-chip" : ""}`} key={entry.id}>
-          {entry.date && <span className="objective-chip-label">{entry.date}</span>}
-          {entry.system && <span className="objective-chip-label">{entry.system}</span>}
-          {entry.finding || entry.note}
-        </span>
-      ));
+  function compactText(value: string) {
+    const text = plainClinicalText(value, "");
+    return text === "-" ? "" : text;
   }
 
-  function structuredImageSummary(patient: Patient) {
-    return patient.imageStudyEntries
-      .filter((entry) => entry.impression.trim() || entry.finding.trim() || entry.studyType.trim())
-      .map((entry) => (
-        <span className={`objective-chip ${entry.isImportant ? "important-objective-chip" : ""}`} key={entry.id}>
-          {entry.date && <span className="objective-chip-label">{entry.date}</span>}
-          {entry.studyType && <span className="objective-chip-label">{entry.studyType}</span>}
-          {entry.impression || entry.finding || entry.note}
-        </span>
-      ));
+  function inlineList(items: string[]) {
+    return items.map((item) => item.trim()).filter(Boolean).join("; ");
   }
 
-  function labReportSummary(patient: Patient) {
+  function labReportGroups(patient: Patient) {
     const reportsWithItems = patient.labReports.filter((report) => report.items.length > 0);
-    if (reportsWithItems.length === 0) return <LabChips items={patient.parsedLabItems} />;
+    const reports = reportsWithItems.length > 0 ? reportsWithItems : [{ id: "legacy", date: patient.labDate, title: "", rawText: "", items: patient.parsedLabItems }];
 
-    const dateCount = new Set(reportsWithItems.map((report) => report.date)).size;
+    return reports
+      .filter((report) => report.items.length > 0)
+      .map((report) => ({ ...report, date: formatDateLabel(report.date || patient.labDate) }));
+  }
+
+  function labReportChips(patient: Patient) {
+    const labGroups = labReportGroups(patient);
+    if (labGroups.length === 0) return null;
+
     return (
-      <div className="print-lab-report-list">
-        {reportsWithItems.map((report) => (
-          <div className="print-lab-report-group" key={report.id}>
-            {dateCount > 1 && <span className="print-lab-date">{report.date}</span>}
-            {dateCount <= 1 && report.title && <span className="print-lab-date">{report.title}</span>}
+      <div className="print-lab-groups">
+        {labGroups.map((report) => (
+          <div className="print-lab-group" key={report.id}>
+            <span className="print-lab-date">{report.date}</span>
             <LabChips items={report.items} />
           </div>
         ))}
@@ -141,16 +121,35 @@ function PrintRoundingListPage({
     );
   }
 
-  function isStableForPrint(patient: Patient) {
+  function imageLines(patient: Patient) {
+    const structured = patient.imageStudyEntries
+      .filter((entry) => entry.impression.trim() || entry.finding.trim() || entry.studyType.trim())
+      .map((entry) => [entry.date, entry.studyType, entry.impression || entry.finding || entry.note].filter(Boolean).join(" "));
+    return [compactText(patient.newImaging), ...structured].filter(Boolean);
+  }
+
+  function peSummaryText(patient: Patient) {
+    const structured = patient.physicalExamEntries
+      .filter((entry) => entry.finding.trim() || entry.system.trim())
+      .map((entry) => [entry.system, entry.finding || entry.note].filter(Boolean).join(" "));
+    return inlineList([compactText(patient.physicalExam), ...structured]);
+  }
+
+  function taskSummaryText(patient: Patient) {
+    const tasks = hideCompletedTasks ? patient.tasks.filter((task) => !task.done) : patient.tasks;
+    return tasks
+      .map((task) => `${task.priority === "urgent" ? "[URGENT] " : ""}${task.text.trim().startsWith("!") ? task.text.trim().slice(1).trim() : task.text}${task.dueDate ? ` (${task.dueDate})` : ""}`)
+      .filter(Boolean)
+      .join("; ");
+  }
+
+  function fieldLine(label: string, value: ReactNode) {
+    if (typeof value === "string" && !value.trim()) return null;
     return (
-      !hasUrgentPendingTask(patient) &&
-      !patient.importantRedFlags.trim() &&
-      !patient.overnightEvent.trim() &&
-      !patient.subjectiveOrChiefConcern.trim() &&
-      !patient.physicalExam.trim() &&
-      !patient.newLabs.trim() &&
-      !patient.newImaging.trim()
-      );
+      <div className="print-field-line">
+        <strong>{label}:</strong> {value}
+      </div>
+    );
   }
 
   function renderPrintSection(sectionPatients: Patient[], sectionAttending: string, startNewPage = false) {
@@ -183,9 +182,9 @@ function PrintRoundingListPage({
           {(unfinishedMiscTasks.length > 0 || openStudyTopics.length > 0 || printContacts.length > 0) && (
             <div className="print-general-notes">
               <strong>{t("print.generalNotes")}</strong>
-              {printContacts.length > 0 && <span>{t("print.phonebook")}: {printContacts.map((contact) => `${contact.name || contact.roleOrUnit} ${contact.phone}`).join("; ")}{moreContacts ? `; +${moreContacts} more` : ""}</span>}
-              {unfinishedMiscTasks.length > 0 && <span>{t("print.miscTasks")}: {unfinishedMiscTasks.map((task) => task.text).join("; ")}{moreMiscTasks ? `; +${moreMiscTasks} more` : ""}</span>}
-              {openStudyTopics.length > 0 && <span>{t("print.studyTopics")}: {openStudyTopics.map((topic) => topic.topic).join("; ")}{moreStudyTopics ? `; +${moreStudyTopics} more` : ""}</span>}
+              {printContacts.length > 0 && <span>{t("print.phonebook")}: {printContacts.map((contact) => `${contact.name || contact.roleOrUnit} ${contact.phone}`).join("; ")}</span>}
+              {unfinishedMiscTasks.length > 0 && <span>{t("print.miscTasks")}: {unfinishedMiscTasks.map((task) => task.text).join("; ")}</span>}
+              {openStudyTopics.length > 0 && <span>{t("print.studyTopics")}: {openStudyTopics.map((topic) => topic.topic).join("; ")}</span>}
             </div>
           )}
         </div>
@@ -204,94 +203,63 @@ function PrintRoundingListPage({
             </tr>
           </thead>
           <tbody>
-            {sectionPatients.map((patient) => (
-              <tr className="patient-print-row" key={patient.id}>
-                <td className="print-bed">{patient.bed}</td>
-                <td>
-                  <strong>{patient.patientCode}</strong>
-                  <br />
-                  {patient.age} / {patient.sex}
-                </td>
-                <td>
-                  {patient.importantRedFlags && (
-                    <div className="print-red-flags">
-                      <strong>Red Flags:</strong> <ClinicalText value={patient.importantRedFlags} importantDefault />
-                    </div>
-                  )}
-                  {!showOnlyActiveProblems && <strong>{patient.primaryDiagnosis || "-"}</strong>}
-                  <div>
-                    <strong>PMH:</strong> <CompactItemList items={getUnderlyingDiseaseItems(patient)} />
-                  </div>
-                  <div>
-                    <strong>Problems:</strong>{" "}
-                    <ActiveProblemDisplay
-                      items={patient.activeProblemStructuredItems}
-                      fallbackItems={getActiveProblemItems(patient)}
+            {sectionPatients.map((patient) => {
+              const images = imageLines(patient);
+              return (
+                <tr className="patient-print-row" key={patient.id}>
+                  <td className="print-bed">{patient.bed}</td>
+                  <td>
+                    <strong>{patient.patientCode}</strong>
+                    <br />
+                    {patient.age}/{patient.sex}
+                    {patient.attending && <div>Att: {patient.attending}</div>}
+                  </td>
+                  <td>
+                    {patient.importantRedFlags.trim() && (
+                      <div className="print-red-flags">
+                        <strong>Red Flags:</strong> {compactText(patient.importantRedFlags)}
+                      </div>
+                    )}
+                    {fieldLine("Dx", patient.primaryDiagnosis)}
+                    {fieldLine("PMH", getUnderlyingDiseaseItems(patient).join(", "))}
+                    {getActiveProblemItems(patient).length > 0 && (
+                      <div className="print-field-line">
+                        <strong>Problems:</strong>{" "}
+                        <ActiveProblemDisplay
+                          items={patient.activeProblemStructuredItems}
+                          fallbackItems={getActiveProblemItems(patient)}
+                        />
+                      </div>
+                    )}
+                  </td>
+                  <td>
+                    {fieldLine("S", compactText(patient.subjectiveOrChiefConcern))}
+                    {fieldLine("PE", peSummaryText(patient))}
+                  </td>
+                  <td>
+                    {labReportChips(patient)}
+                    {images.length > 0 && fieldLine("Img", images.join("; "))}
+                  </td>
+                  <td>
+                    <AssessmentPlanDisplay
+                      items={patient.assessmentPlanItems}
+                      legacyAssessment={patient.assessment}
+                      legacyPlan={patient.plan}
                     />
-                  </div>
-                  {printMode === "all" && (
-                    <div>
-                      <strong>Att:</strong> {patient.attending || "-"}
+                  </td>
+                  <td>{taskSummaryText(patient)}</td>
+                  <td>
+                    {fieldLine("DC", patient.dischargeTargetDate)}
+                    {fieldLine("Plan", compactText(patient.dischargePlan))}
+                    {fieldLine("Barrier", patient.dischargeBarriers)}
+                    <div className="print-field-line">
+                      <strong>DC prep:</strong> {dischargePrepText(patient)}
                     </div>
-                  )}
-                </td>
-                <td>
-                  {shouldHideDetails(patient) ? (
-                    <span className="muted">Stable; no new data</span>
-                  ) : (
-                    <>
-                      <div>
-                        <strong>S:</strong> <ClinicalText value={patient.subjectiveOrChiefConcern} />
-                      </div>
-                      <div>
-                        <strong>PE:</strong> <ClinicalText value={patient.physicalExam} />
-                        <div className="objective-chip-row">{structuredPeSummary(patient)}</div>
-                      </div>
-                    </>
-                  )}
-                </td>
-                <td>
-                  <div>
-                    <strong>Lab:</strong> {labReportSummary(patient)}
-                  </div>
-                  <div>
-                    <strong>Img:</strong> <ClinicalText value={patient.newImaging} />
-                    <div className="objective-chip-row">{structuredImageSummary(patient)}</div>
-                  </div>
-                </td>
-                <td>
-                  {shouldHideDetails(patient) ? (
-                    <span className="muted">See Dx/problems</span>
-                  ) : (
-                    <>
-                      <AssessmentPlanDisplay
-                        items={patient.assessmentPlanItems}
-                        legacyAssessment={patient.assessment}
-                        legacyPlan={patient.plan}
-                      />
-                    </>
-                  )}
-                </td>
-                <td>{taskText(patient)}</td>
-                <td>
-                  <div>
-                    <strong>Target:</strong> {patient.dischargeTargetDate || "TBD"}
-                  </div>
-                  <div>
-                    <strong>Plan:</strong> <ClinicalText value={patient.dischargePlan} />
-                  </div>
-                  <div>
-                    <strong>Barrier:</strong> {patient.dischargeBarriers || "-"}
-                  </div>
-                  <div>
-                    <strong>DC prep:</strong> {dischargePrepText(patient)}
-                  </div>
-                  <div>
-                    <strong>VS:</strong> <ClinicalText value={patient.vsOrder} />
-                  </div>
-                </td>
-              </tr>
-            ))}
+                    {fieldLine("VS", compactText(patient.vsOrder))}
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </section>
@@ -339,10 +307,6 @@ function PrintRoundingListPage({
         </div>
       </section>
     );
-  }
-
-  function shouldHideDetails(patient: Patient) {
-    return hideStableDetails && isStableForPrint(patient);
   }
 
   return (
@@ -426,28 +390,10 @@ function PrintRoundingListPage({
           Hide completed tasks
         </label>
 
-        <label className="checkbox-label">
-          <input
-            type="checkbox"
-            checked={hideStableDetails}
-            onChange={(event) => setHideStableDetails(event.target.checked)}
-          />
-          Hide stable patients' detailed notes
-        </label>
-
-        <label className="checkbox-label">
-          <input
-            type="checkbox"
-            checked={showOnlyActiveProblems}
-            onChange={(event) => setShowOnlyActiveProblems(event.target.checked)}
-          />
-          Show only active problems
-        </label>
-
         <label>
           Density
           <select value={density} onChange={(event) => setDensity(event.target.value as PrintDensity)}>
-            <option value="normal">Normal</option>
+            <option value="normal">Detailed</option>
             <option value="compact">Compact</option>
             <option value="ultra-compact">Ultra-compact</option>
           </select>
@@ -464,19 +410,26 @@ function PrintRoundingListPage({
           <input type="checkbox" checked={includeStudyTopics} onChange={(event) => setIncludeStudyTopics(event.target.checked)} />
           Include study topics
         </label>
+        <p className="muted span-2">
+          Compact mode preserves details using tighter layout. If the census or notes are long, the printout may continue to a second page.
+        </p>
       </section>
 
       {admissionBriefPrintMode !== "compact" && (
         <section className="panel no-print">
           <h3>Admission Brief Print Preview</h3>
           {selectedAdmissionBriefPatients.length === 0 ? (
-            <p className="muted">No admission briefs selected for print.</p>
+            <p className="muted">
+              No admission briefs selected for print.
+              {emptyAdmissionBriefPatients.length > 0 && " Admission summary is empty and will not be printed."}
+            </p>
           ) : (
             <p>
               Admission briefs to be printed:{" "}
               {selectedAdmissionBriefPatients
                 .map((patient) => `Bed ${patient.bed || "-"} / Patient code ${patient.patientCode || "-"}`)
                 .join(", ")}
+              {emptyAdmissionBriefPatients.length > 0 && " Some selected admission summaries are empty and will not be printed."}
             </p>
           )}
         </section>

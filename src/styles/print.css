@@ -2,23 +2,65 @@
   background: white;
 }
 
+.print-page {
+  --print-font-size: 6.2pt;
+  --print-small-font-size: 5.8pt;
+  --print-chip-font-size: 5.8pt;
+  --print-line-height: 1.08;
+  --print-section-title-size: 6.5pt;
+  --print-card-padding: 1px 2px;
+  --print-cell-padding: 2px;
+}
+
+.density-normal {
+  --print-font-size: 6.2pt;
+  --print-small-font-size: 5.8pt;
+  --print-chip-font-size: 5.8pt;
+  --print-line-height: 1.08;
+  --print-section-title-size: 6.5pt;
+  --print-card-padding: 1px 2px;
+  --print-cell-padding: 2px;
+}
+
+.density-compact {
+  --print-font-size: 5.9pt;
+  --print-small-font-size: 5.5pt;
+  --print-chip-font-size: 5.5pt;
+  --print-line-height: 1.05;
+  --print-section-title-size: 6.2pt;
+  --print-card-padding: 1px 2px;
+  --print-cell-padding: 1.5px;
+}
+
+.density-ultra-compact {
+  --print-font-size: 5.5pt;
+  --print-small-font-size: 5.2pt;
+  --print-chip-font-size: 5.2pt;
+  --print-line-height: 1.02;
+  --print-section-title-size: 5.8pt;
+  --print-card-padding: 0 1.5px;
+  --print-cell-padding: 1px;
+}
+
 .print-title {
   border: 1px solid #1f2933;
   border-bottom: 0;
   display: grid;
-  gap: 5px;
-  padding: 8px 10px;
+  font-size: var(--print-font-size);
+  gap: 1px;
+  line-height: var(--print-line-height);
+  padding: var(--print-card-padding);
 }
 
 .print-title h1 {
-  font-size: 20px;
-  line-height: 1.1;
+  font-size: calc(var(--print-section-title-size) + 1pt);
+  line-height: 1.05;
   margin: 0;
 }
 
 .print-title p {
   color: #b42318;
-  font-size: 12px;
+  font-size: var(--print-small-font-size);
   font-weight: 700;
   margin: 0;
 }
@@ -26,7 +68,7 @@
 .print-meta-grid {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px 14px;
+  gap: 1px 8px;
   max-width: 100%;
 }
 
@@ -34,15 +76,18 @@
   background: white;
   border: 1px solid #1f2933;
   table-layout: fixed;
+  width: 100%;
 }
 
 .rounding-table th,
 .rounding-table td {
   border: 1px solid #1f2933;
-  line-height: 1.28;
+  font-size: var(--print-font-size);
+  line-height: var(--print-line-height);
   max-width: 0;
   min-width: 0;
   overflow-wrap: break-word;
+  padding: var(--print-cell-padding);
   vertical-align: top;
   word-break: normal;
 }
@@ -58,7 +103,7 @@
 }
 
 .print-task + .print-task {
-  margin-top: 2px;
+  margin-top: 1px;
 }
 
 .rounding-table .important-line {
@@ -69,14 +114,16 @@
 .rounding-table .clinical-card,
 .print-admission-brief .clinical-card {
   background: transparent;
-  border: 1px solid #cbd5e1;
-  border-radius: 3px;
+  border: 0.5px solid #cbd5e1;
+  border-radius: 1px;
   display: block;
   max-width: 100%;
   min-width: 0;
-  margin-top: 2px;
+  font-size: inherit;
+  line-height: var(--print-line-height);
+  margin-top: 1px;
   overflow-wrap: break-word;
-  padding: 2px 4px;
+  padding: var(--print-card-padding);
   white-space: normal;
   width: 100%;
   word-break: normal;
@@ -85,7 +132,7 @@
 .rounding-table .clinical-card-main-row,
 .print-admission-brief .clinical-card-main-row {
   display: flex;
-  gap: 3px;
+  gap: 1px;
   min-width: 0;
   width: 100%;
 }
@@ -103,7 +150,7 @@
 .print-admission-brief .clinical-card-child {
   display: block;
   overflow-wrap: break-word;
-  padding-left: 14px;
+  padding-left: 6px;
   white-space: normal;
   width: 100%;
   word-break: normal;
@@ -125,8 +172,8 @@
 
 .rounding-table .clinical-mark,
 .print-admission-brief .clinical-mark {
-  border: 1px solid currentColor;
-  border-radius: 2px;
+  border: 0.5px solid currentColor;
+  border-radius: 1px;
   font-weight: 800;
   padding: 0 1px;
 }
@@ -162,30 +209,36 @@
 }
 
 .print-red-flags {
-  border: 1px solid #b42318;
+  border: 0.5px solid #b42318;
   color: #b42318 !important;
   font-weight: 800;
-  margin-bottom: 3px;
-  padding: 2px;
+  font-size: var(--print-font-size);
+  line-height: var(--print-line-height);
+  margin-bottom: 1px;
+  padding: var(--print-card-padding);
 }
 
 .rounding-table .ap-display,
 .print-admission-brief .ap-display {
   display: grid;
-  gap: 2px;
+  gap: 1px;
 }
 
 .rounding-table .ap-display-card,
 .print-admission-brief .ap-display-card {
   background: transparent;
-  border: 1px solid #94a3b8;
-  border-radius: 3px;
-  break-inside: avoid;
+  border: 0.5px solid #94a3b8;
+  border-radius: 1px;
+  break-inside: auto;
   display: grid;
-  gap: 1px;
+  gap: 0;
   max-width: 100%;
   min-width: 0;
-  padding: 2px 3px;
+  font-size: var(--print-font-size);
+  line-height: var(--print-line-height);
+  margin: 0 0 1px;
+  page-break-inside: auto;
+  padding: var(--print-card-padding);
 }
 
 .rounding-table .important-ap-card,
@@ -202,7 +255,7 @@
 .print-admission-brief .ap-evidence-line,
 .print-admission-brief .ap-plan-line {
   display: flex;
-  gap: 2px;
+  gap: 1px;
   min-width: 0;
   overflow-wrap: break-word;
   word-break: normal;
@@ -210,31 +263,56 @@
 
 .rounding-table .ap-evidence-line,
 .rounding-table .ap-plan-line {
-  padding-left: 10px;
+  padding-left: 5px;
 }
 
 .rounding-table .ap-underlying-group,
 .print-admission-brief .ap-underlying-group {
-  border-top: 1px solid #94a3b8;
+  border-top: 0.5px solid #94a3b8;
   display: grid;
-  gap: 1px;
-  margin-top: 2px;
-  padding-top: 2px;
+  gap: 0;
+  margin-top: 1px;
+  padding-top: 1px;
 }
 
 .rounding-table .lab-chip,
 .print-admission-brief .lab-chip {
   background: transparent;
-  border: 1px solid #94a3b8;
-  border-radius: 3px;
+  border: 0.5px solid #999;
+  border-radius: 1px;
   color: black;
   display: inline-flex;
+  font-size: var(--print-chip-font-size);
+  line-height: 1.02;
+  margin: 0 1px 1px 0;
   max-width: 100%;
   min-width: 0;
   overflow-wrap: break-word;
-  padding: 1px 3px;
+  padding: 0 2px;
   white-space: normal;
   word-break: normal;
+}
+
+.rounding-table .lab-chip-name,
+.rounding-table .lab-chip-value,
+.rounding-table .lab-chip-unit,
+.rounding-table .lab-chip-prev,
+.print-admission-brief .lab-chip-name,
+.print-admission-brief .lab-chip-value,
+.print-admission-brief .lab-chip-unit,
+.print-admission-brief .lab-chip-prev {
+  font-size: var(--print-chip-font-size);
+  line-height: 1.02;
+}
+
+.rounding-table .lab-chip-name,
+.print-admission-brief .lab-chip-name {
+  font-weight: 700;
+}
+
+.rounding-table .lab-chip-value,
+.print-admission-brief .lab-chip-value {
+  font-weight: 700;
 }
 
 .rounding-table .lab-chip-row,
@@ -243,18 +321,18 @@
 .print-admission-brief .objective-chip-row {
   display: flex;
   flex-wrap: wrap;
-  gap: 2px;
+  gap: 0;
   max-height: none;
   overflow: visible;
 }
 
 .rounding-table .print-lab-report-list {
   display: grid;
-  gap: 2px;
+  gap: 1px;
 }
 
 .rounding-table .print-lab-report-group {
-  break-inside: avoid;
+  break-inside: auto;
   display: block;
   max-width: 100%;
   min-width: 0;
@@ -263,25 +341,27 @@
 .rounding-table .print-lab-date {
   color: #374151 !important;
   display: inline-block;
-  font-size: 9px;
+  font-size: var(--print-chip-font-size);
   font-weight: 800;
-  margin-right: 3px;
+  line-height: 1.02;
+  margin-right: 2px;
 }
 
 .rounding-table .objective-chip,
 .print-admission-brief .objective-chip {
   background: transparent;
-  border: 1px solid #94a3b8;
-  border-radius: 3px;
+  border: 0.5px solid #94a3b8;
+  border-radius: 1px;
   color: black;
   display: inline-flex;
   flex-wrap: wrap;
-  gap: 2px;
+  font-size: var(--print-chip-font-size);
+  gap: 1px;
   margin-top: 1px;
   max-width: 100%;
   min-width: 0;
   overflow-wrap: break-word;
-  padding: 1px 3px;
+  padding: 0 2px;
   white-space: normal;
   word-break: normal;
 }
@@ -312,24 +392,72 @@
   padding: 0;
 }
 
+.rounding-table .active-problem-chip {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  display: inline;
+  font-size: inherit;
+  padding: 0;
+}
+
+.rounding-table .active-problem-chip + .active-problem-chip::before {
+  content: "; ";
+}
+
+.rounding-table .clinical-number-badge {
+  background: transparent;
+  border: 0;
+  color: inherit;
+  font-size: inherit;
+  padding: 0;
+}
+
+.rounding-table .ap-section-label,
+.print-admission-brief .ap-section-label {
+  background: transparent;
+  border: 0;
+  color: inherit;
+  display: inline;
+  font-size: var(--print-small-font-size);
+  font-weight: 800;
+  margin: 0;
+  padding: 0;
+}
+
+.rounding-table .ap-display-title strong,
+.print-admission-brief .ap-display-title strong {
+  font-size: var(--print-font-size);
+  line-height: var(--print-line-height);
+}
+
+.print-field-line {
+  margin-bottom: 1px;
+  overflow-wrap: break-word;
+  word-break: normal;
+}
+
 .print-attending-section + .print-attending-section {
-  margin-top: 18px;
+  margin-top: 6px;
 }
 
 .print-admission-brief {
   background: white;
   border: 1px solid #1f2933;
   break-inside: avoid;
-  margin-top: 14px;
+  font-size: var(--print-font-size);
+  line-height: var(--print-line-height);
+  margin-top: 10px;
   page-break-inside: avoid;
-  padding: 10px;
+  padding: var(--print-card-padding);
 }
 
 .print-briefs-heading {
   background: white;
   border: 1px solid #1f2933;
   margin-top: 14px;
-  padding: 8px 10px;
+  font-size: var(--print-font-size);
+  padding: var(--print-card-padding);
 }
 
 .print-briefs-heading h1,
@@ -339,8 +467,170 @@
 
 .print-briefs-heading p {
   color: #b42318;
-  font-size: 12px;
+  font-size: var(--print-small-font-size);
   font-weight: 700;
+}
+
+.print-general-notes {
+  border: 0;
+  font-size: var(--print-small-font-size);
+  line-height: var(--print-line-height);
+  padding: 0;
+}
+
+.print-general-notes span {
+  display: inline;
+}
+
+.print-general-notes span + span::before {
+  content: " | ";
+}
+
+.print-patient-list {
+  border: 1px solid #1f2933;
+  display: grid;
+  gap: 0;
+}
+
+.print-patient-block {
+  background: white;
+  border-bottom: 1px solid #94a3b8;
+  break-inside: auto;
+  color: black;
+  display: grid;
+  gap: 3px;
+  line-height: var(--print-line-height);
+  padding: var(--print-cell-padding);
+  page-break-inside: auto;
+}
+
+.print-patient-block:last-child {
+  border-bottom: 0;
+}
+
+.print-patient-header {
+  align-items: baseline;
+  display: flex;
+  flex-wrap: wrap;
+  font-size: calc(var(--print-font-size) + 0.5pt);
+  font-weight: 700;
+  gap: 2px 8px;
+  line-height: var(--print-line-height);
+}
+
+.print-summary-grid {
+  display: grid;
+  gap: 3px;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr);
+}
+
+.print-section-box {
+  background: #f8fafc;
+  border: 1px solid #cbd5e1;
+  border-radius: 2px;
+  break-inside: auto;
+  display: block;
+  padding: var(--print-card-padding);
+  page-break-inside: auto;
+}
+
+.print-section-title {
+  border-bottom: 1px solid #d9e2ec;
+  color: #111827;
+  font-size: var(--print-small-font-size);
+  font-weight: 900;
+  line-height: var(--print-line-height);
+  margin-bottom: 1px;
+  padding-bottom: 1px;
+  text-transform: uppercase;
+}
+
+.print-block-field {
+  font-size: var(--print-font-size);
+  line-height: var(--print-line-height);
+  margin-top: 1px;
+  overflow-wrap: break-word;
+  white-space: normal;
+  word-break: normal;
+}
+
+.print-block-field strong {
+  font-size: var(--print-small-font-size);
+  font-weight: 900;
+}
+
+.print-red-flags-inline {
+  color: #b42318 !important;
+  font-weight: 800;
+}
+
+.print-lab-groups {
+  display: grid;
+  gap: 2px;
+}
+
+.print-lab-group {
+  display: block;
+  line-height: 1.05;
+  margin-bottom: 1px;
+  overflow-wrap: break-word;
+  word-break: normal;
+}
+
+.print-lab-date {
+  display: inline-block;
+  font-size: var(--print-chip-font-size);
+  font-weight: 900;
+  line-height: 1.05;
+  margin-right: 3px;
+  vertical-align: baseline;
+}
+
+.print-lab-chip-row {
+  display: inline;
+}
+
+.print-lab-chip {
+  background: #f8f8f8;
+  border: 0.5px solid #777;
+  border-radius: 2px;
+  color: #111827;
+  display: inline-block;
+  font-size: var(--print-chip-font-size);
+  line-height: 1.05;
+  margin: 1px;
+  padding: 1px 3px;
+  white-space: nowrap;
+}
+
+.print-lab-chip.important {
+  border-color: #b42318;
+  color: #b42318 !important;
+  font-weight: 800;
+}
+
+.print-ap-section {
+  grid-column: 1 / -1;
+}
+
+.print-ap-problem {
+  border: 1px solid #d9e2ec;
+  border-radius: 2px;
+  break-inside: auto;
+  line-height: var(--print-line-height);
+  margin-top: 1px;
+  padding: 1px 2px;
+  page-break-inside: auto;
+}
+
+.print-ap-problem + .print-ap-problem {
+  margin-top: 2px;
+}
+
+.print-ap-important {
+  border-color: #b42318;
+  color: #b42318 !important;
+  font-weight: 800;
 }
 
 .brief-title {
@@ -355,12 +645,12 @@
 }
 
 .brief-title h2 {
-  font-size: 16px;
+  font-size: var(--print-section-title-size);
 }
 
 .brief-grid {
   display: grid;
-  gap: 8px 12px;
+  gap: 4px 8px;
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
@@ -373,72 +663,14 @@
   margin-bottom: 2px;
 }
 
-.density-normal .print-title {
-  font-size: 12px;
-}
-
-.density-normal .rounding-table th,
-.density-normal .rounding-table td {
-  font-size: 11px;
-  padding: 6px;
-}
-
-.density-compact .print-title {
-  font-size: 10px;
-}
-
-.density-compact .rounding-table th,
-.density-compact .rounding-table td {
-  font-size: 9px;
-  padding: 4px;
-}
-
-.density-ultra-compact .print-title {
-  font-size: 9px;
-}
-
-.density-ultra-compact .print-title h1 {
-  font-size: 16px;
-}
-
-.density-ultra-compact .rounding-table th,
-.density-ultra-compact .rounding-table td {
-  font-size: 7.8px;
-  line-height: 1.18;
-  padding: 2px 3px;
-}
-
-.rounding-table th:nth-child(1) {
-  width: 5%;
-}
-
-.rounding-table th:nth-child(2) {
-  width: 8%;
-}
-
-.rounding-table th:nth-child(3) {
-  width: 15%;
-}
-
-.rounding-table th:nth-child(4) {
-  width: 14%;
-}
-
-.rounding-table th:nth-child(5) {
-  width: 16%;
-}
-
-.rounding-table th:nth-child(6) {
-  width: 13%;
-}
-
-.rounding-table th:nth-child(7) {
-  width: 14%;
-}
-
-.rounding-table th:nth-child(8) {
-  width: 15%;
-}
+.rounding-table th:nth-child(1) { width: 4.5%; }
+.rounding-table th:nth-child(2) { width: 7%; }
+.rounding-table th:nth-child(3) { width: 14%; }
+.rounding-table th:nth-child(4) { width: 12%; }
+.rounding-table th:nth-child(5) { width: 18%; }
+.rounding-table th:nth-child(6) { width: 18%; }
+.rounding-table th:nth-child(7) { width: 12%; }
+.rounding-table th:nth-child(8) { width: 14.5%; }
 
 @page {
   size: A4 landscape;
@@ -488,8 +720,20 @@
     color: black !important;
   }
 
+  .print-section-box {
+    background-color: #f8fafc !important;
+  }
+
+  .print-ap-problem,
+  .print-lab-chip {
+    background-color: white !important;
+  }
+
   .print-red-flags,
   .print-red-flags *,
+  .print-red-flags-inline,
+  .print-red-flags-inline *,
+  .print-lab-chip.important,
   .important-line,
   .important-clinical-card,
   .important-lab-chip,
@@ -505,24 +749,22 @@
 
   .print-admission-brief {
     break-before: auto;
-    font-size: 9px;
     margin-top: 8mm;
     page-break-before: auto;
   }
 
   .print-sheet + .print-admission-brief {
-    break-before: page;
-    page-break-before: always;
+    break-before: auto;
+    page-break-before: auto;
   }
 
   .print-briefs-heading {
-    font-size: 10px;
     margin-top: 0;
   }
 
   .print-sheet + .print-briefs-heading {
-    break-before: page;
-    page-break-before: always;
+    break-before: auto;
+    page-break-before: auto;
   }
 
   .print-briefs-heading + .print-admission-brief {
@@ -534,15 +776,7 @@
   .print-title {
     break-after: avoid;
     page-break-after: avoid;
-    padding: 4px 6px;
-  }
-
-  .print-title h1 {
-    font-size: 13px;
-  }
-
-  .print-title p {
-    font-size: 8px;
+    padding: var(--print-card-padding);
   }
 
   .print-meta-grid {
@@ -558,12 +792,15 @@
     display: table-header-group;
   }
 
-  .patient-print-row,
-  .rounding-table tr,
-  .rounding-table td,
   .rounding-table th {
     break-inside: avoid;
     page-break-inside: avoid;
+  }
+
+  .rounding-table tr,
+  .rounding-table td {
+    break-inside: auto;
+    page-break-inside: auto;
   }
 
   .rounding-table th,
@@ -571,22 +808,10 @@
     color: black;
   }
 
-  .density-normal .rounding-table th,
-  .density-normal .rounding-table td {
-    font-size: 9.5px;
-    padding: 4px;
-  }
-
-  .density-compact .rounding-table th,
-  .density-compact .rounding-table td {
-    font-size: 8.5px;
-    padding: 3px;
-  }
-
-  .density-ultra-compact .rounding-table th,
-  .density-ultra-compact .rounding-table td {
-    font-size: 7.2px;
-    line-height: 1.12;
-    padding: 2px;
+  .rounding-table th,
+  .rounding-table td {
+    font-size: var(--print-font-size);
+    line-height: var(--print-line-height);
+    padding: var(--print-cell-padding);
   }
 }

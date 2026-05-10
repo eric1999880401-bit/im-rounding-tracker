@@ -9,6 +9,7 @@ interface PatientFormProps {
   onChange: (patient: Patient) => void;
   onSubmit: () => void;
   submitLabel: string;
+  showClinicalSections?: boolean;
   onCancel?: () => void;
   onFieldBlur?: () => void;
   onCompositionStart?: () => void;
@@ -20,6 +21,7 @@ function PatientForm({
   onChange,
   onSubmit,
   submitLabel,
+  showClinicalSections = true,
   onCancel,
   onFieldBlur,
   onCompositionStart,
@@ -174,40 +176,44 @@ function PatientForm({
         {t("action.includeBrief")}
       </label>
 
-      <label className="span-2">
-        {t("field.pmh")}
-        <textarea
-          value={patient.underlyingDiseases}
-          onChange={(event) => updateUnderlyingDiseases(event.target.value)}
-          onBlur={commitOnBlur}
-          onCompositionStart={onCompositionStart}
-          onCompositionEnd={handleCompositionEnd}
-          placeholder="Example: DM, HTN, CKD, CAD, old CVA"
-        />
-      </label>
+      {showClinicalSections && (
+        <>
+          <label className="span-2">
+            {t("field.pmh")}
+            <textarea
+              value={patient.underlyingDiseases}
+              onChange={(event) => updateUnderlyingDiseases(event.target.value)}
+              onBlur={commitOnBlur}
+              onCompositionStart={onCompositionStart}
+              onCompositionEnd={handleCompositionEnd}
+              placeholder="Example: DM, HTN, CKD, CAD, old CVA"
+            />
+          </label>
 
-      <label className="span-2">
-        {t("field.primaryDiagnosis")}
-        <input
-          value={patient.primaryDiagnosis}
-          onChange={(event) => updateField("primaryDiagnosis", event.target.value)}
-          onBlur={commitOnBlur}
-          onCompositionStart={onCompositionStart}
-          onCompositionEnd={handleCompositionEnd}
-        />
-      </label>
+          <label className="span-2">
+            {t("field.primaryDiagnosis")}
+            <input
+              value={patient.primaryDiagnosis}
+              onChange={(event) => updateField("primaryDiagnosis", event.target.value)}
+              onBlur={commitOnBlur}
+              onCompositionStart={onCompositionStart}
+              onCompositionEnd={handleCompositionEnd}
+            />
+          </label>
 
-      <div className="span-2">
-        <ActiveProblemEditor
-          legacyText={patient.activeProblems}
-          items={patient.activeProblemStructuredItems}
-          onLegacyTextChange={updateActiveProblems}
-          onItemsChange={(items) => updateField("activeProblemStructuredItems", items)}
-          onFieldBlur={commitOnBlur}
-          onCompositionStart={onCompositionStart}
-          onCompositionEnd={handleCompositionEnd}
-        />
-      </div>
+          <div className="span-2">
+            <ActiveProblemEditor
+              legacyText={patient.activeProblems}
+              items={patient.activeProblemStructuredItems}
+              onLegacyTextChange={updateActiveProblems}
+              onItemsChange={(items) => updateField("activeProblemStructuredItems", items)}
+              onFieldBlur={commitOnBlur}
+              onCompositionStart={onCompositionStart}
+              onCompositionEnd={handleCompositionEnd}
+            />
+          </div>
+        </>
+      )}
 
       <div className="form-actions span-2">
         <button type="submit">{submitLabel}</button>

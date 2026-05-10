@@ -20,7 +20,7 @@ import type {
   PhysicalExamEntry,
 } from "../types";
 import { db } from "./firebase";
-import { parseLabReports, parseLabText, textToItems } from "../utils";
+import { normalizeDateKey, parseLabReports, parseLabText, textToItems } from "../utils";
 
 function patientsCollection(uid: string) {
   return collection(db, "users", uid, "patients");
@@ -69,15 +69,16 @@ function normalizeParsedLabItem(item: Record<string, unknown>) {
   };
 }
 
-function normalizeLabReport(report: Partial<LabReport>): LabReport {
+function normalizeLabReport(report: Partial<LabReport>, fallbackDate = normalizeDateKey(undefined)): LabReport {
+  const date = normalizeDateKey(report.date, normalizeDateKey(fallbackDate));
   return {
     id: report.id ?? "",
-    date: report.date ?? "",
+    date,
     title: report.title ?? "",
     rawText: report.rawText ?? "",
     items: Array.isArray(report.items)
       ? report.items.map((item) => normalizeParsedLabItem(item as unknown as Record<string, unknown>))
-      : parseLabText(report.rawText ?? ""),
+      : parseLabReports(report.rawText ?? "", date, report.title ?? "").flatMap((nextReport) => nextReport.items),
   };
 }
 
@@ -133,7 +134,7 @@ function normalizeActiveProblemItem(item: Partial<ActiveProblemItem>, index: num
 
 function normalizeDailyNote(date: string, data: Partial<DailyNote>): DailyNote {
   return {
-    date: data.date ?? date,
+    date: normalizeDateKey(data.date ?? date, date),
     importantRedFlags: data.importantRedFlags ?? "",
     overnightEvents: data.overnightEvents ?? "",
     subjectiveOrChiefConcern: data.subjectiveOrChiefConcern ?? "",
@@ -145,11 +146,11 @@ function normalizeDailyNote(date: string, data: Partial<DailyNote>): DailyNote {
     dischargePlan: data.dischargePlan ?? "",
     vsOrder: data.vsOrder ?? "",
     rawLabText: data.rawLabText ?? data.labSummary ?? "",
-    labDate: data.labDate ?? date,
+    labDate: normalizeDateKey(data.labDate ?? date, date),
     labReportTitle: data.labReportTitle ?? "",
     labReports: Array.isArray(data.labReports)
-      ? data.labReports.map((report) => normalizeLabReport(report as Partial<LabReport>))
-      : parseLabReports(data.rawLabText ?? data.labSummary ?? "", data.labDate ?? date, data.labReportTitle ?? ""),
+      ? data.labReports.map((report) => normalizeLabReport(report as Partial<LabReport>, data.labDate ?? date))
+      : parseLabReports(data.rawLabText ?? data.labSummary ?? "", normalizeDateKey(data.labDate ?? date, date), data.labReportTitle ?? ""),
     parsedLabItems: Array.isArray(data.parsedLabItems)
       ? data.parsedLabItems.map((item) => normalizeParsedLabItem(item as unknown as Record<string, unknown>))
       : parseLabText(data.rawLabText ?? data.labSummary ?? ""),
@@ -213,11 +214,11 @@ function normalizePatient(patientId: string, data: Partial<Patient>): Patient {
     hospitalCourseHighlights: data.hospitalCourseHighlights ?? "",
     importantRedFlags: data.importantRedFlags ?? "",
     rawLabText: data.rawLabText ?? data.newLabs ?? "",
-    labDate: data.labDate ?? new Date().toISOString().slice(0, 10),
+    labDate: normalizeDateKey(data.labDate),
     labReportTitle: data.labReportTitle ?? "",
     labReports: Array.isArray(data.labReports)
-      ? data.labReports.map((report) => normalizeLabReport(report as Partial<LabReport>))
-      : parseLabReports(data.rawLabText ?? data.newLabs ?? "", data.labDate ?? new Date().toISOString().slice(0, 10), data.labReportTitle ?? ""),
+      ? data.labReports.map((report) => normalizeLabReport(report as Partial<LabReport>, data.labDate))
+      : parseLabReports(data.rawLabText ?? data.newLabs ?? "", normalizeDateKey(data.labDate), data.labReportTitle ?? ""),
     parsedLabItems: Array.isArray(data.parsedLabItems)
       ? data.parsedLabItems.map((item) => normalizeParsedLabItem(item as unknown as Record<string, unknown>))
       : parseLabText(data.rawLabText ?? data.newLabs ?? ""),

@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from "react";
 import type { LabReport, ParsedLabItem } from "../types";
-import { parseLabReports } from "../utils";
+import { normalizeDateKey, parseLabReports } from "../utils";
 import { findLabDictionaryItem, searchLabDictionary } from "../data/labDictionary";
 import { LabChips } from "./LabChips";
 import { useT } from "../i18n";
@@ -35,11 +35,7 @@ function emptyDraft(): ParsedLabItem {
 }
 
 function normalizeDateForStorage(date: string) {
-  const trimmedDate = date.trim();
-  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmedDate)) return trimmedDate;
-  const parsedDate = new Date(trimmedDate);
-  if (!Number.isNaN(parsedDate.getTime())) return parsedDate.toISOString().slice(0, 10);
-  return new Date().toISOString().slice(0, 10);
+  return normalizeDateKey(date);
 }
 
 function reportTitleForStorage(title: string) {

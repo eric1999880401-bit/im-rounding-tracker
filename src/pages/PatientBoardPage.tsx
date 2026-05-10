@@ -7,12 +7,12 @@ import {
   getActiveProblemItems,
   getActiveAttendingNames,
   getActivePatients,
+  getPatientDisplaySummary,
   getUnderlyingDiseaseItems,
   hasUpcomingDischarge,
   importantLines,
   nowIso,
   pendingDischargePrep,
-  patientForToday,
   sortPatients,
 } from "../utils";
 import PatientForm from "../components/PatientForm";
@@ -46,7 +46,7 @@ function PatientBoardPage({
   const activePatients = sortPatients(
     getActivePatients(patients).filter(
       (patient) => attendingFilter === "all" || patient.attending.trim() === attendingFilter,
-    ).map((patient) => patientForToday(patient, dailyNotesByPatient)),
+    ).map((patient) => getPatientDisplaySummary(patient, dailyNotesByPatient).patient),
     sortMode,
   );
   const dischargeAlerts = activePatients
