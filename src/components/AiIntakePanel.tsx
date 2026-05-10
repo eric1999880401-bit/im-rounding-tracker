@@ -65,6 +65,7 @@ interface ReviewCard {
   kind: ReviewCardKind;
   valueType: "string" | "json";
   valueText: string;
+  originalValue: unknown;
   status: ReviewStatus;
   isEditing: boolean;
 }
@@ -81,7 +82,32 @@ function hasText(value: unknown) {
 
 function stringifyValue(value: unknown, valueType: ReviewCard["valueType"]) {
   if (valueType === "string") return String(value ?? "");
-  return JSON.stringify(value, null, 2);
+  return JSON.stringify(toReviewValue(value), null, 2);
+}
+
+function toReviewValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(toReviewValue);
+  if (!value || typeof value !== "object") return value;
+
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([key]) => key !== "isImportant")
+      .map(([key, nextValue]) => [key, toReviewValue(nextValue)]),
+  );
+}
+
+function mergeWithOriginalValue(originalValue: unknown, editedValue: unknown): unknown {
+  if (Array.isArray(originalValue) || Array.isArray(editedValue)) return editedValue;
+  if (
+    originalValue &&
+    typeof originalValue === "object" &&
+    editedValue &&
+    typeof editedValue === "object"
+  ) {
+    return { ...originalValue, ...editedValue };
+  }
+
+  return editedValue;
 }
 
 function appendUniqueLines(existing: string, additions: string[]) {
@@ -198,6 +224,7 @@ function buildCards(draft: AiSoapDraft): ReviewCard[] {
       kind,
       valueType,
       valueText: stringifyValue(value, valueType),
+      originalValue: value,
       status: "pending",
       isEditing: false,
     });
@@ -231,7 +258,7 @@ function buildCards(draft: AiSoapDraft): ReviewCard[] {
 
 function parseCardValue(card: ReviewCard) {
   if (card.valueType === "string") return card.valueText.trim();
-  return JSON.parse(card.valueText) as unknown;
+  return mergeWithOriginalValue(card.originalValue, JSON.parse(card.valueText) as unknown);
 }
 
 function getErrorMessage(error: unknown) {
