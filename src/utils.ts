@@ -787,6 +787,7 @@ export function emptyPatient(): Patient {
     id: createId("p"),
     bed: "",
     patientCode: "",
+    oneLiner: "",
     age: 0,
     sex: "M",
     underlyingDiseases: "",
@@ -841,6 +842,7 @@ export function emptyPatient(): Patient {
     vsOrder: "",
     status: "active",
     tasks: [],
+    aiThinkingPrompts: [],
     createdAt: now,
     updatedAt: now,
   };

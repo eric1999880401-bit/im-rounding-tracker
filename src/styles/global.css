@@ -929,6 +929,103 @@ input[type="checkbox"] {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+/* ============================================================
+   AI Intake
+   ============================================================ */
+
+.ai-intake-panel {
+  display: grid;
+  gap: 16px;
+}
+
+.ai-warning {
+  background: var(--warning-bg);
+  border: 1px solid var(--warning-border);
+  border-left: 3px solid var(--warning-text);
+  border-radius: var(--radius-sm);
+  color: var(--warning-text);
+  padding: 10px 12px;
+}
+
+.ai-intake-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(180px, 260px) minmax(0, 1fr);
+}
+
+.ai-raw-textarea {
+  min-height: 220px;
+}
+
+.ai-checkbox {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.ai-cost-note {
+  color: var(--text-muted);
+  font-size: 12.5px;
+}
+
+.ai-draft-review {
+  display: grid;
+  gap: 18px;
+}
+
+.ai-review-section {
+  display: grid;
+  gap: 10px;
+}
+
+.ai-review-section h4 {
+  margin: 0;
+}
+
+.ai-review-card-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+}
+
+.ai-review-card {
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+}
+
+.ai-review-card-accepted {
+  border-color: var(--success-border);
+}
+
+.ai-review-card-ignored {
+  opacity: 0.62;
+}
+
+.ai-review-card-saved {
+  background: var(--success-bg);
+  border-color: var(--success-border);
+}
+
+.ai-review-card-header {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+}
+
+.ai-review-card textarea {
+  font-family: var(--font-sans);
+  min-height: 116px;
+  resize: vertical;
+  white-space: pre-wrap;
+}
+
 .auto-summary-item {
   background: var(--surface);
   border: 1px solid var(--border);
@@ -2284,6 +2381,7 @@ tbody tr:last-child td {
   .task-input-row,
   .presentation-grid,
   .auto-summary-grid,
+  .ai-intake-grid,
   .discharge-checklist,
   .lab-editor-grid,
   .lab-report-meta,

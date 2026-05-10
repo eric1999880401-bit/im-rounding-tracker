@@ -5,11 +5,13 @@ import PatientForm from "../components/PatientForm";
 import AdmissionBriefForm from "../components/AdmissionBriefForm";
 import DailyNoteForm from "../components/DailyNoteForm";
 import TaskList from "../components/TaskList";
+import AiIntakePanel from "../components/AiIntakePanel";
 import { ClinicalText } from "../components/ClinicalText";
 import LabHistoryPanel from "../components/LabHistoryPanel";
 import ActiveProblemEditor from "../components/ActiveProblemEditor";
 import {
   IconAdmission,
+  IconAiIntake,
   IconAssessment,
   IconHistory,
   IconInfo,
@@ -41,7 +43,7 @@ interface PageProps {
   onSaveDailyNote: (patientId: string, note: DailyNote) => Promise<void>;
 }
 
-type DetailTab = "subjective" | "quick" | "objective" | "assessmentPlan" | "tasksDischarge" | "admission" | "history" | "info";
+type DetailTab = "subjective" | "quick" | "objective" | "assessmentPlan" | "tasksDischarge" | "aiIntake" | "admission" | "history" | "info";
 
 type DetailTabIcon = (props: React.SVGProps<SVGSVGElement>) => React.ReactElement;
 
@@ -51,6 +53,7 @@ const detailTabs: Array<{ id: DetailTab; labelKey: string; shortKey: string; Ico
   { id: "objective", labelKey: "detail.tabs.objective", shortKey: "detail.tabs.short.objective", Icon: IconObjective },
   { id: "assessmentPlan", labelKey: "detail.tabs.assessmentPlan", shortKey: "detail.tabs.short.assessmentPlan", Icon: IconAssessment },
   { id: "tasksDischarge", labelKey: "detail.tabs.tasksDischarge", shortKey: "detail.tabs.short.tasksDischarge", Icon: IconTasks },
+  { id: "aiIntake", labelKey: "detail.tabs.aiIntake", shortKey: "detail.tabs.short.aiIntake", Icon: IconAiIntake },
   { id: "admission", labelKey: "detail.tabs.admission", shortKey: "detail.tabs.short.admission", Icon: IconAdmission },
   { id: "history", labelKey: "detail.tabs.history", shortKey: "detail.tabs.short.history", Icon: IconHistory },
   { id: "info", labelKey: "detail.tabs.info", shortKey: "detail.tabs.short.info", Icon: IconInfo },
@@ -160,6 +163,10 @@ function PatientDetailPage({
   async function createSelectedDateNote() {
     if (!draftRef.current) return;
     await commitDraft(draftRef.current);
+  }
+
+  async function applyAiIntakePatient(nextPatient: Patient) {
+    await commitDraft(nextPatient);
   }
 
   async function dittoSelectedNote() {
@@ -488,6 +495,14 @@ function PatientDetailPage({
             </section>
           )}
         </>
+      )}
+
+      {activeTab === "aiIntake" && (
+        <AiIntakePanel
+          patient={currentPatient}
+          selectedDate={selectedDate}
+          onApplyPatient={applyAiIntakePatient}
+        />
       )}
 
       {activeTab === "admission" && (

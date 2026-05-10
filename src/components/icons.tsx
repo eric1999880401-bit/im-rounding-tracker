@@ -86,6 +86,16 @@ export function IconInfo(props: SVGProps<SVGSVGElement>) {
   );
 }
 
+export function IconAiIntake(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...baseProps} {...props}>
+      <path d="M12 3l1.2 3.4L16.5 8l-3.3 1.6L12 13l-1.2-3.4L7.5 8l3.3-1.6L12 3z" />
+      <path d="M5 14l.8 2.2L8 17l-2.2.8L5 20l-.8-2.2L2 17l2.2-.8L5 14z" />
+      <path d="M18 13l.9 2.5L21.5 17l-2.6 1.5L18 21l-.9-2.5L14.5 17l2.6-1.5L18 13z" />
+    </svg>
+  );
+}
+
 export function IconDetails(props: SVGProps<SVGSVGElement>) {
   return (
     <svg {...baseProps} {...props}>

@@ -13,6 +13,7 @@ import {
 import type {
   AssessmentPlanItem,
   ActiveProblemItem,
+  AiThinkingPrompt,
   DailyNote,
   ImageStudyEntry,
   LabReport,
@@ -133,6 +134,16 @@ function normalizeActiveProblemItem(item: Partial<ActiveProblemItem>, index: num
   };
 }
 
+function normalizeAiThinkingPrompt(item: Partial<AiThinkingPrompt>): AiThinkingPrompt {
+  return {
+    id: item.id ?? "",
+    prompt: item.prompt ?? "",
+    reason: item.reason ?? "",
+    kind: item.kind === "uncertainty" ? "uncertainty" : "thinkingPrompt",
+    createdAt: item.createdAt ?? "",
+  };
+}
+
 function normalizeDailyNote(date: string, data: Partial<DailyNote>): DailyNote {
   return {
     date: normalizeDateKey(data.date ?? date, date),
@@ -176,6 +187,7 @@ function normalizePatient(patientId: string, data: Partial<Patient>): Patient {
     id: data.id ?? patientId,
     bed: data.bed ?? "",
     patientCode: data.patientCode ?? "",
+    oneLiner: data.oneLiner ?? "",
     age: data.age ?? 0,
     sex: data.sex ?? "M",
     underlyingDiseases: data.underlyingDiseases ?? "",
@@ -250,6 +262,9 @@ function normalizePatient(patientId: string, data: Partial<Patient>): Patient {
     vsOrder: data.vsOrder ?? "",
     status: data.status ?? "active",
     tasks: Array.isArray(data.tasks) ? data.tasks.map(normalizeTask) : [],
+    aiThinkingPrompts: Array.isArray(data.aiThinkingPrompts)
+      ? data.aiThinkingPrompts.map((item) => normalizeAiThinkingPrompt(item as Partial<AiThinkingPrompt>))
+      : [],
     createdAt: data.createdAt ?? "",
     updatedAt: data.updatedAt ?? "",
   };

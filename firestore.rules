@@ -5,6 +5,11 @@ service cloud.firestore {
     match /users/{userId}/patients/{patientId} {
       allow read, create, update, delete: if request.auth != null
         && request.auth.uid == userId;
+
+      match /{document=**} {
+        allow read, create, update, delete: if request.auth != null
+          && request.auth.uid == userId;
+      }
     }
   }
 }
