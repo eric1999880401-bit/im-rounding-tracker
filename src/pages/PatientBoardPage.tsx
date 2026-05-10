@@ -20,6 +20,14 @@ import { ClinicalText, CompactItemList } from "../components/ClinicalText";
 import { LabChips } from "../components/LabChips";
 import AssessmentPlanDisplay from "../components/AssessmentPlanDisplay";
 import ActiveProblemDisplay from "../components/ActiveProblemDisplay";
+import {
+  IconArchive,
+  IconBrief,
+  IconCreateToday,
+  IconDetails,
+  IconDischarge,
+  IconStar,
+} from "../components/icons";
 import { useT } from "../i18n";
 
 interface PageProps {
@@ -372,27 +380,68 @@ function PatientBoardPage({
                   </td>
                   <td className="table-actions">
                     <div className="board-action-buttons">
-                      <Link className="button-link" to={`/patients/${patient.id}`}>
-                        {t("action.details")}
+                      <Link
+                        className="button-link icon-button"
+                        to={`/patients/${patient.id}`}
+                        aria-label={t("action.details")}
+                        title={t("action.details")}
+                      >
+                        <span className="icon-button-icon"><IconDetails /></span>
+                        <span className="icon-button-label">{t("board.actionShort.details")}</span>
                       </Link>
-                      <button type="button" className="secondary" onClick={() => startToday(patient.id)}>
-                        {t("action.createToday")}
-                      </button>
-                      <button type="button" className="secondary" onClick={() => setNewAdmission(patient.id, !patient.isNewAdmission)}>
-                        {patient.isNewAdmission ? t("board.unmarkNew") : t("action.markNew")}
+                      <button
+                        type="button"
+                        className="secondary icon-button"
+                        onClick={() => startToday(patient.id)}
+                        aria-label={t("action.createToday")}
+                        title={t("action.createToday")}
+                      >
+                        <span className="icon-button-icon"><IconCreateToday /></span>
+                        <span className="icon-button-label">{t("board.actionShort.createToday")}</span>
                       </button>
                       <button
                         type="button"
-                        className="secondary"
-                        onClick={() => setAdmissionBriefPrint(patient.id, !patient.showAdmissionBriefOnPrint)}
+                        className={`secondary icon-button${patient.isNewAdmission ? " icon-button-active" : ""}`}
+                        onClick={() => setNewAdmission(patient.id, !patient.isNewAdmission)}
+                        aria-label={patient.isNewAdmission ? t("board.unmarkNew") : t("action.markNew")}
+                        title={patient.isNewAdmission ? t("board.unmarkNew") : t("action.markNew")}
                       >
-                        {patient.showAdmissionBriefOnPrint ? t("board.excludeBrief") : t("action.includeBrief")}
+                        <span className="icon-button-icon"><IconStar /></span>
+                        <span className="icon-button-label">
+                          {patient.isNewAdmission ? t("board.actionShort.unmarkNew") : t("board.actionShort.markNew")}
+                        </span>
                       </button>
-                      <button type="button" onClick={() => updateStatus(patient.id, "discharged")}>
-                        {t("action.discharge")}
+                      <button
+                        type="button"
+                        className={`secondary icon-button${patient.showAdmissionBriefOnPrint ? " icon-button-active" : ""}`}
+                        onClick={() => setAdmissionBriefPrint(patient.id, !patient.showAdmissionBriefOnPrint)}
+                        aria-label={patient.showAdmissionBriefOnPrint ? t("board.excludeBrief") : t("action.includeBrief")}
+                        title={patient.showAdmissionBriefOnPrint ? t("board.excludeBrief") : t("action.includeBrief")}
+                      >
+                        <span className="icon-button-icon"><IconBrief /></span>
+                        <span className="icon-button-label">
+                          {patient.showAdmissionBriefOnPrint ? t("board.actionShort.excludeBrief") : t("board.actionShort.includeBrief")}
+                        </span>
                       </button>
-                      <button type="button" className="secondary" onClick={() => updateStatus(patient.id, "archived")}>
-                        {t("action.archive")}
+                      <button
+                        type="button"
+                        className="icon-button"
+                        onClick={() => updateStatus(patient.id, "discharged")}
+                        aria-label={t("action.discharge")}
+                        title={t("action.discharge")}
+                      >
+                        <span className="icon-button-icon"><IconDischarge /></span>
+                        <span className="icon-button-label">{t("board.actionShort.discharge")}</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="secondary icon-button"
+                        onClick={() => updateStatus(patient.id, "archived")}
+                        aria-label={t("action.archive")}
+                        title={t("action.archive")}
+                      >
+                        <span className="icon-button-icon"><IconArchive /></span>
+                        <span className="icon-button-label">{t("board.actionShort.archive")}</span>
                       </button>
                     </div>
                   </td>

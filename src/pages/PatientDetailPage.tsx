@@ -8,6 +8,16 @@ import TaskList from "../components/TaskList";
 import { ClinicalText } from "../components/ClinicalText";
 import LabHistoryPanel from "../components/LabHistoryPanel";
 import ActiveProblemEditor from "../components/ActiveProblemEditor";
+import {
+  IconAdmission,
+  IconAssessment,
+  IconHistory,
+  IconInfo,
+  IconObjective,
+  IconQuickUpdate,
+  IconSubjective,
+  IconTasks,
+} from "../components/icons";
 import { useT } from "../i18n";
 import {
   dailyNoteFromPatient,
@@ -33,15 +43,17 @@ interface PageProps {
 
 type DetailTab = "subjective" | "quick" | "objective" | "assessmentPlan" | "tasksDischarge" | "admission" | "history" | "info";
 
-const detailTabs: Array<{ id: DetailTab; labelKey: string }> = [
-  { id: "quick", labelKey: "detail.tabs.quick" },
-  { id: "subjective", labelKey: "detail.tabs.subjective" },
-  { id: "objective", labelKey: "detail.tabs.objective" },
-  { id: "assessmentPlan", labelKey: "detail.tabs.assessmentPlan" },
-  { id: "tasksDischarge", labelKey: "detail.tabs.tasksDischarge" },
-  { id: "admission", labelKey: "detail.tabs.admission" },
-  { id: "history", labelKey: "detail.tabs.history" },
-  { id: "info", labelKey: "detail.tabs.info" },
+type DetailTabIcon = (props: React.SVGProps<SVGSVGElement>) => React.ReactElement;
+
+const detailTabs: Array<{ id: DetailTab; labelKey: string; shortKey: string; Icon: DetailTabIcon }> = [
+  { id: "quick", labelKey: "detail.tabs.quick", shortKey: "detail.tabs.short.quick", Icon: IconQuickUpdate },
+  { id: "subjective", labelKey: "detail.tabs.subjective", shortKey: "detail.tabs.short.subjective", Icon: IconSubjective },
+  { id: "objective", labelKey: "detail.tabs.objective", shortKey: "detail.tabs.short.objective", Icon: IconObjective },
+  { id: "assessmentPlan", labelKey: "detail.tabs.assessmentPlan", shortKey: "detail.tabs.short.assessmentPlan", Icon: IconAssessment },
+  { id: "tasksDischarge", labelKey: "detail.tabs.tasksDischarge", shortKey: "detail.tabs.short.tasksDischarge", Icon: IconTasks },
+  { id: "admission", labelKey: "detail.tabs.admission", shortKey: "detail.tabs.short.admission", Icon: IconAdmission },
+  { id: "history", labelKey: "detail.tabs.history", shortKey: "detail.tabs.short.history", Icon: IconHistory },
+  { id: "info", labelKey: "detail.tabs.info", shortKey: "detail.tabs.short.info", Icon: IconInfo },
 ];
 
 function PatientDetailPage({
@@ -335,18 +347,27 @@ function PatientDetailPage({
 
       <section className="panel detail-tabs-shell">
         <div className="detail-tabs" role="tablist" aria-label="Patient detail sections">
-          {detailTabs.map((tab) => (
-            <button
-              type="button"
-              className={activeTab === tab.id ? "active" : "secondary"}
-              key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
-              role="tab"
-              aria-selected={activeTab === tab.id}
-            >
-              {t(tab.labelKey)}
-            </button>
-          ))}
+          {detailTabs.map((tab) => {
+            const TabIcon = tab.Icon;
+            const fullLabel = t(tab.labelKey);
+            return (
+              <button
+                type="button"
+                className={`detail-tab${activeTab === tab.id ? " active" : ""}`}
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id)}
+                role="tab"
+                aria-selected={activeTab === tab.id}
+                aria-label={fullLabel}
+                title={fullLabel}
+              >
+                <span className="detail-tab-icon">
+                  <TabIcon />
+                </span>
+                <span className="detail-tab-label">{t(tab.shortKey)}</span>
+              </button>
+            );
+          })}
         </div>
       </section>
 
