@@ -26,6 +26,17 @@ function trendPoints(values: number[]) {
     .join(" ");
 }
 
+function uniqueLabRows(values: Array<{ date: string; value: string; previousValue?: string }>) {
+  const seen = new Set<string>();
+
+  return values.filter((item) => {
+    const key = [item.date, item.value, item.previousValue ?? ""].join("|");
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 function LabHistoryPanel({ patient, notes }: LabHistoryPanelProps) {
   const allNotes = notes.length > 0 ? notes : [dailyNoteFromPatient(patient)];
   const rows = new Map<string, Array<{ date: string; value: string; previousValue?: string }>>();
@@ -63,7 +74,7 @@ function LabHistoryPanel({ patient, notes }: LabHistoryPanelProps) {
       {groups.length === 0 && <p className="muted">No parsed lab history yet.</p>}
       <div className="lab-history-grid">
         {groups.map(([label, values]) => {
-          const ordered = [...values].sort((a, b) => a.date.localeCompare(b.date));
+          const ordered = uniqueLabRows([...values]).sort((a, b) => a.date.localeCompare(b.date));
           const numericValues = ordered.map((item) => numericValue(item.value)).filter((value): value is number => value !== null);
           const formattedLabel = formatLabItem({ label, value: ordered[ordered.length - 1]?.value ?? "" }).label;
 

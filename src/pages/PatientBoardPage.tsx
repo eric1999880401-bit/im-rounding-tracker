@@ -20,6 +20,7 @@ import { ClinicalText, CompactItemList } from "../components/ClinicalText";
 import { LabChips } from "../components/LabChips";
 import AssessmentPlanDisplay from "../components/AssessmentPlanDisplay";
 import ActiveProblemDisplay from "../components/ActiveProblemDisplay";
+import { useT } from "../i18n";
 
 interface PageProps {
   patients: Patient[];
@@ -38,6 +39,7 @@ function PatientBoardPage({
   onCreatePatient,
   onSavePatient,
 }: PageProps) {
+  const t = useT();
   const [showForm, setShowForm] = useState(false);
   const [draftPatient, setDraftPatient] = useState<Patient>(emptyPatient());
   const [sortMode, setSortMode] = useState<SortMode>("bed");
@@ -176,10 +178,10 @@ function PatientBoardPage({
     <div className="page">
       <header className="page-header">
         <div>
-          <h2>Patient Board</h2>
+          <h2>{t("nav.patientBoard")}</h2>
         </div>
         <button type="button" onClick={() => setShowForm(true)}>
-          Add Patient
+          {t("action.addPatient")}
         </button>
       </header>
 
@@ -195,12 +197,12 @@ function PatientBoardPage({
 
       {dischargeAlerts.length > 0 && (
         <section className="dc-alert-panel">
-          <h3>Upcoming Discharge Prep</h3>
+          <h3>{t("dc.upcoming")}</h3>
           {dischargeAlerts.map(({ patient, pending }) => (
             <div className="dc-alert-card" key={patient.id}>
               <div>
                 <strong>
-                  Bed {patient.bed || "-"} — {patient.patientCode || "-"}
+                  Bed {patient.bed || "-"} / {patient.patientCode || "-"}
                 </strong>
                 <div>Upcoming discharge prep: {pending.join(" / ")} pending</div>
               </div>
@@ -258,12 +260,12 @@ function PatientBoardPage({
 
       <section className="panel">
         <div className="section-heading">
-          <h3>Active Patients</h3>
+          <h3>{t("board.activePatients")}</h3>
           <div className="filter-row">
             <label>
-              Attending
+              {t("field.attending")}
               <select value={attendingFilter} onChange={(event) => setAttendingFilter(event.target.value)}>
-                <option value="all">All attendings</option>
+                <option value="all">{t("field.allAttendings")}</option>
                 {attendingNames.map((attendingName) => (
                   <option key={attendingName} value={attendingName}>
                     {attendingName}
@@ -272,29 +274,29 @@ function PatientBoardPage({
               </select>
             </label>
             <label>
-              Sort
+              {t("action.sort")}
               <select value={sortMode} onChange={(event) => setSortMode(event.target.value as SortMode)}>
-                <option value="bed">By bed</option>
-                <option value="dischargeDate">By discharge target date</option>
-                <option value="urgentFirst">Urgent tasks first</option>
+                <option value="bed">{t("board.byBed")}</option>
+                <option value="dischargeDate">{t("board.byDischargeDate")}</option>
+                <option value="urgentFirst">{t("board.urgentFirst")}</option>
               </select>
             </label>
           </div>
         </div>
-        {dataLoading && <p className="muted">Loading synced patients...</p>}
+        {dataLoading && <p className="muted">{t("board.loading")}</p>}
         {dataError && <p className="error-message">{dataError}</p>}
         <div className="responsive-table">
           <table>
             <thead>
               <tr>
-                <th>Bed</th>
-                <th>Code</th>
-                <th>Age/Sex</th>
-                <th>Concise Summary</th>
-                <th>New Data</th>
-                <th>Tasks</th>
-                <th>DC Target</th>
-                <th>Actions</th>
+                <th>{t("field.bed")}</th>
+                <th>{t("board.code")}</th>
+                <th>{t("field.ageSex")}</th>
+                <th>{t("board.conciseSummary")}</th>
+                <th>{t("board.newData")}</th>
+                <th>{t("field.tasks")}</th>
+                <th>{t("board.dcTarget")}</th>
+                <th>{t("board.actions")}</th>
               </tr>
             </thead>
             <tbody>
@@ -306,8 +308,8 @@ function PatientBoardPage({
                     {patient.age}/{patient.sex}
                   </td>
                   <td>
-                    {patient.isNewAdmission && <span className="badge urgent">New admission</span>}{" "}
-                    {patient.showAdmissionBriefOnPrint && <span className="badge normal">Brief included</span>}
+                    {patient.isNewAdmission && <span className="badge urgent">{t("board.newAdmission")}</span>}{" "}
+                    {patient.showAdmissionBriefOnPrint && <span className="badge normal">{t("board.briefIncluded")}</span>}
                     {patient.importantRedFlags.trim() && (
                       <div className="board-red-flags">
                         <span className="board-label">Red Flags</span>
@@ -315,7 +317,7 @@ function PatientBoardPage({
                       </div>
                     )}
                     {importantSummary(patient) && (
-                      <div className="important-line">Important: {importantSummary(patient)}</div>
+                      <div className="important-line">{t("board.important")}: {importantSummary(patient)}</div>
                     )}
                     <strong>{patient.primaryDiagnosis || "-"}</strong>
                     <div className="board-subsection">
@@ -329,7 +331,7 @@ function PatientBoardPage({
                         fallbackItems={getActiveProblemItems(patient)}
                       />
                     </div>
-                    <div className="muted">Attending: {patient.attending || "Unassigned"}</div>
+                    <div className="muted">Attending: {patient.attending || t("board.unassigned")}</div>
                   </td>
                   <td>
                     <div>
@@ -371,26 +373,26 @@ function PatientBoardPage({
                   <td className="table-actions">
                     <div className="board-action-buttons">
                       <Link className="button-link" to={`/patients/${patient.id}`}>
-                        Details
+                        {t("action.details")}
                       </Link>
                       <button type="button" className="secondary" onClick={() => startToday(patient.id)}>
-                        Create today
+                        {t("action.createToday")}
                       </button>
                       <button type="button" className="secondary" onClick={() => setNewAdmission(patient.id, !patient.isNewAdmission)}>
-                        {patient.isNewAdmission ? "Unmark new" : "Mark new"}
+                        {patient.isNewAdmission ? t("board.unmarkNew") : t("action.markNew")}
                       </button>
                       <button
                         type="button"
                         className="secondary"
                         onClick={() => setAdmissionBriefPrint(patient.id, !patient.showAdmissionBriefOnPrint)}
                       >
-                        {patient.showAdmissionBriefOnPrint ? "Exclude brief" : "Include brief"}
+                        {patient.showAdmissionBriefOnPrint ? t("board.excludeBrief") : t("action.includeBrief")}
                       </button>
                       <button type="button" onClick={() => updateStatus(patient.id, "discharged")}>
-                        Discharge
+                        {t("action.discharge")}
                       </button>
                       <button type="button" className="secondary" onClick={() => updateStatus(patient.id, "archived")}>
-                        Archive
+                        {t("action.archive")}
                       </button>
                     </div>
                   </td>
@@ -398,7 +400,7 @@ function PatientBoardPage({
               ))}
               {activePatients.length === 0 && (
                 <tr>
-                  <td colSpan={8}>No active patients.</td>
+                  <td colSpan={8}>{t("board.noActivePatients")}</td>
                 </tr>
               )}
             </tbody>

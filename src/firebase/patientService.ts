@@ -2,6 +2,7 @@ import {
   collection,
   deleteDoc,
   doc,
+  getDocs,
   onSnapshot,
   orderBy,
   query,
@@ -336,5 +337,8 @@ export function saveDailyNote(uid: string, patientId: string, note: DailyNote) {
 }
 
 export function deletePatient(uid: string, patientId: string) {
-  return deleteDoc(patientDocument(uid, patientId));
+  return getDocs(dailyNotesCollection(uid, patientId)).then(async (snapshot) => {
+    await Promise.all(snapshot.docs.map((noteDoc) => deleteDoc(noteDoc.ref)));
+    await deleteDoc(patientDocument(uid, patientId));
+  });
 }

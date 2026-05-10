@@ -149,6 +149,8 @@
 .rounding-table .clinical-card-child,
 .print-admission-brief .clinical-card-child {
   display: block;
+  font-size: inherit;
+  line-height: inherit;
   overflow-wrap: break-word;
   padding-left: 6px;
   white-space: normal;
@@ -222,6 +224,12 @@
 .print-admission-brief .ap-display {
   display: grid;
   gap: 1px;
+}
+
+.rounding-table .print-ap-cell,
+.rounding-table .print-ap-cell * {
+  font-size: var(--print-font-size) !important;
+  line-height: var(--print-line-height) !important;
 }
 
 .rounding-table .ap-display-card,

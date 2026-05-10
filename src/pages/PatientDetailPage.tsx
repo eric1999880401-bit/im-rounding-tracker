@@ -8,6 +8,7 @@ import TaskList from "../components/TaskList";
 import { ClinicalText } from "../components/ClinicalText";
 import LabHistoryPanel from "../components/LabHistoryPanel";
 import ActiveProblemEditor from "../components/ActiveProblemEditor";
+import { useT } from "../i18n";
 import {
   dailyNoteFromPatient,
   emptyDailyNote,
@@ -30,16 +31,17 @@ interface PageProps {
   onSaveDailyNote: (patientId: string, note: DailyNote) => Promise<void>;
 }
 
-type DetailTab = "quick" | "objective" | "assessmentPlan" | "tasksDischarge" | "admission" | "history" | "info";
+type DetailTab = "subjective" | "quick" | "objective" | "assessmentPlan" | "tasksDischarge" | "admission" | "history" | "info";
 
-const detailTabs: Array<{ id: DetailTab; label: string }> = [
-  { id: "quick", label: "Quick Daily Update" },
-  { id: "objective", label: "Objective" },
-  { id: "assessmentPlan", label: "A/P" },
-  { id: "tasksDischarge", label: "Tasks / Discharge" },
-  { id: "admission", label: "Admission" },
-  { id: "history", label: "SOAP History" },
-  { id: "info", label: "Patient Info" },
+const detailTabs: Array<{ id: DetailTab; labelKey: string }> = [
+  { id: "quick", labelKey: "detail.tabs.quick" },
+  { id: "subjective", labelKey: "detail.tabs.subjective" },
+  { id: "objective", labelKey: "detail.tabs.objective" },
+  { id: "assessmentPlan", labelKey: "detail.tabs.assessmentPlan" },
+  { id: "tasksDischarge", labelKey: "detail.tabs.tasksDischarge" },
+  { id: "admission", labelKey: "detail.tabs.admission" },
+  { id: "history", labelKey: "detail.tabs.history" },
+  { id: "info", labelKey: "detail.tabs.info" },
 ];
 
 function PatientDetailPage({
@@ -49,6 +51,7 @@ function PatientDetailPage({
   onSavePatient,
   onSaveDailyNote,
 }: PageProps) {
+  const t = useT();
   const { patientId } = useParams();
   const sourcePatient = patients.find((item) => item.id === patientId);
   const [selectedDate, setSelectedDate] = useState(todayKey());
@@ -61,6 +64,7 @@ function PatientDetailPage({
   const [draftPatient, setDraftPatient] = useState<Patient | null>(initialDraft);
   const [isDirty, setIsDirty] = useState(false);
   const [activeTab, setActiveTab] = useState<DetailTab>("quick");
+  const [selectedDittoDate, setSelectedDittoDate] = useState("");
   const draftRef = useRef<Patient | null>(initialDraft);
   const isDirtyRef = useRef(false);
   const isComposingRef = useRef(false);
@@ -81,6 +85,16 @@ function PatientDetailPage({
       isDirtyRef.current = false;
     }
   }, [sourcePatient, selectedDate, selectedNote, patientNotes.length, dailyNotesByPatient]);
+
+  useEffect(() => {
+    const availableNotes = patientNotes.filter((note) => note.date !== selectedDate);
+    const previousNote = getLatestNonEmptyDailyNote(availableNotes.filter((note) => note.date < selectedDate));
+    const fallbackDate = previousNote?.date || availableNotes[0]?.date || "";
+
+    setSelectedDittoDate((currentDate) =>
+      availableNotes.some((note) => note.date === currentDate) ? currentDate : fallbackDate,
+    );
+  }, [patientNotes, selectedDate]);
 
   if ((!sourcePatient || !draftPatient) && dataLoading) {
     return (
@@ -136,15 +150,15 @@ function PatientDetailPage({
     await commitDraft(draftRef.current);
   }
 
-  async function dittoLatestNote() {
+  async function dittoSelectedNote() {
     if (!sourcePatient) return;
+    const sourceNote = patientNotes.find((note) => note.date === selectedDittoDate);
+    if (!sourceNote) return;
     const todayExists = Boolean(selectedNote);
     const message = todayExists
-      ? "Overwrite this date's SOAP draft from the latest note? This will not delete old notes or patient-level data."
-      : "DITTO copies the latest note into today. It will not delete old notes or patient-level data.";
+      ? `Overwrite this date's SOAP draft from ${sourceNote.date}? This will not delete old notes or patient-level data.`
+      : `DITTO copies ${sourceNote.date} into this date. It will not delete old notes or patient-level data.`;
     if (!window.confirm(message)) return;
-    const previousNote = getLatestNonEmptyDailyNote(patientNotes.filter((note) => note.date < selectedDate));
-    const sourceNote = previousNote ?? dailyNoteFromPatient(sourcePatient, selectedDate);
     const copiedNote: DailyNote = {
       ...sourceNote,
       date: selectedDate,
@@ -157,6 +171,33 @@ function PatientDetailPage({
     await onSaveDailyNote(sourcePatient.id, copiedNote);
     setIsDirty(false);
     isDirtyRef.current = false;
+  }
+
+  function renderDittoControls() {
+    const availableNotes = patientNotes.filter((note) => note.date !== selectedDate);
+
+    return (
+      <>
+        <label className="ditto-source-label">
+          DITTO from
+          <select
+            value={selectedDittoDate}
+            onChange={(event) => setSelectedDittoDate(event.target.value)}
+            disabled={availableNotes.length === 0}
+          >
+            {availableNotes.length === 0 && <option value="">No saved notes</option>}
+            {availableNotes.map((note) => (
+              <option key={note.date} value={note.date}>
+                {note.date}
+              </option>
+            ))}
+          </select>
+        </label>
+        <button type="button" className="secondary" disabled={!selectedDittoDate} onClick={dittoSelectedNote}>
+          DITTO
+        </button>
+      </>
+    );
   }
 
   function handleCompositionStart() {
@@ -197,7 +238,6 @@ function PatientDetailPage({
     return (
       <section className="panel soap-history">
         <h2>SOAP History</h2>
-        <p className="muted">DITTO copies the previous note into today. Old notes are preserved.</p>
         <div className="detail-date-controls">
           <label>
             Date
@@ -208,9 +248,7 @@ function PatientDetailPage({
               Create today note
             </button>
           )}
-          <button type="button" className="secondary" onClick={dittoLatestNote}>
-            DITTO latest note
-          </button>
+          {renderDittoControls()}
         </div>
         {patientNotes.length === 0 && <p className="muted">No saved daily SOAP history yet. Legacy patient SOAP fields are still preserved.</p>}
         {patientNotes.map((note) => (
@@ -218,6 +256,7 @@ function PatientDetailPage({
             <summary>{note.date}</summary>
             <div className="soap-history-grid">
               <div><strong>Red Flags</strong><ClinicalText value={note.importantRedFlags} importantDefault /></div>
+              <div><strong>Overnight Event</strong><ClinicalText value={note.overnightEvents} /></div>
               <div><strong>S</strong><ClinicalText value={note.subjectiveOrChiefConcern} /></div>
               <div><strong>PE</strong><ClinicalText value={note.physicalExam} /></div>
               <div><strong>Lab</strong><ClinicalText value={note.rawLabText || note.labSummary} /></div>
@@ -285,13 +324,10 @@ function PatientDetailPage({
             Create today note
           </button>
         )}
-        <button type="button" className="secondary" onClick={dittoLatestNote}>
-          DITTO latest note
-        </button>
+        {renderDittoControls()}
         <button type="button" disabled={!isDirty} onClick={() => void commitDraft()}>
           Save current edits
         </button>
-        <p className="muted">DITTO copies the previous note into today. Old notes are preserved. Opening this page or switching tabs does not save.</p>
         {!selectedNote && getLatestNonEmptyDailyNote(patientNotes) && (
           <p className="muted">Today note is empty. Showing latest saved data.</p>
         )}
@@ -308,11 +344,24 @@ function PatientDetailPage({
               role="tab"
               aria-selected={activeTab === tab.id}
             >
-              {tab.label}
+              {t(tab.labelKey)}
             </button>
           ))}
         </div>
       </section>
+
+      {activeTab === "subjective" && (
+        <DailyNoteForm
+          patient={currentPatient}
+          onChange={updateDraft}
+          section="subjective"
+          displaySummary={displaySummary ?? undefined}
+          onImmediateCommit={() => void commitDraft()}
+          onFieldBlur={handleFieldBlur}
+          onCompositionStart={handleCompositionStart}
+          onCompositionEnd={handleCompositionEnd}
+        />
+      )}
 
       {activeTab === "quick" && (
         <DailyNoteForm

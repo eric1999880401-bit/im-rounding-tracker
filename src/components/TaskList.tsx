@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { PatientTask, TaskCategory, TaskPriority } from "../types";
+import { useT } from "../i18n";
 import { emptyTask, nowIso } from "../utils";
 
 interface TaskListProps {
@@ -19,9 +20,12 @@ function TaskList({
   onCompositionStart,
   onCompositionEnd,
 }: TaskListProps) {
+  const t = useT();
   const [draft, setDraft] = useState<PatientTask>(emptyTask());
   const [showCompletedTasks, setShowCompletedTasks] = useState(false);
   const visibleTasks = showCompletedTasks ? tasks : tasks.filter((task) => !task.done);
+  const priorityLabel = (priority: TaskPriority) => t(`task.priority.${priority}`);
+  const categoryLabel = (category: TaskCategory) => t(`task.category.${category}`);
 
   function addTask() {
     if (!draft.text.trim()) return;
@@ -46,7 +50,7 @@ function TaskList({
   }
 
   function deleteTask(task: PatientTask) {
-    if (!window.confirm(`Delete task: ${task.text}?`)) return;
+    if (!window.confirm(`${t("task.deleteConfirm")}: ${task.text}?`)) return;
     onChange(tasks.filter((item) => item.id !== task.id));
     window.setTimeout(() => onCommit?.(), 0);
   }
@@ -62,14 +66,14 @@ function TaskList({
   return (
     <section className="panel">
       <div className="section-heading">
-        <h2>Tasks</h2>
+        <h2>{t("field.tasks")}</h2>
         <label className="checkbox-label">
           <input
             type="checkbox"
             checked={showCompletedTasks}
             onChange={(event) => setShowCompletedTasks(event.target.checked)}
           />
-          {showCompletedTasks ? "Show completed tasks" : "Hide completed tasks"}
+          {showCompletedTasks ? t("action.showCompleted") : t("action.hideCompleted")}
         </label>
       </div>
 
@@ -79,27 +83,27 @@ function TaskList({
           onChange={(event) => setDraft({ ...draft, text: event.target.value })}
           onCompositionStart={onCompositionStart}
           onCompositionEnd={handleCompositionEnd}
-          placeholder="Add patient-specific task"
+          placeholder={t("task.addPlaceholder")}
         />
         <select
           value={draft.priority}
           onChange={(event) => setDraft({ ...draft, priority: event.target.value as TaskPriority })}
         >
-          <option value="urgent">Urgent</option>
-          <option value="normal">Normal</option>
-          <option value="low">Low</option>
+          <option value="urgent">{t("task.priority.urgent")}</option>
+          <option value="normal">{t("task.priority.normal")}</option>
+          <option value="low">{t("task.priority.low")}</option>
         </select>
         <select
           value={draft.category}
           onChange={(event) => setDraft({ ...draft, category: event.target.value as TaskCategory })}
         >
-          <option value="lab">Lab</option>
-          <option value="imaging">Imaging</option>
-          <option value="consult">Consult</option>
-          <option value="discharge">Discharge</option>
-          <option value="family">Family</option>
-          <option value="order">Order</option>
-          <option value="other">Other</option>
+          <option value="lab">{t("task.category.lab")}</option>
+          <option value="imaging">{t("task.category.imaging")}</option>
+          <option value="consult">{t("task.category.consult")}</option>
+          <option value="discharge">{t("task.category.discharge")}</option>
+          <option value="family">{t("task.category.family")}</option>
+          <option value="order">{t("task.category.order")}</option>
+          <option value="other">{t("task.category.other")}</option>
         </select>
         <input
           type="date"
@@ -107,12 +111,14 @@ function TaskList({
           onChange={(event) => setDraft({ ...draft, dueDate: event.target.value })}
         />
         <button type="button" onClick={addTask}>
-          Add
+          {t("action.add")}
         </button>
       </div>
 
       <div className="task-list">
-        {visibleTasks.length === 0 && <p className="muted">{tasks.length === 0 ? "No tasks yet." : "Completed tasks are hidden."}</p>}
+        {visibleTasks.length === 0 && (
+          <p className="muted">{tasks.length === 0 ? t("task.empty") : t("task.completedHidden")}</p>
+        )}
         {visibleTasks.map((task) => (
           <div className="task-row" key={task.id}>
             <input type="checkbox" checked={task.done} onChange={() => toggleDone(task)} />
@@ -124,11 +130,11 @@ function TaskList({
               onCompositionStart={onCompositionStart}
               onCompositionEnd={handleCompositionEnd}
             />
-            <span className={`badge ${task.priority}`}>{task.priority}</span>
-            <span className="badge">{task.category}</span>
-            <span className="muted">{task.dueDate || "No due date"}</span>
+            <span className={`badge ${task.priority}`}>{priorityLabel(task.priority)}</span>
+            <span className="badge">{categoryLabel(task.category)}</span>
+            <span className="muted">{task.dueDate || t("task.noDueDate")}</span>
             <button type="button" className="secondary" onClick={() => deleteTask(task)}>
-              Delete
+              {t("action.delete")}
             </button>
           </div>
         ))}

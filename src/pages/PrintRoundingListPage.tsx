@@ -240,7 +240,7 @@ function PrintRoundingListPage({
                     {labReportChips(patient)}
                     {images.length > 0 && fieldLine("Img", images.join("; "))}
                   </td>
-                  <td>
+                  <td className="print-ap-cell">
                     <AssessmentPlanDisplay
                       items={patient.assessmentPlanItems}
                       legacyAssessment={patient.assessment}
@@ -322,32 +322,32 @@ function PrintRoundingListPage({
 
       <section className="panel no-print print-options">
         <label>
-          Patient Scope
+          {t("board.patientScope")}
           <select value={printMode} onChange={(event) => setPrintMode(event.target.value)}>
-            <option value="all">All active patients</option>
-            <option value="selected">Selected attending only</option>
-            <option value="separate">Separate pages by attending</option>
+            <option value="all">{t("board.allActivePatients")}</option>
+            <option value="selected">{t("board.selectedAttendingOnly")}</option>
+            <option value="separate">{t("board.separateByAttending")}</option>
           </select>
         </label>
 
         <label>
-          Print Content
+          {t("print.content")}
           <select
             value={admissionBriefPrintMode}
             onChange={(event) => setAdmissionBriefPrintMode(event.target.value)}
           >
-            <option value="compact">Compact rounding list only</option>
-            <option value="newAdmissions">Rounding list + admission briefs for new admissions</option>
-            <option value="selectedBriefs">Rounding list + selected admission briefs</option>
-            <option value="briefsOnly">Admission briefs only</option>
+            <option value="compact">{t("print.compactOnly")}</option>
+            <option value="newAdmissions">{t("print.withNewAdmissionBriefs")}</option>
+            <option value="selectedBriefs">{t("print.withSelectedBriefs")}</option>
+            <option value="briefsOnly">{t("print.briefsOnly")}</option>
           </select>
         </label>
 
         {printMode === "selected" && (
           <label>
-            Selected Attending
+            {t("print.selectedAttending")}
             <select value={selectedAttending} onChange={(event) => setSelectedAttending(event.target.value)}>
-              <option value="">Choose attending</option>
+              <option value="">{t("print.chooseAttending")}</option>
               {attendingNames.map((attendingName) => (
                 <option key={attendingName} value={attendingName}>
                   {attendingName}
@@ -358,26 +358,26 @@ function PrintRoundingListPage({
         )}
 
         <label>
-          Team
+          {t("print.team")}
           <input value={team} onChange={(event) => setTeam(event.target.value)} />
         </label>
 
         <label>
-          Attending
+          {t("field.attending")}
           <input value={attending} onChange={(event) => setAttending(event.target.value)} />
         </label>
 
         <label>
-          Resident
+          {t("print.resident")}
           <input value={resident} onChange={(event) => setResident(event.target.value)} />
         </label>
 
         <label>
-          Sort
+          {t("action.sort")}
           <select value={sortMode} onChange={(event) => setSortMode(event.target.value as SortMode)}>
-            <option value="bed">By bed</option>
-            <option value="dischargeDate">By discharge target date</option>
-            <option value="urgentFirst">Urgent tasks first</option>
+            <option value="bed">{t("board.byBed")}</option>
+            <option value="dischargeDate">{t("board.byDischargeDate")}</option>
+            <option value="urgentFirst">{t("board.urgentFirst")}</option>
           </select>
         </label>
 
@@ -387,40 +387,37 @@ function PrintRoundingListPage({
             checked={hideCompletedTasks}
             onChange={(event) => setHideCompletedTasks(event.target.checked)}
           />
-          Hide completed tasks
+          {t("action.hideCompleted")}
         </label>
 
         <label>
-          Density
+          {t("print.density")}
           <select value={density} onChange={(event) => setDensity(event.target.value as PrintDensity)}>
-            <option value="normal">Detailed</option>
-            <option value="compact">Compact</option>
-            <option value="ultra-compact">Ultra-compact</option>
+            <option value="normal">{t("print.detailed")}</option>
+            <option value="compact">{t("print.compact")}</option>
+            <option value="ultra-compact">{t("print.ultraCompact")}</option>
           </select>
         </label>
         <label className="checkbox-label">
           <input type="checkbox" checked={includePhonebook} onChange={(event) => setIncludePhonebook(event.target.checked)} />
-          Include phonebook
+          {t("print.includePhonebook")}
         </label>
         <label className="checkbox-label">
           <input type="checkbox" checked={includeMiscTasks} onChange={(event) => setIncludeMiscTasks(event.target.checked)} />
-          Include misc tasks
+          {t("print.includeMiscTasks")}
         </label>
         <label className="checkbox-label">
           <input type="checkbox" checked={includeStudyTopics} onChange={(event) => setIncludeStudyTopics(event.target.checked)} />
-          Include study topics
+          {t("print.includeStudyTopics")}
         </label>
-        <p className="muted span-2">
-          Compact mode preserves details using tighter layout. If the census or notes are long, the printout may continue to a second page.
-        </p>
       </section>
 
       {admissionBriefPrintMode !== "compact" && (
         <section className="panel no-print">
-          <h3>Admission Brief Print Preview</h3>
+          <h3>{t("print.preview")}</h3>
           {selectedAdmissionBriefPatients.length === 0 ? (
             <p className="muted">
-              No admission briefs selected for print.
+              {t("print.noBriefs")}
               {emptyAdmissionBriefPatients.length > 0 && " Admission summary is empty and will not be printed."}
             </p>
           ) : (

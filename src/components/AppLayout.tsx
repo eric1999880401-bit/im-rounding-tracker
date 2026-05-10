@@ -4,19 +4,19 @@ import type { UserPreferences } from "../types";
 import { useT } from "../i18n";
 
 interface AppLayoutProps {
-  userEmail: string;
+  userName: string;
   syncError: string;
   preferences: UserPreferences;
 }
 
-function AppLayout({ userEmail, syncError }: AppLayoutProps) {
+function AppLayout({ userName, syncError }: AppLayoutProps) {
   const t = useT();
 
   return (
     <div className="app-shell">
       <aside className="sidebar no-print">
         <h1>IM Rounding</h1>
-        <p className="signed-in-user">{userEmail}</p>
+        <p className="signed-in-user">{t("app.greeting")}, {userName}</p>
         <nav>
           <NavLink to="/patients">{t("nav.patientBoard")}</NavLink>
           <NavLink to="/tasks">{t("nav.todayTasks")}</NavLink>

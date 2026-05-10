@@ -104,6 +104,15 @@ body {
   padding: 8px 10px;
 }
 
+.status-message {
+  background: #ecfdf3;
+  border: 1px solid #86efac;
+  border-radius: 6px;
+  color: #027a48;
+  margin: 0;
+  padding: 8px 10px;
+}
+
 button,
 input,
 select,
@@ -130,6 +139,20 @@ button,
 button.secondary,
 .button-link.secondary {
   background: #52606d;
+}
+
+button.danger-button,
+.button-link.danger-button {
+  background: #b42318;
+  color: white;
+}
+
+button.text-button {
+  background: transparent;
+  color: #0f766e;
+  min-height: 0;
+  padding: 0;
+  text-decoration: underline;
 }
 
 button:hover,
@@ -1516,6 +1539,17 @@ button.secondary,
   background: var(--surface-raised);
   border: 1px solid var(--border);
   color: var(--text);
+}
+
+button.text-button {
+  background: transparent;
+  color: var(--button-bg);
+}
+
+button.danger-button,
+.button-link.danger-button {
+  background: var(--danger-text);
+  color: white;
 }
 
 th {

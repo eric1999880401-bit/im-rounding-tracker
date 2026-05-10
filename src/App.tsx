@@ -10,8 +10,8 @@ import PrintRoundingListPage from "./pages/PrintRoundingListPage";
 import SettingsPage from "./pages/SettingsPage";
 import UtilitiesPage from "./pages/UtilitiesPage";
 import AuthPage from "./pages/AuthPage";
-import { useAuthUser } from "./firebase/auth";
-import { createPatient, saveDailyNote, subscribeToDailyNotes, subscribeToPatients, updatePatient } from "./firebase/patientService";
+import { getUserName, useAuthUser } from "./firebase/auth";
+import { createPatient, deletePatient, saveDailyNote, subscribeToDailyNotes, subscribeToPatients, updatePatient } from "./firebase/patientService";
 import {
   deleteMiscTask,
   deletePhonebookContact,
@@ -156,6 +156,22 @@ function App() {
     await updateSyncedPatient(patient);
   }
 
+  async function deleteSyncedPatient(patientId: string) {
+    if (!user) {
+      setDataError("Deleting patient failed. You must be signed in before deleting patient data.");
+      return;
+    }
+
+    setDataError("");
+    try {
+      await deletePatient(user.uid, patientId);
+    } catch (error) {
+      const message = formatSyncError("Deleting patient", error);
+      setDataError(message);
+      throw new Error(message);
+    }
+  }
+
   async function saveSyncedDailyNote(patientId: string, note: DailyNote) {
     if (!user) {
       setDataError("Saving daily note failed. You must be signed in before saving patient data.");
@@ -183,7 +199,7 @@ function App() {
   return (
     <I18nProvider language={preferences.language}>
       <Routes>
-        <Route element={<AppLayout userEmail={user.email ?? ""} syncError={dataError} preferences={preferences} />}>
+        <Route element={<AppLayout userName={getUserName(user)} syncError={dataError} preferences={preferences} />}>
         <Route path="/" element={<Navigate to="/patients" replace />} />
         <Route
           path="/patients"
@@ -216,7 +232,7 @@ function App() {
         />
         <Route
           path="/archive"
-          element={<ArchivePage patients={patients} onSavePatient={saveSyncedPatient} />}
+          element={<ArchivePage patients={patients} onSavePatient={saveSyncedPatient} onDeletePatient={deleteSyncedPatient} />}
         />
         <Route
           path="/print"

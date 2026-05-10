@@ -11,7 +11,7 @@ import type { PatientDisplaySummary } from "../utils";
 interface DailyNoteFormProps {
   patient: Patient;
   onChange: (patient: Patient) => void;
-  section?: "all" | "quick" | "objective" | "assessmentPlan" | "discharge";
+  section?: "all" | "subjective" | "quick" | "objective" | "assessmentPlan" | "discharge";
   displaySummary?: PatientDisplaySummary;
   onFieldBlur?: () => void;
   onImmediateCommit?: () => void;
@@ -30,6 +30,7 @@ function DailyNoteForm({
   onCompositionEnd,
 }: DailyNoteFormProps) {
   const t = useT();
+  const showSubjective = section === "all" || section === "subjective";
   const showQuick = section === "all" || section === "quick";
   const showObjective = section === "all" || section === "objective";
   const showAssessmentPlan = section === "all" || section === "assessmentPlan";
@@ -133,21 +134,22 @@ function DailyNoteForm({
   return (
     <section className="panel">
       <h2>
-        {section === "quick" && "Quick Daily Update"}
-        {section === "objective" && "Objective"}
-        {section === "assessmentPlan" && "Assessment / Plan"}
-        {section === "discharge" && "Discharge"}
-        {section === "all" && "Daily SOAP"}
+        {section === "subjective" && t("detail.tabs.subjective")}
+        {section === "quick" && t("detail.tabs.quick")}
+        {section === "objective" && t("detail.tabs.objective")}
+        {section === "assessmentPlan" && t("detail.tabs.assessmentPlan")}
+        {section === "discharge" && t("detail.tabs.tasksDischarge")}
+        {section === "all" && t("detail.dailySoap")}
       </h2>
       <div className="form-grid">
-        {showQuick && (
+        {showSubjective && (
           <>
             {displaySummary && (
               <div className="span-2 auto-summary-panel">
                 <div className="section-heading">
-                  <h3>Auto Summary</h3>
+                  <h3>{t("summary.subjectiveTitle")}</h3>
                   {displaySummary.sourceLabels.todayNoteIsEmpty && (
-                    <span className="badge normal">Today note is empty. Showing latest saved data.</span>
+                    <span className="badge normal">{t("summary.todayEmpty")}</span>
                   )}
                 </div>
                 <div className="auto-summary-grid">
@@ -158,9 +160,64 @@ function DailyNoteForm({
                     </div>
                   )}
                   <div className="auto-summary-item">
-                    <strong>Sx</strong>
+                    <strong>Overnight Event</strong>
+                    <ClinicalText value={patient.overnightEvent} />
+                  </div>
+                  <div className="auto-summary-item span-2">
+                    <strong>Subjective</strong>
                     <ClinicalText value={displaySummary.subjective} />
                   </div>
+                </div>
+              </div>
+            )}
+            <h3 className="span-2">{t("section.todaySubjective")}</h3>
+            <label className="span-2">
+              {t("field.redFlags")}
+              <ColorMarkupTextarea
+                className="important-input"
+                value={patient.importantRedFlags}
+                onChange={(value) => updateField("importantRedFlags", value)}
+                onBlur={commitOnBlur}
+                onCompositionStart={onCompositionStart}
+                onCompositionEnd={handleCompositionEnd}
+                placeholder="Example: unstable BP; high fall risk. Everything here displays as important."
+              />
+            </label>
+            <label className="span-2">
+              {t("field.overnightEvent")}
+              <textarea
+                value={patient.overnightEvent}
+                onChange={(event) => updateField("overnightEvent", event.target.value)}
+                onBlur={commitOnBlur}
+                onCompositionStart={onCompositionStart}
+                onCompositionEnd={handleCompositionEnd}
+                placeholder="Example: No acute overnight event; fever at 02:00; oxygen increased..."
+              />
+            </label>
+            <label className="span-2">
+              {t("field.subjective")}
+              <ColorMarkupTextarea
+                value={patient.subjectiveOrChiefConcern}
+                onChange={(value) => updateField("subjectiveOrChiefConcern", value)}
+                onBlur={commitOnBlur}
+                onCompositionStart={onCompositionStart}
+                onCompositionEnd={handleCompositionEnd}
+              />
+            </label>
+          </>
+        )}
+
+        {showQuick && (
+          <>
+            {displaySummary && (
+              <div className="span-2 auto-summary-panel">
+                <div className="section-heading">
+                  <h3>{t("summary.auto")}</h3>
+                  {displaySummary.sourceLabels.todayNoteIsEmpty && (
+                    <span className="badge normal">{t("summary.todayEmpty")}</span>
+                  )}
+                </div>
+                <div className="auto-summary-grid">
                   <div className="auto-summary-item">
                     <strong>PE</strong>
                     <ClinicalText value={displaySummary.physicalExam} />
@@ -225,42 +282,9 @@ function DailyNoteForm({
                 </div>
               </div>
             )}
-            <h3 className="span-2">Today Addendum</h3>
+            <h3 className="span-2">{t("section.todayObjective")}</h3>
             <label className="span-2">
-              {t("field.redFlags")}
-              <ColorMarkupTextarea
-                className="important-input"
-                value={patient.importantRedFlags}
-                onChange={(value) => updateField("importantRedFlags", value)}
-                onBlur={commitOnBlur}
-                onCompositionStart={onCompositionStart}
-                onCompositionEnd={handleCompositionEnd}
-                placeholder="Example: unstable BP; high fall risk. Everything here displays as important."
-              />
-            </label>
-            <label className="span-2">
-              Overnight event
-              <textarea
-                value={patient.overnightEvent}
-                onChange={(event) => updateField("overnightEvent", event.target.value)}
-                onBlur={commitOnBlur}
-                onCompositionStart={onCompositionStart}
-                onCompositionEnd={handleCompositionEnd}
-                placeholder="Example: No acute overnight event; fever at 02:00; oxygen increased..."
-              />
-            </label>
-            <label className="span-2">
-              Today subjective change
-              <ColorMarkupTextarea
-                value={patient.subjectiveOrChiefConcern}
-                onChange={(value) => updateField("subjectiveOrChiefConcern", value)}
-                onBlur={commitOnBlur}
-                onCompositionStart={onCompositionStart}
-                onCompositionEnd={handleCompositionEnd}
-              />
-            </label>
-            <label className="span-2">
-              Today PE change
+              {t("field.todayPeChange")}
               <ColorMarkupTextarea
                 value={patient.physicalExam}
                 onChange={(value) => updateField("physicalExam", value)}
@@ -271,7 +295,7 @@ function DailyNoteForm({
               />
             </label>
             <label className="span-2">
-              Quick Lab Summary
+              {t("field.quickLabSummary")}
               <ColorMarkupTextarea
                 value={patient.newLabs}
                 onChange={(value) => updateLabs(value)}
@@ -281,7 +305,7 @@ function DailyNoteForm({
               />
             </label>
             <label className="span-2">
-              Quick Image Summary
+              {t("field.quickImageSummary")}
               <ColorMarkupTextarea
                 value={patient.newImaging}
                 onChange={(value) => updateField("newImaging", value)}
@@ -445,9 +469,9 @@ function DailyNoteForm({
             <div className="span-2 discharge-checklist">
               <h3>{t("dc.upcoming")}</h3>
               {[
-                ["dischargeMedsStatus", "\u51fa\u9662\u5e36\u85e5 / Discharge meds"],
-                ["opdAppointmentStatus", "\u9810\u7d04\u9580\u8a3a / OPD appointment"],
-                ["diagnosisCertificateStatus", "\u8a3a\u65b7\u66f8 / Diagnosis certificate"],
+                ["dischargeMedsStatus", t("dc.meds")],
+                ["opdAppointmentStatus", t("dc.opd")],
+                ["diagnosisCertificateStatus", t("dc.certificate")],
               ].map(([field, label]) => (
                 <label key={field}>
                   {label}
@@ -473,7 +497,7 @@ function DailyNoteForm({
               />
             </label>
             <label>
-              Discharge Barriers
+              {t("field.dischargeBarriers")}
               <textarea
                 value={patient.dischargeBarriers}
                 onChange={(event) => updateField("dischargeBarriers", event.target.value)}

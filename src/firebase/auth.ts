@@ -1,8 +1,10 @@
 import {
   createUserWithEmailAndPassword,
   onAuthStateChanged,
+  sendPasswordResetEmail,
   signInWithEmailAndPassword,
   signOut,
+  updateProfile,
   type User,
 } from "firebase/auth";
 import { useEffect, useState } from "react";
@@ -28,8 +30,23 @@ export function signInWithEmail(email: string, password: string) {
   return signInWithEmailAndPassword(auth, email, password);
 }
 
-export function createAccountWithEmail(email: string, password: string) {
-  return createUserWithEmailAndPassword(auth, email, password);
+export async function createAccountWithEmail(email: string, password: string, userName: string) {
+  const credential = await createUserWithEmailAndPassword(auth, email, password);
+  const trimmedUserName = userName.trim();
+
+  if (trimmedUserName) {
+    await updateProfile(credential.user, { displayName: trimmedUserName });
+  }
+
+  return credential;
+}
+
+export function requestPasswordReset(email: string) {
+  return sendPasswordResetEmail(auth, email);
+}
+
+export function getUserName(user: User) {
+  return user.displayName?.trim() || user.email?.split("@")[0] || "User";
 }
 
 export function signOutCurrentUser() {
