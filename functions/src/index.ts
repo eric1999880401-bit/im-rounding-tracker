@@ -703,10 +703,6 @@ export const generateClinicalDocument = onCall(
     const deidentifiedConfirmed = data.deidentifiedConfirmed === true;
     const storeRawText = data.storeRawText === true;
 
-    if (!patientId) {
-      throw new HttpsError("invalid-argument", "patientId is required.");
-    }
-
     if (!documentTypes.has(documentType)) {
       throw new HttpsError("invalid-argument", "Invalid AI document type.");
     }
@@ -719,29 +715,41 @@ export const generateClinicalDocument = onCall(
       throw new HttpsError("invalid-argument", `Text is too long. Limit pasted input to ${MAX_RAW_TEXT_CHARS} characters.`);
     }
 
-    const patientRef = admin.firestore().doc(`users/${uid}/patients/${patientId}`);
-    const patientSnapshot = await patientRef.get();
-    if (!patientSnapshot.exists) {
-      throw new HttpsError("not-found", "Patient was not found for this signed-in user.");
-    }
-
     const apiKey = getOpenAiApiKey();
     if (!apiKey) {
       throw new HttpsError("failed-precondition", "AI document generation is not configured. Set OPENAI_API_KEY for Firebase Functions.");
     }
 
-    const notesSnapshot = await patientRef.collection("dailyNotes").orderBy("date", "asc").get();
-    const dailyNotes = notesSnapshot.docs
-      .map((noteDoc) => compactDailyNote(noteDoc.id, noteDoc.data()))
-      .filter((note) => (!dateFrom || note.date >= dateFrom) && (!dateTo || note.date <= dateTo))
-      .slice(-30);
+    const userRef = admin.firestore().doc(`users/${uid}`);
+    const patientRef = patientId ? admin.firestore().doc(`users/${uid}/patients/${patientId}`) : null;
+    const patientSnapshot = patientRef ? await patientRef.get() : null;
+    if (patientRef && !patientSnapshot?.exists) {
+      throw new HttpsError("not-found", "Patient was not found for this signed-in user.");
+    }
 
-    if (documentType === "weeklySummary" && dailyNotes.length === 0) {
+    const patientData = patientSnapshot?.data();
+    if (patientData && String(patientData.status ?? "active") !== "active") {
+      throw new HttpsError("failed-precondition", "AI Documents only supports active patients. Use Other patient for standalone drafts.");
+    }
+
+    const notesSnapshot = patientRef ? await patientRef.collection("dailyNotes").orderBy("date", "asc").get() : null;
+    const dailyNotes = notesSnapshot
+      ? notesSnapshot.docs
+          .map((noteDoc) => compactDailyNote(noteDoc.id, noteDoc.data()))
+          .filter((note) => (!dateFrom || note.date >= dateFrom) && (!dateTo || note.date <= dateTo))
+          .slice(-30)
+      : [];
+
+    if (documentType === "weeklySummary" && dailyNotes.length === 0 && rawText.length < 20) {
       throw new HttpsError("invalid-argument", "No SOAP notes were found in the selected date range.");
     }
 
     if (documentType === "admissionNote" && rawText.length < 20) {
       throw new HttpsError("invalid-argument", "Paste de-identified admission source text before generating an admission note.");
+    }
+
+    if (!patientRef && rawText.length < 20) {
+      throw new HttpsError("invalid-argument", "Paste de-identified source text before generating a standalone draft.");
     }
 
     const model = getModel();
@@ -770,7 +778,7 @@ export const generateClinicalDocument = onCall(
               rawText,
               dateFrom,
               dateTo,
-              patientContext: compactPatientContext(patientSnapshot.data()),
+              patientContext: compactPatientContext(patientData),
               dailyNotes,
             }),
           },
@@ -811,10 +819,11 @@ export const generateClinicalDocument = onCall(
     }
 
     const rawTextPreview = rawText.slice(0, 700);
-    const draftRef = patientRef.collection("aiDrafts").doc();
+    const draftRef = patientRef ? patientRef.collection("aiDrafts").doc() : userRef.collection("aiDrafts").doc();
     await draftRef.set({
       sourceType: "document",
       documentType,
+      ...(patientId ? { patientId } : { patientId: "", standalone: true }),
       rawTextPreview,
       ...(storeRawText ? { rawText } : {}),
       dateFrom,

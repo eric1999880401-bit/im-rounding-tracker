@@ -3,6 +3,8 @@ import { generateClinicalDocument } from "../firebase/aiService";
 import type { AiDocumentDraft, AiDocumentType, DailyNotesByPatient, Patient } from "../types";
 import { nowIso, todayKey } from "../utils";
 
+const OTHER_PATIENT_ID = "__other_patient__";
+
 interface AiDocumentsPageProps {
   patients: Patient[];
   dailyNotesByPatient?: DailyNotesByPatient;
@@ -121,7 +123,7 @@ function selectedDocumentLabel(documentType: AiDocumentType) {
 
 function AiDocumentsPage({ patients, dailyNotesByPatient = {}, onSavePatient }: AiDocumentsPageProps) {
   const activePatients = patients.filter((patient) => patient.status === "active");
-  const [patientId, setPatientId] = useState(activePatients[0]?.id ?? "");
+  const [patientId, setPatientId] = useState("");
   const [documentType, setDocumentType] = useState<AiDocumentType>("admissionNote");
   const [rawText, setRawText] = useState("");
   const [dateFrom, setDateFrom] = useState("");
@@ -137,7 +139,9 @@ function AiDocumentsPage({ patients, dailyNotesByPatient = {}, onSavePatient }: 
   const [model, setModel] = useState("");
   const [editableText, setEditableText] = useState("");
 
-  const selectedPatient = patients.find((patient) => patient.id === patientId) ?? activePatients[0] ?? patients[0];
+  const effectivePatientId = patientId || activePatients[0]?.id || OTHER_PATIENT_ID;
+  const isOtherPatient = effectivePatientId === OTHER_PATIENT_ID;
+  const selectedPatient = isOtherPatient ? undefined : activePatients.find((patient) => patient.id === effectivePatientId);
   const selectedOption = documentOptions.find((option) => option.value === documentType) ?? documentOptions[0];
   const patientNotes = selectedPatient ? dailyNotesByPatient[selectedPatient.id] ?? [] : [];
   const notesInRange = useMemo(
@@ -145,16 +149,16 @@ function AiDocumentsPage({ patients, dailyNotesByPatient = {}, onSavePatient }: 
     [patientNotes, dateFrom, dateTo],
   );
   const estimatedTokens = Math.ceil(rawText.length / 4);
-  const canGenerate = Boolean(selectedPatient && deidentifiedConfirmed && !loading);
+  const canGenerate = Boolean((selectedPatient || isOtherPatient) && deidentifiedConfirmed && !loading);
 
   async function generateDraft() {
-    if (!selectedPatient) return;
+    if (!selectedPatient && !isOtherPatient) return;
     setError("");
     setStatusMessage("");
     setLoading(true);
     try {
       const result = await generateClinicalDocument({
-        patientId: selectedPatient.id,
+        patientId: selectedPatient?.id ?? "",
         documentType,
         rawText,
         dateFrom,
@@ -167,7 +171,11 @@ function AiDocumentsPage({ patients, dailyNotesByPatient = {}, onSavePatient }: 
       setDraftId(result.draftId);
       setModel(result.model);
       setEditableText(formatted);
-      setStatusMessage(`Draft created. Review before saving. Draft ID: ${result.draftId}`);
+      setStatusMessage(
+        isOtherPatient
+          ? `Standalone draft created. It is not attached to a patient. Draft ID: ${result.draftId}`
+          : `Draft created. Review before saving. Draft ID: ${result.draftId}`,
+      );
     } catch (nextError) {
       setError(getErrorMessage(nextError));
     } finally {
@@ -176,6 +184,10 @@ function AiDocumentsPage({ patients, dailyNotesByPatient = {}, onSavePatient }: 
   }
 
   async function saveReviewedDraft() {
+    if (isOtherPatient) {
+      setStatusMessage("Standalone draft is ready for review. It was not written to any patient chart.");
+      return;
+    }
     if (!selectedPatient || !draft) return;
     setError("");
     setStatusMessage("");
@@ -241,8 +253,20 @@ function AiDocumentsPage({ patients, dailyNotesByPatient = {}, onSavePatient }: 
         <div className="form-grid">
           <label>
             Patient
-            <select value={selectedPatient?.id ?? ""} onChange={(event) => setPatientId(event.target.value)}>
-              {patients.map((patient) => (
+            <select
+              value={effectivePatientId}
+              onChange={(event) => {
+                setPatientId(event.target.value);
+                setDraft(null);
+                setEditableText("");
+                setDraftId("");
+                setModel("");
+                setStatusMessage("");
+                setError("");
+              }}
+            >
+              <option value={OTHER_PATIENT_ID}>Other patient / standalone draft</option>
+              {activePatients.map((patient) => (
                 <option key={patient.id} value={patient.id}>
                   {patient.bed || "-"} / {patient.patientCode || "-"} / {patient.primaryDiagnosis || "No Dx"}
                 </option>
@@ -273,7 +297,8 @@ function AiDocumentsPage({ patients, dailyNotesByPatient = {}, onSavePatient }: 
           )}
           <p className="muted span-2">
             {selectedOption.helper}
-            {documentType === "weeklySummary" && ` ${notesInRange.length} SOAP note(s) selected.`}
+            {isOtherPatient && " This draft will not be saved into any patient record."}
+            {documentType === "weeklySummary" && !isOtherPatient && ` ${notesInRange.length} SOAP note(s) selected.`}
           </p>
           <label className="span-2">
             Additional de-identified source text
@@ -290,7 +315,7 @@ function AiDocumentsPage({ patients, dailyNotesByPatient = {}, onSavePatient }: 
               checked={deidentifiedConfirmed}
               onChange={(event) => setDeidentifiedConfirmed(event.target.checked)}
             />
-            I confirm all source text and selected patient notes are de-identified.
+            I confirm all source text{isOtherPatient ? "" : " and selected patient notes"} are de-identified.
           </label>
           <label className="checkbox-label span-2">
             <input
@@ -301,7 +326,8 @@ function AiDocumentsPage({ patients, dailyNotesByPatient = {}, onSavePatient }: 
             Store full raw text in aiDrafts. Use de-identified data only.
           </label>
           <p className="muted span-2">
-            {rawText.length} / 12,000 pasted characters. Approx. {estimatedTokens} pasted input tokens. The backend adds selected patient/SOAP context.
+            {rawText.length} / 12,000 pasted characters. Approx. {estimatedTokens} pasted input tokens.
+            {isOtherPatient ? " Standalone mode uses pasted text only." : " The backend adds selected patient/SOAP context."}
           </p>
           <div className="form-actions span-2">
             <button type="button" disabled={!canGenerate} onClick={generateDraft}>
@@ -319,11 +345,16 @@ function AiDocumentsPage({ patients, dailyNotesByPatient = {}, onSavePatient }: 
           <div className="section-heading">
             <div>
               <h3>Review Draft</h3>
-              <p className="muted">Model: {model} / Draft: {draftId}</p>
+              <p className="muted">
+                Model: {model} / Draft: {draftId}
+                {isOtherPatient && " / Standalone draft"}
+              </p>
             </div>
-            <button type="button" disabled={saving || !editableText.trim()} onClick={saveReviewedDraft}>
-              {saving ? "Saving..." : "Save reviewed draft"}
-            </button>
+            {!isOtherPatient && (
+              <button type="button" disabled={saving || !editableText.trim()} onClick={saveReviewedDraft}>
+                {saving ? "Saving..." : "Save reviewed draft"}
+              </button>
+            )}
           </div>
           <label className="span-2">
             Editable draft
