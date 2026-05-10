@@ -68,6 +68,17 @@ function IconUtilities() {
   );
 }
 
+function IconAiDocuments() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M6 3h8l4 4v14H6z" />
+      <path d="M14 3v5h4" />
+      <path d="M9 13h6M9 17h4" />
+      <path d="M9 8l.5 1.4L11 10l-1.5.6L9 12l-.5-1.4L7 10l1.5-.6z" />
+    </svg>
+  );
+}
+
 function IconSettings() {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -121,6 +132,7 @@ function AppLayout({ userName, syncError }: AppLayoutProps) {
     { to: "/tasks", labelKey: "nav.todayTasks", icon: IconTasks },
     { to: "/archive", labelKey: "nav.archive", icon: IconArchive },
     { to: "/print", labelKey: "nav.printList", icon: IconPrinter },
+    { to: "/ai-documents", labelKey: "nav.aiDocuments", icon: IconAiDocuments },
     { to: "/utilities", labelKey: "nav.utilities", icon: IconUtilities },
     { to: "/settings", labelKey: "nav.settings", icon: IconSettings },
   ];

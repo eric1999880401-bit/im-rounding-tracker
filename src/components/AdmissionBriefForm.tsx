@@ -49,10 +49,10 @@ function AdmissionBriefForm({
   return (
     <section className="panel">
       <h2>Admission Brief / Initial Presentation</h2>
-      <p className="muted">Clinician-controlled free text for new admissions. Daily SOAP remains separate.</p>
+      <p className="muted">Clinician-reviewed admission data. Daily SOAP remains separate.</p>
       <div className="form-grid">
         <label className="span-2">
-          Chief Complaint / 主訴
+          Chief Complaint
           <textarea
             value={patient.chiefComplaint || patient.admissionChiefConcern}
             onChange={(event) => updateChiefComplaint(event.target.value)}
@@ -73,8 +73,96 @@ function AdmissionBriefForm({
           />
         </label>
 
+        <label>
+          PMH
+          <textarea
+            value={patient.admissionPMH}
+            onChange={(event) => updateField("admissionPMH", event.target.value)}
+            onBlur={commitOnBlur}
+            onCompositionStart={onCompositionStart}
+            onCompositionEnd={handleCompositionEnd}
+          />
+        </label>
+
+        <label>
+          Baseline function
+          <textarea
+            value={patient.baselineFunction}
+            onChange={(event) => updateField("baselineFunction", event.target.value)}
+            onBlur={commitOnBlur}
+            onCompositionStart={onCompositionStart}
+            onCompositionEnd={handleCompositionEnd}
+          />
+        </label>
+
         <label className="span-2">
-          Admission Note Summary / 簡短 Admission Summary
+          Initial PE
+          <ColorMarkupTextarea
+            value={patient.initialPhysicalExam}
+            onChange={(value) => updateField("initialPhysicalExam", value)}
+            onBlur={commitOnBlur}
+            onCompositionStart={onCompositionStart}
+            onCompositionEnd={handleCompositionEnd}
+          />
+        </label>
+
+        <label>
+          Initial labs
+          <textarea
+            value={patient.initialLabs}
+            onChange={(event) => updateField("initialLabs", event.target.value)}
+            onBlur={commitOnBlur}
+            onCompositionStart={onCompositionStart}
+            onCompositionEnd={handleCompositionEnd}
+          />
+        </label>
+
+        <label>
+          Initial imaging
+          <textarea
+            value={patient.initialImaging}
+            onChange={(event) => updateField("initialImaging", event.target.value)}
+            onBlur={commitOnBlur}
+            onCompositionStart={onCompositionStart}
+            onCompositionEnd={handleCompositionEnd}
+          />
+        </label>
+
+        <label>
+          Initial assessment
+          <textarea
+            value={patient.initialAssessment}
+            onChange={(event) => updateField("initialAssessment", event.target.value)}
+            onBlur={commitOnBlur}
+            onCompositionStart={onCompositionStart}
+            onCompositionEnd={handleCompositionEnd}
+          />
+        </label>
+
+        <label>
+          Initial plan
+          <textarea
+            value={patient.initialPlan}
+            onChange={(event) => updateField("initialPlan", event.target.value)}
+            onBlur={commitOnBlur}
+            onCompositionStart={onCompositionStart}
+            onCompositionEnd={handleCompositionEnd}
+          />
+        </label>
+
+        <label className="span-2">
+          Early hospital course
+          <textarea
+            value={patient.earlyHospitalCourse}
+            onChange={(event) => updateField("earlyHospitalCourse", event.target.value)}
+            onBlur={commitOnBlur}
+            onCompositionStart={onCompositionStart}
+            onCompositionEnd={handleCompositionEnd}
+          />
+        </label>
+
+        <label className="span-2">
+          Admission Note Summary
           <ColorMarkupTextarea
             value={patient.admissionBriefFreeText}
             onChange={(value) => updateField("admissionBriefFreeText", value)}
@@ -84,6 +172,32 @@ function AdmissionBriefForm({
             placeholder="Paste or write your own short admission summary."
           />
         </label>
+
+        {patient.generatedAdmissionNote.trim() && (
+          <label className="span-2">
+            AI Admission Note Draft
+            <textarea
+              value={patient.generatedAdmissionNote}
+              onChange={(event) => updateField("generatedAdmissionNote", event.target.value)}
+              onBlur={commitOnBlur}
+              onCompositionStart={onCompositionStart}
+              onCompositionEnd={handleCompositionEnd}
+            />
+          </label>
+        )}
+
+        {patient.generatedAdmissionSummary.trim() && (
+          <label className="span-2">
+            AI Admission Summary Draft
+            <textarea
+              value={patient.generatedAdmissionSummary}
+              onChange={(event) => updateField("generatedAdmissionSummary", event.target.value)}
+              onBlur={commitOnBlur}
+              onCompositionStart={onCompositionStart}
+              onCompositionEnd={handleCompositionEnd}
+            />
+          </label>
+        )}
       </div>
     </section>
   );

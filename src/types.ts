@@ -29,6 +29,13 @@ export type AiClinicalSourceType =
   | "consult"
   | "nursing";
 
+export type AiDocumentType =
+  | "admissionNote"
+  | "admissionSummary"
+  | "dischargeHospitalCourse"
+  | "weeklySummary"
+  | "isbar";
+
 export interface AiSoapDraft {
   oneLiner: string;
   subjective: {
@@ -38,6 +45,14 @@ export interface AiSoapDraft {
   };
   objective: {
     vitals: Array<{
+      date: string;
+      name: string;
+      value: string;
+      interpretation: string;
+      isAbnormal: boolean;
+      isImportant: boolean;
+    }>;
+    bloodSugars: Array<{
       date: string;
       name: string;
       value: string;
@@ -94,6 +109,18 @@ export interface AiSoapDraft {
   uncertainty: string[];
 }
 
+export interface AiDocumentDraft {
+  documentType: AiDocumentType;
+  title: string;
+  conciseSummary: string;
+  sections: Array<{
+    heading: string;
+    content: string;
+  }>;
+  followUpItems: string[];
+  uncertainty: string[];
+}
+
 export interface AiThinkingPrompt {
   id: string;
   prompt: string;
@@ -120,6 +147,23 @@ export interface AnalyzeClinicalTextInput {
 export interface AnalyzeClinicalTextResult {
   draftId: string;
   draft: AiSoapDraft;
+  model: string;
+  rawTextPreview: string;
+}
+
+export interface GenerateClinicalDocumentInput {
+  patientId: string;
+  documentType: AiDocumentType;
+  rawText?: string;
+  dateFrom?: string;
+  dateTo?: string;
+  deidentifiedConfirmed: boolean;
+  storeRawText?: boolean;
+}
+
+export interface GenerateClinicalDocumentResult {
+  draftId: string;
+  draft: AiDocumentDraft;
   model: string;
   rawTextPreview: string;
 }
@@ -213,6 +257,8 @@ export interface DailyNote {
   importantRedFlags: string;
   overnightEvents: string;
   subjectiveOrChiefConcern: string;
+  vitalSigns: string;
+  bloodSugar: string;
   physicalExam: string;
   labSummary: string;
   imageSummary: string;
@@ -303,11 +349,18 @@ export interface Patient {
   initialPlan: string;
   earlyHospitalCourse: string;
   admissionBriefNotes: string;
+  generatedAdmissionNote: string;
+  generatedAdmissionSummary: string;
+  generatedDischargeSummary: string;
+  generatedWeeklySummary: string;
+  generatedSbarNote: string;
   isNewAdmission: boolean;
   showAdmissionBriefOnPrint: boolean;
   physicalExam: string;
   hospitalCourseHighlights: string;
   importantRedFlags: string;
+  vitalSigns: string;
+  bloodSugar: string;
   rawLabText: string;
   labDate: string;
   labReportTitle: string;

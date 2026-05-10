@@ -277,6 +277,8 @@ function PatientDetailPage({
               <div><strong>Red Flags</strong><ClinicalText value={note.importantRedFlags} importantDefault /></div>
               <div><strong>Overnight Event</strong><ClinicalText value={note.overnightEvents} /></div>
               <div><strong>S</strong><ClinicalText value={note.subjectiveOrChiefConcern} /></div>
+              <div><strong>V/S</strong><ClinicalText value={note.vitalSigns} /></div>
+              <div><strong>Blood sugar</strong><ClinicalText value={note.bloodSugar} /></div>
               <div><strong>PE</strong><ClinicalText value={note.physicalExam} /></div>
               <div><strong>Lab</strong><ClinicalText value={note.rawLabText || note.labSummary} /></div>
               <div><strong>Image</strong><ClinicalText value={note.imageSummary} /></div>

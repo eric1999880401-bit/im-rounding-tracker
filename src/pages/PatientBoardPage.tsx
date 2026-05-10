@@ -103,24 +103,6 @@ function PatientBoardPage({
     });
   }
 
-  function importantSummary(patient: Patient) {
-    const important = [
-      ...importantLines(patient.importantRedFlags),
-      ...importantLines(patient.subjectiveOrChiefConcern),
-      ...importantLines(patient.physicalExam),
-      ...importantLines(patient.newLabs),
-      ...importantLines(patient.newImaging),
-      ...patient.assessmentPlanItems.filter((item) => item.isImportant).map((item) => ({
-        text: item.problemTitle || item.assessmentSummary,
-        important: true,
-      })),
-      ...importantLines(patient.assessment),
-      ...importantLines(patient.plan),
-    ];
-
-    return important.slice(0, 4).map((line) => line.text).join("; ");
-  }
-
   function taskSummary(patient: Patient) {
     const pendingTasks = patient.tasks.filter((task) => !task.done);
     const urgentTasks = pendingTasks.filter(
@@ -293,167 +275,168 @@ function PatientBoardPage({
         </div>
         {dataLoading && <p className="muted">{t("board.loading")}</p>}
         {dataError && <p className="error-message">{dataError}</p>}
-        <div className="responsive-table">
-          <table>
-            <thead>
-              <tr>
-                <th>{t("field.bed")}</th>
-                <th>{t("board.code")}</th>
-                <th>{t("field.ageSex")}</th>
-                <th>{t("board.conciseSummary")}</th>
-                <th>{t("board.newData")}</th>
-                <th>{t("field.tasks")}</th>
-                <th>{t("board.dcTarget")}</th>
-                <th>{t("board.actions")}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {activePatients.map((patient) => (
-                <tr key={patient.id}>
-                  <td>{patient.bed}</td>
-                  <td>{patient.patientCode}</td>
-                  <td>
-                    {patient.age}/{patient.sex}
-                  </td>
-                  <td>
-                    {patient.isNewAdmission && <span className="badge urgent">{t("board.newAdmission")}</span>}{" "}
-                    {patient.showAdmissionBriefOnPrint && <span className="badge normal">{t("board.briefIncluded")}</span>}
-                    {patient.importantRedFlags.trim() && (
-                      <div className="board-red-flags">
-                        <span className="board-label">Red Flags</span>
-                        <ClinicalText value={patient.importantRedFlags} maxLines={3} importantDefault />
-                      </div>
-                    )}
-                    {importantSummary(patient) && (
-                      <div className="important-line">{t("board.important")}: {importantSummary(patient)}</div>
-                    )}
-                    <strong>{patient.primaryDiagnosis || "-"}</strong>
+        <div className="patient-board-grid">
+          {activePatients.map((patient) => (
+            <article className="patient-board-card" key={patient.id}>
+              <header className="patient-board-card-header">
+                <div className="patient-board-identity">
+                  <strong>{patient.bed || "-"}</strong>
+                  <span>{patient.patientCode || "-"}</span>
+                  <span>{patient.age}/{patient.sex}</span>
+                </div>
+                <div className="patient-board-badges">
+                  {patient.isNewAdmission && <span className="badge urgent">{t("board.newAdmission")}</span>}
+                  {patient.showAdmissionBriefOnPrint && <span className="badge normal">{t("board.briefIncluded")}</span>}
+                </div>
+              </header>
+
+              <div className="patient-board-card-body">
+                <section className="patient-board-section patient-board-overview">
+                  {patient.importantRedFlags.trim() && (
+                    <div className="board-red-flags">
+                      <span className="board-label">Red Flags</span>
+                      <ClinicalText value={patient.importantRedFlags} maxLines={3} importantDefault />
+                    </div>
+                  )}
+                  <strong>{patient.primaryDiagnosis || "-"}</strong>
+                  <div className="board-subsection">
+                    <span className="board-label">PMH</span>
+                    <CompactItemList items={getUnderlyingDiseaseItems(patient)} />
+                  </div>
+                  <div className="board-subsection">
+                    <span className="board-label">Problems</span>
+                    <ActiveProblemDisplay
+                      items={patient.activeProblemStructuredItems}
+                      fallbackItems={getActiveProblemItems(patient)}
+                    />
+                  </div>
+                  <div className="muted">Attending: {patient.attending || t("board.unassigned")}</div>
+                </section>
+
+                <section className="patient-board-section">
+                  <span className="board-label">Sx</span>
+                  <ClinicalText value={patient.subjectiveOrChiefConcern} maxLines={2} />
+                  {patient.vitalSigns.trim() && (
                     <div className="board-subsection">
-                      <span className="board-label">PMH</span>
-                      <CompactItemList items={getUnderlyingDiseaseItems(patient)} />
+                      <span className="board-label">V/S</span>
+                      <ClinicalText value={patient.vitalSigns} maxLines={2} />
                     </div>
+                  )}
+                  {patient.bloodSugar.trim() && (
                     <div className="board-subsection">
-                      <span className="board-label">Problems</span>
-                      <ActiveProblemDisplay
-                        items={patient.activeProblemStructuredItems}
-                        fallbackItems={getActiveProblemItems(patient)}
-                      />
+                      <span className="board-label">Sugar</span>
+                      <ClinicalText value={patient.bloodSugar} maxLines={2} />
                     </div>
-                    <div className="muted">Attending: {patient.attending || t("board.unassigned")}</div>
-                  </td>
-                  <td>
-                    <div>
-                      <span className="board-label">Sx</span>{" "}
-                      <ClinicalText value={patient.subjectiveOrChiefConcern} maxLines={2} />
+                  )}
+                  {(patient.physicalExam.trim() ||
+                    importantLines(patient.physicalExam).length > 0 ||
+                    patient.physicalExamEntries.length > 0) && (
+                    <div className="board-subsection">
+                      <span className="board-label">PE</span>
+                      <ClinicalText value={patient.physicalExam} maxLines={2} />
+                      <div className="objective-chip-row">{structuredPeSummary(patient)}</div>
                     </div>
-                    {(patient.physicalExam.trim() ||
-                      importantLines(patient.physicalExam).length > 0 ||
-                      patient.physicalExamEntries.length > 0) && (
-                      <div>
-                        <span className="board-label">PE</span>{" "}
-                        <ClinicalText value={patient.physicalExam} maxLines={2} />
-                        <div className="objective-chip-row">{structuredPeSummary(patient)}</div>
-                      </div>
-                    )}
-                    <div>
-                      <span className="board-label">Lab/Image</span>{" "}
-                      <LabChips items={patient.parsedLabItems} />
-                      <ClinicalText value={patient.newImaging} maxLines={1} />
-                      <div className="objective-chip-row">{structuredImageSummary(patient)}</div>
-                    </div>
-                    <div>
-                      <span className="board-label">A/P</span>{" "}
-                      <AssessmentPlanDisplay
-                        items={patient.assessmentPlanItems}
-                        legacyAssessment={patient.assessment}
-                        legacyPlan={patient.plan}
-                        compact
-                      />
-                    </div>
-                  </td>
-                  <td>
-                    {taskSummary(patient)}
-                  </td>
-                  <td>
-                    <div>{patient.dischargeTargetDate || "TBD"}</div>
-                    {dischargeReminder(patient) && <div className="important-line">{dischargeReminder(patient)}</div>}
-                  </td>
-                  <td className="table-actions">
-                    <div className="board-action-buttons">
-                      <Link
-                        className="button-link icon-button"
-                        to={`/patients/${patient.id}`}
-                        aria-label={t("action.details")}
-                        title={t("action.details")}
-                      >
-                        <span className="icon-button-icon"><IconDetails /></span>
-                        <span className="icon-button-label">{t("board.actionShort.details")}</span>
-                      </Link>
-                      <button
-                        type="button"
-                        className="secondary icon-button"
-                        onClick={() => startToday(patient.id)}
-                        aria-label={t("action.createToday")}
-                        title={t("action.createToday")}
-                      >
-                        <span className="icon-button-icon"><IconCreateToday /></span>
-                        <span className="icon-button-label">{t("board.actionShort.createToday")}</span>
-                      </button>
-                      <button
-                        type="button"
-                        className={`secondary icon-button${patient.isNewAdmission ? " icon-button-active" : ""}`}
-                        onClick={() => setNewAdmission(patient.id, !patient.isNewAdmission)}
-                        aria-label={patient.isNewAdmission ? t("board.unmarkNew") : t("action.markNew")}
-                        title={patient.isNewAdmission ? t("board.unmarkNew") : t("action.markNew")}
-                      >
-                        <span className="icon-button-icon"><IconStar /></span>
-                        <span className="icon-button-label">
-                          {patient.isNewAdmission ? t("board.actionShort.unmarkNew") : t("board.actionShort.markNew")}
-                        </span>
-                      </button>
-                      <button
-                        type="button"
-                        className={`secondary icon-button${patient.showAdmissionBriefOnPrint ? " icon-button-active" : ""}`}
-                        onClick={() => setAdmissionBriefPrint(patient.id, !patient.showAdmissionBriefOnPrint)}
-                        aria-label={patient.showAdmissionBriefOnPrint ? t("board.excludeBrief") : t("action.includeBrief")}
-                        title={patient.showAdmissionBriefOnPrint ? t("board.excludeBrief") : t("action.includeBrief")}
-                      >
-                        <span className="icon-button-icon"><IconBrief /></span>
-                        <span className="icon-button-label">
-                          {patient.showAdmissionBriefOnPrint ? t("board.actionShort.excludeBrief") : t("board.actionShort.includeBrief")}
-                        </span>
-                      </button>
-                      <button
-                        type="button"
-                        className="icon-button"
-                        onClick={() => updateStatus(patient.id, "discharged")}
-                        aria-label={t("action.discharge")}
-                        title={t("action.discharge")}
-                      >
-                        <span className="icon-button-icon"><IconDischarge /></span>
-                        <span className="icon-button-label">{t("board.actionShort.discharge")}</span>
-                      </button>
-                      <button
-                        type="button"
-                        className="secondary icon-button"
-                        onClick={() => updateStatus(patient.id, "archived")}
-                        aria-label={t("action.archive")}
-                        title={t("action.archive")}
-                      >
-                        <span className="icon-button-icon"><IconArchive /></span>
-                        <span className="icon-button-label">{t("board.actionShort.archive")}</span>
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-              {activePatients.length === 0 && (
-                <tr>
-                  <td colSpan={8}>{t("board.noActivePatients")}</td>
-                </tr>
-              )}
-            </tbody>
-          </table>
+                  )}
+                </section>
+
+                <section className="patient-board-section">
+                  <span className="board-label">Lab / Image</span>
+                  <LabChips items={patient.parsedLabItems} />
+                  <ClinicalText value={patient.newImaging} maxLines={1} />
+                  <div className="objective-chip-row">{structuredImageSummary(patient)}</div>
+                </section>
+
+                <section className="patient-board-section">
+                  <span className="board-label">A/P</span>
+                  <AssessmentPlanDisplay
+                    items={patient.assessmentPlanItems}
+                    legacyAssessment={patient.assessment}
+                    legacyPlan={patient.plan}
+                    compact
+                  />
+                </section>
+
+                <section className="patient-board-section patient-board-tasks">
+                  {taskSummary(patient)}
+                </section>
+
+                <section className="patient-board-section patient-board-discharge">
+                  <span className="board-label">DC</span>
+                  <strong>{patient.dischargeTargetDate || "TBD"}</strong>
+                  {dischargeReminder(patient) && <div className="important-line">{dischargeReminder(patient)}</div>}
+                </section>
+              </div>
+
+              <footer className="patient-board-card-actions">
+                <div className="board-action-buttons">
+                  <Link
+                    className="button-link icon-button"
+                    to={`/patients/${patient.id}`}
+                    aria-label={t("action.details")}
+                    title={t("action.details")}
+                  >
+                    <span className="icon-button-icon"><IconDetails /></span>
+                    <span className="icon-button-label">{t("board.actionShort.details")}</span>
+                  </Link>
+                  <button
+                    type="button"
+                    className="secondary icon-button"
+                    onClick={() => startToday(patient.id)}
+                    aria-label={t("action.createToday")}
+                    title={t("action.createToday")}
+                  >
+                    <span className="icon-button-icon"><IconCreateToday /></span>
+                    <span className="icon-button-label">{t("board.actionShort.createToday")}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={`secondary icon-button${patient.isNewAdmission ? " icon-button-active" : ""}`}
+                    onClick={() => setNewAdmission(patient.id, !patient.isNewAdmission)}
+                    aria-label={patient.isNewAdmission ? t("board.unmarkNew") : t("action.markNew")}
+                    title={patient.isNewAdmission ? t("board.unmarkNew") : t("action.markNew")}
+                  >
+                    <span className="icon-button-icon"><IconStar /></span>
+                    <span className="icon-button-label">
+                      {patient.isNewAdmission ? t("board.actionShort.unmarkNew") : t("board.actionShort.markNew")}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    className={`secondary icon-button${patient.showAdmissionBriefOnPrint ? " icon-button-active" : ""}`}
+                    onClick={() => setAdmissionBriefPrint(patient.id, !patient.showAdmissionBriefOnPrint)}
+                    aria-label={patient.showAdmissionBriefOnPrint ? t("board.excludeBrief") : t("action.includeBrief")}
+                    title={patient.showAdmissionBriefOnPrint ? t("board.excludeBrief") : t("action.includeBrief")}
+                  >
+                    <span className="icon-button-icon"><IconBrief /></span>
+                    <span className="icon-button-label">
+                      {patient.showAdmissionBriefOnPrint ? t("board.actionShort.excludeBrief") : t("board.actionShort.includeBrief")}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    className="icon-button"
+                    onClick={() => updateStatus(patient.id, "discharged")}
+                    aria-label={t("action.discharge")}
+                    title={t("action.discharge")}
+                  >
+                    <span className="icon-button-icon"><IconDischarge /></span>
+                    <span className="icon-button-label">{t("board.actionShort.discharge")}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary icon-button"
+                    onClick={() => updateStatus(patient.id, "archived")}
+                    aria-label={t("action.archive")}
+                    title={t("action.archive")}
+                  >
+                    <span className="icon-button-icon"><IconArchive /></span>
+                    <span className="icon-button-label">{t("board.actionShort.archive")}</span>
+                  </button>
+                </div>
+              </footer>
+            </article>
+          ))}
+          {activePatients.length === 0 && <p className="muted">{t("board.noActivePatients")}</p>}
         </div>
       </section>
     </div>

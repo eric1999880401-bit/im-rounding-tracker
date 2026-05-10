@@ -20,6 +20,14 @@ const sourceTypes = new Set([
   "nursing",
 ]);
 
+const documentTypes = new Set([
+  "admissionNote",
+  "admissionSummary",
+  "dischargeHospitalCourse",
+  "weeklySummary",
+  "isbar",
+]);
+
 const stringSchema = { type: "string" } as const;
 const booleanSchema = { type: "boolean" } as const;
 
@@ -52,9 +60,25 @@ const aiSoapDraftSchema = {
     objective: {
       type: "object",
       additionalProperties: false,
-      required: ["vitals", "physicalExam", "labs", "images"],
+      required: ["vitals", "bloodSugars", "physicalExam", "labs", "images"],
       properties: {
         vitals: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            required: ["date", "name", "value", "interpretation", "isAbnormal", "isImportant"],
+            properties: {
+              date: stringSchema,
+              name: stringSchema,
+              value: stringSchema,
+              interpretation: stringSchema,
+              isAbnormal: booleanSchema,
+              isImportant: booleanSchema,
+            },
+          },
+        },
+        bloodSugars: {
           type: "array",
           items: {
             type: "object",
@@ -187,6 +211,34 @@ const aiSoapDraftSchema = {
   },
 } as const;
 
+const aiDocumentDraftSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["documentType", "title", "conciseSummary", "sections", "followUpItems", "uncertainty"],
+  properties: {
+    documentType: {
+      type: "string",
+      enum: ["admissionNote", "admissionSummary", "dischargeHospitalCourse", "weeklySummary", "isbar"],
+    },
+    title: stringSchema,
+    conciseSummary: stringSchema,
+    sections: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["heading", "content"],
+        properties: {
+          heading: stringSchema,
+          content: stringSchema,
+        },
+      },
+    },
+    followUpItems: { type: "array", items: stringSchema },
+    uncertainty: { type: "array", items: stringSchema },
+  },
+} as const;
+
 type SourceType =
   | "mixed"
   | "admission"
@@ -196,6 +248,13 @@ type SourceType =
   | "progress"
   | "consult"
   | "nursing";
+
+type DocumentType =
+  | "admissionNote"
+  | "admissionSummary"
+  | "dischargeHospitalCourse"
+  | "weeklySummary"
+  | "isbar";
 
 interface CallableInput {
   patientId?: unknown;
@@ -210,6 +269,16 @@ interface CallableInput {
     activeProblems?: unknown;
     currentAssessmentPlan?: unknown;
   };
+}
+
+interface DocumentCallableInput {
+  patientId?: unknown;
+  documentType?: unknown;
+  rawText?: unknown;
+  dateFrom?: unknown;
+  dateTo?: unknown;
+  deidentifiedConfirmed?: unknown;
+  storeRawText?: unknown;
 }
 
 function getOpenAiApiKey() {
@@ -320,6 +389,146 @@ function getOpenAiErrorMessage(status: number, responseBody: Record<string, unkn
   return "OpenAI request failed. Check the Firebase Functions logs for details.";
 }
 
+function asPlainObject(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+function compactPatientContext(data: FirebaseFirestore.DocumentData | undefined) {
+  const patient = asPlainObject(data);
+  return {
+    age: patient.age ?? "",
+    sex: patient.sex ?? "",
+    admissionDate: patient.admissionDate ?? "",
+    primaryDiagnosis: patient.primaryDiagnosis ?? "",
+    oneLiner: patient.oneLiner ?? "",
+    pmh: patient.underlyingDiseases ?? "",
+    activeProblems: patient.activeProblems ?? "",
+    chiefComplaint: patient.chiefComplaint ?? patient.admissionChiefConcern ?? "",
+    hpi: patient.presentIllnessOrHPI ?? patient.hpiOrAdmissionStory ?? "",
+    admissionSummary: patient.admissionBriefFreeText ?? "",
+    admissionNote: patient.generatedAdmissionNote ?? patient.admissionBriefNotes ?? "",
+    initialPhysicalExam: patient.initialPhysicalExam ?? "",
+    initialLabs: patient.initialLabs ?? "",
+    initialImaging: patient.initialImaging ?? "",
+    initialAssessment: patient.initialAssessment ?? "",
+    initialPlan: patient.initialPlan ?? "",
+    earlyHospitalCourse: patient.earlyHospitalCourse ?? "",
+    hospitalCourseHighlights: patient.hospitalCourseHighlights ?? "",
+    redFlags: patient.importantRedFlags ?? "",
+    dischargePlan: patient.dischargePlan ?? "",
+    dischargeBarriers: patient.dischargeBarriers ?? "",
+    latestVitals: patient.vitalSigns ?? "",
+    latestBloodSugar: patient.bloodSugar ?? "",
+    latestPE: patient.physicalExam ?? "",
+    latestLabs: patient.newLabs ?? patient.rawLabText ?? "",
+    latestImages: patient.newImaging ?? "",
+    latestAssessment: patient.assessment ?? "",
+    latestPlan: patient.plan ?? "",
+    currentTasks: Array.isArray(patient.tasks)
+      ? patient.tasks
+          .filter((task) => asPlainObject(task).done !== true)
+          .slice(0, 20)
+          .map((task) => ({
+            text: asPlainObject(task).text ?? "",
+            priority: asPlainObject(task).priority ?? "",
+            dueDate: asPlainObject(task).dueDate ?? "",
+            category: asPlainObject(task).category ?? "",
+          }))
+      : [],
+  };
+}
+
+function compactDailyNote(noteId: string, data: FirebaseFirestore.DocumentData) {
+  const note = asPlainObject(data);
+  return {
+    date: String(note.date ?? noteId),
+    redFlags: note.importantRedFlags ?? "",
+    overnight: note.overnightEvents ?? "",
+    subjective: note.subjectiveOrChiefConcern ?? "",
+    vitalSigns: note.vitalSigns ?? "",
+    bloodSugar: note.bloodSugar ?? "",
+    physicalExam: note.physicalExam ?? "",
+    labs: note.rawLabText ?? note.labSummary ?? "",
+    images: note.imageSummary ?? "",
+    assessment: note.assessment ?? "",
+    plan: note.plan ?? "",
+    dischargePlan: note.dischargePlan ?? "",
+  };
+}
+
+function documentTypeLabel(documentType: DocumentType) {
+  const labels: Record<DocumentType, string> = {
+    admissionNote: "Admission note",
+    admissionSummary: "Admission summary for quick attending rounds",
+    dischargeHospitalCourse: "Discharge hospital course",
+    weeklySummary: "Weekly progress summary",
+    isbar: "iSBAR handoff note",
+  };
+  return labels[documentType];
+}
+
+function documentInstructions(documentType: DocumentType) {
+  const shared = [
+    "Use concise inpatient IM style with common unambiguous medical abbreviations.",
+    "Do not invent missing data; mark absent or unclear details in uncertainty.",
+    "Preserve dates, lab values, units, medication names, image findings, and pending items exactly when available.",
+    "Use de-identified content only; do not repeat names, full MRNs, IDs, birthday, phone, address, or identifiable image details.",
+  ];
+
+  const byType: Record<DocumentType, string[]> = {
+    admissionNote: [
+      "Create a structured admission note matching an IM new-admission brief.",
+      "Preferred section headings: CC, PI/HPI, PMH, Baseline, V/S, PE, Lab, Image, Assessment, Plan, Early course, Pending/To-do.",
+      "Also provide a conciseSummary suitable for the Admission Note Summary field.",
+    ],
+    admissionSummary: [
+      "Create a short attending-rounds admission summary.",
+      "Emphasize why admitted, key positive/negative findings, active problems, initial treatment, and pending decisions.",
+      "Use conciseSummary as the best one-paragraph presentation.",
+    ],
+    dischargeHospitalCourse: [
+      "Create a hospital course draft for discharge preparation.",
+      "Organize by problem when possible, include important treatments, major tests, complications, current status, and follow-up needs.",
+    ],
+    weeklySummary: [
+      "Create a weekly progress summary from SOAP notes in the selected range.",
+      "Organize by timeline and active problem, include response to treatment, pending items, and current plan.",
+    ],
+    isbar: [
+      "Create an iSBAR handoff note with headings: Identify, Situation, Background, Assessment, Recommendation.",
+      "Include contingency plans, red flags to watch, pending tasks, and when to call senior/attending.",
+    ],
+  };
+
+  return [...shared, ...byType[documentType]].join(" ");
+}
+
+function makeDocumentPrompt(params: {
+  documentType: DocumentType;
+  rawText: string;
+  dateFrom: string;
+  dateTo: string;
+  patientContext: Record<string, unknown>;
+  dailyNotes: Array<Record<string, unknown>>;
+}) {
+  return [
+    "Document type:",
+    documentTypeLabel(params.documentType),
+    "",
+    "Date range:",
+    JSON.stringify({ from: params.dateFrom, to: params.dateTo }),
+    "",
+    "Allowed de-identified patient context:",
+    JSON.stringify(params.patientContext, null, 2),
+    "",
+    "SOAP notes in requested range:",
+    JSON.stringify(params.dailyNotes, null, 2),
+    "",
+    "Additional de-identified pasted text:",
+    params.rawText || "(none)",
+  ].join("\n");
+}
+
 export const analyzeClinicalText = onCall(
   {
     secrets: [OPENAI_API_KEY],
@@ -391,6 +600,7 @@ export const analyzeClinicalText = onCall(
               "Keep all SOAP-facing text concise and easy to scan for inpatient IM rounds.",
               "Use common, unambiguous medical abbreviations when they save space, such as c/f, r/o, s/p, SOB, CP, N/V, Abd, CV, Resp, Neuro, HEENT, MSK, WBC, Hb, Plt, Cr, Na, K, AST, ALT, CRP, UA, U/C, B/C, CXR, CT, MRI, U/S, Abx, cont, hold, f/u, pending, DC, OPD.",
               "Avoid rare or ambiguous abbreviations, and do not abbreviate in a way that changes clinical meaning.",
+              "Put vital signs in objective.vitals and bedside blood sugar, glucose stick, AC/PC glucose, or SMBG values in objective.bloodSugars.",
               "Prefer concise fragments over long sentences in symptoms, PE findings, interpretations, assessment summaries, evidence items, plan items, red flags, tasks, discharge issues, and thinking prompts.",
               "Identify possible red flags, pending tasks, discharge issues, uncertainty, and thinking prompts.",
               "Thinking prompts are questions for clinician review, not medical orders.",
@@ -445,6 +655,158 @@ export const analyzeClinicalText = onCall(
       sourceType,
       rawTextPreview,
       ...(storeRawText ? { rawText } : {}),
+      draft,
+      status: "draft",
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      model,
+    });
+
+    return {
+      draftId: draftRef.id,
+      draft,
+      model,
+      rawTextPreview,
+    };
+  },
+);
+
+export const generateClinicalDocument = onCall(
+  {
+    secrets: [OPENAI_API_KEY],
+    timeoutSeconds: 120,
+    memory: "512MiB",
+  },
+  async (request) => {
+    if (!request.auth) {
+      throw new HttpsError("unauthenticated", "Sign in is required before using AI document generation.");
+    }
+
+    const data = request.data as DocumentCallableInput;
+    const uid = request.auth.uid;
+    const patientId = String(data.patientId ?? "").trim();
+    const documentType = String(data.documentType ?? "") as DocumentType;
+    const rawText = String(data.rawText ?? "").trim();
+    const dateFrom = String(data.dateFrom ?? "").trim();
+    const dateTo = String(data.dateTo ?? "").trim();
+    const deidentifiedConfirmed = data.deidentifiedConfirmed === true;
+    const storeRawText = data.storeRawText === true;
+
+    if (!patientId) {
+      throw new HttpsError("invalid-argument", "patientId is required.");
+    }
+
+    if (!documentTypes.has(documentType)) {
+      throw new HttpsError("invalid-argument", "Invalid AI document type.");
+    }
+
+    if (!deidentifiedConfirmed) {
+      throw new HttpsError("failed-precondition", "Confirm that all text and existing patient notes are de-identified before generation.");
+    }
+
+    if (rawText.length > MAX_RAW_TEXT_CHARS) {
+      throw new HttpsError("invalid-argument", `Text is too long. Limit pasted input to ${MAX_RAW_TEXT_CHARS} characters.`);
+    }
+
+    const patientRef = admin.firestore().doc(`users/${uid}/patients/${patientId}`);
+    const patientSnapshot = await patientRef.get();
+    if (!patientSnapshot.exists) {
+      throw new HttpsError("not-found", "Patient was not found for this signed-in user.");
+    }
+
+    const apiKey = getOpenAiApiKey();
+    if (!apiKey) {
+      throw new HttpsError("failed-precondition", "AI document generation is not configured. Set OPENAI_API_KEY for Firebase Functions.");
+    }
+
+    const notesSnapshot = await patientRef.collection("dailyNotes").orderBy("date", "asc").get();
+    const dailyNotes = notesSnapshot.docs
+      .map((noteDoc) => compactDailyNote(noteDoc.id, noteDoc.data()))
+      .filter((note) => (!dateFrom || note.date >= dateFrom) && (!dateTo || note.date <= dateTo))
+      .slice(-30);
+
+    if (documentType === "weeklySummary" && dailyNotes.length === 0) {
+      throw new HttpsError("invalid-argument", "No SOAP notes were found in the selected date range.");
+    }
+
+    if (documentType === "admissionNote" && rawText.length < 20) {
+      throw new HttpsError("invalid-argument", "Paste de-identified admission source text before generating an admission note.");
+    }
+
+    const model = getModel();
+    const openAiResponse = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model,
+        input: [
+          {
+            role: "system",
+            content: [
+              "You write clinician-reviewed internal medicine documentation drafts.",
+              "Return JSON only matching the supplied schema.",
+              documentInstructions(documentType),
+              "The output is a draft only and must be reviewed by the clinician before saving.",
+            ].join(" "),
+          },
+          {
+            role: "user",
+            content: makeDocumentPrompt({
+              documentType,
+              rawText,
+              dateFrom,
+              dateTo,
+              patientContext: compactPatientContext(patientSnapshot.data()),
+              dailyNotes,
+            }),
+          },
+        ],
+        text: {
+          format: {
+            type: "json_schema",
+            name: "ai_clinical_document_draft",
+            description: "Structured clinical document draft for clinician review in IM Rounding Tracker.",
+            strict: true,
+            schema: aiDocumentDraftSchema,
+          },
+        },
+      }),
+    });
+
+    const responseBody = (await openAiResponse.json().catch(() => ({}))) as Record<string, unknown>;
+    if (!openAiResponse.ok) {
+      throw new HttpsError("internal", getOpenAiErrorMessage(openAiResponse.status, responseBody));
+    }
+
+    const refusal = extractRefusal(responseBody);
+    if (refusal) {
+      throw new HttpsError("failed-precondition", refusal);
+    }
+
+    const outputText = extractOutputText(responseBody);
+    if (!outputText) {
+      throw new HttpsError("internal", "OpenAI returned no JSON document draft.");
+    }
+
+    let draft: unknown;
+    try {
+      draft = JSON.parse(outputText);
+    } catch (error) {
+      logger.error("Failed to parse OpenAI document JSON", { error });
+      throw new HttpsError("internal", "OpenAI returned malformed JSON.");
+    }
+
+    const rawTextPreview = rawText.slice(0, 700);
+    const draftRef = patientRef.collection("aiDrafts").doc();
+    await draftRef.set({
+      sourceType: "document",
+      documentType,
+      rawTextPreview,
+      ...(storeRawText ? { rawText } : {}),
+      dateFrom,
+      dateTo,
       draft,
       status: "draft",
       createdAt: admin.firestore.FieldValue.serverTimestamp(),

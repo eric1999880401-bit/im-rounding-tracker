@@ -9,6 +9,7 @@ import ArchivePage from "./pages/ArchivePage";
 import PrintRoundingListPage from "./pages/PrintRoundingListPage";
 import SettingsPage from "./pages/SettingsPage";
 import UtilitiesPage from "./pages/UtilitiesPage";
+import AiDocumentsPage from "./pages/AiDocumentsPage";
 import AuthPage from "./pages/AuthPage";
 import { getUserName, useAuthUser } from "./firebase/auth";
 import { createPatient, deletePatient, saveDailyNote, subscribeToDailyNotes, subscribeToPatients, updatePatient } from "./firebase/patientService";
@@ -243,6 +244,16 @@ function App() {
               phonebook={phonebook}
               miscTasks={miscTasks}
               studyTopics={studyTopics}
+            />
+          }
+        />
+        <Route
+          path="/ai-documents"
+          element={
+            <AiDocumentsPage
+              patients={patients}
+              dailyNotesByPatient={dailyNotesByPatient}
+              onSavePatient={saveSyncedPatient}
             />
           }
         />

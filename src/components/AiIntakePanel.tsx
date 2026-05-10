@@ -46,6 +46,7 @@ type ReviewCardKind =
   | "symptom"
   | "overnightEvent"
   | "vital"
+  | "bloodSugar"
   | "physicalExam"
   | "lab"
   | "image"
@@ -155,6 +156,15 @@ function vitalLine(vital: AiSoapDraft["objective"]["vitals"][number]) {
   ].filter(hasText).join(" - ");
 }
 
+function bloodSugarLine(bloodSugar: AiSoapDraft["objective"]["bloodSugars"][number]) {
+  return [
+    bloodSugar.date,
+    bloodSugar.name,
+    bloodSugar.value,
+    bloodSugar.interpretation,
+  ].filter(hasText).join(" - ");
+}
+
 function labLine(lab: AiSoapDraft["objective"]["labs"][number]) {
   const prev = lab.previousValue ? `(prev ${lab.previousValue})` : "";
   return [
@@ -232,24 +242,27 @@ function buildCards(draft: AiSoapDraft): ReviewCard[] {
 
   addCard("One-liner", "One-liner", "oneLiner", draft.oneLiner, "string");
   addCard("S", "Chief concern", "chiefConcern", draft.subjective.chiefConcern, "string");
-  draft.subjective.symptoms.forEach((symptom, index) => addCard("S", `Symptom ${index + 1}`, "symptom", symptom, "string"));
-  draft.subjective.overnightEvents.forEach((event, index) =>
+  safeArray(draft.subjective.symptoms).forEach((symptom, index) => addCard("S", `Symptom ${index + 1}`, "symptom", symptom, "string"));
+  safeArray(draft.subjective.overnightEvents).forEach((event, index) =>
     addCard("S", `Overnight event ${index + 1}`, "overnightEvent", event, "string"),
   );
-  draft.objective.vitals.forEach((vital, index) => addCard("O - Vitals", `Vital ${index + 1}`, "vital", vital));
-  draft.objective.physicalExam.forEach((exam, index) => addCard("O - PE", `PE ${index + 1}`, "physicalExam", exam));
-  draft.objective.labs.forEach((lab, index) => addCard("O - Labs", `Lab ${index + 1}`, "lab", lab));
-  draft.objective.images.forEach((image, index) => addCard("O - Images", `Image ${index + 1}`, "image", image));
-  draft.assessmentPlan.forEach((item, index) => addCard("A/P", `Problem ${index + 1}`, "assessmentPlan", item));
-  draft.redFlags.forEach((item, index) => addCard("Red Flags", `Red flag ${index + 1}`, "redFlag", item));
-  draft.tasks.forEach((task, index) => addCard("Tasks", `Task ${index + 1}`, "task", task));
-  draft.dischargeIssues.forEach((issue, index) =>
+  safeArray(draft.objective.vitals).forEach((vital, index) => addCard("O - Vitals", `Vital ${index + 1}`, "vital", vital));
+  safeArray(draft.objective.bloodSugars).forEach((bloodSugar, index) =>
+    addCard("O - Blood Sugar", `Blood sugar ${index + 1}`, "bloodSugar", bloodSugar),
+  );
+  safeArray(draft.objective.physicalExam).forEach((exam, index) => addCard("O - PE", `PE ${index + 1}`, "physicalExam", exam));
+  safeArray(draft.objective.labs).forEach((lab, index) => addCard("O - Labs", `Lab ${index + 1}`, "lab", lab));
+  safeArray(draft.objective.images).forEach((image, index) => addCard("O - Images", `Image ${index + 1}`, "image", image));
+  safeArray(draft.assessmentPlan).forEach((item, index) => addCard("A/P", `Problem ${index + 1}`, "assessmentPlan", item));
+  safeArray(draft.redFlags).forEach((item, index) => addCard("Red Flags", `Red flag ${index + 1}`, "redFlag", item));
+  safeArray(draft.tasks).forEach((task, index) => addCard("Tasks", `Task ${index + 1}`, "task", task));
+  safeArray(draft.dischargeIssues).forEach((issue, index) =>
     addCard("Discharge Issues", `Discharge issue ${index + 1}`, "dischargeIssue", issue, "string"),
   );
-  draft.thinkingPrompts.forEach((prompt, index) =>
+  safeArray(draft.thinkingPrompts).forEach((prompt, index) =>
     addCard("Thinking Prompts", `Thinking prompt ${index + 1}`, "thinkingPrompt", prompt),
   );
-  draft.uncertainty.forEach((uncertainty, index) =>
+  safeArray(draft.uncertainty).forEach((uncertainty, index) =>
     addCard("Uncertainty", `Uncertainty ${index + 1}`, "uncertainty", uncertainty, "string"),
   );
 
@@ -372,6 +385,7 @@ function AiIntakePanel({ patient, selectedDate, onApplyPatient }: AiIntakePanelP
     const subjectiveLines: string[] = [];
     const overnightLines: string[] = [];
     const vitalLines: string[] = [];
+    const bloodSugarLines: string[] = [];
     const physicalExamLines: string[] = [];
     const labSummaryLines: string[] = [];
     const imageSummaryLines: string[] = [];
@@ -403,6 +417,11 @@ function AiIntakePanel({ patient, selectedDate, onApplyPatient }: AiIntakePanelP
       if (card.kind === "vital") {
         const vital = value as AiSoapDraft["objective"]["vitals"][number];
         vitalLines.push(`${vital.isImportant || vital.isAbnormal ? "!" : ""}${vitalLine(vital)}`);
+      }
+
+      if (card.kind === "bloodSugar") {
+        const bloodSugar = value as AiSoapDraft["objective"]["bloodSugars"][number];
+        bloodSugarLines.push(`${bloodSugar.isImportant || bloodSugar.isAbnormal ? "!" : ""}${bloodSugarLine(bloodSugar)}`);
       }
 
       if (card.kind === "physicalExam") {
@@ -529,7 +548,8 @@ function AiIntakePanel({ patient, selectedDate, onApplyPatient }: AiIntakePanelP
       oneLiner: appendUniqueLines(patient.oneLiner, oneLiners),
       subjectiveOrChiefConcern: appendUniqueLines(patient.subjectiveOrChiefConcern, subjectiveLines),
       overnightEvent: appendUniqueLines(patient.overnightEvent, overnightLines),
-      vsOrder: appendUniqueLines(patient.vsOrder, vitalLines),
+      vitalSigns: appendUniqueLines(patient.vitalSigns, vitalLines),
+      bloodSugar: appendUniqueLines(patient.bloodSugar, bloodSugarLines),
       physicalExam: appendUniqueLines(patient.physicalExam, physicalExamLines),
       newLabs: appendUniqueLines(patient.newLabs, labSummaryLines),
       rawLabText: appendUniqueLines(patient.rawLabText, labSummaryLines),

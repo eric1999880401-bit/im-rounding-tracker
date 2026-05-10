@@ -219,6 +219,14 @@ function DailyNoteForm({
                 </div>
                 <div className="auto-summary-grid">
                   <div className="auto-summary-item">
+                    <strong>V/S</strong>
+                    <ClinicalText value={displaySummary.vitalSigns} />
+                  </div>
+                  <div className="auto-summary-item">
+                    <strong>Blood sugar</strong>
+                    <ClinicalText value={displaySummary.bloodSugar} />
+                  </div>
+                  <div className="auto-summary-item">
                     <strong>PE</strong>
                     <ClinicalText value={displaySummary.physicalExam} />
                     {displaySummary.physicalExamEntries.length > 0 && (
@@ -284,6 +292,28 @@ function DailyNoteForm({
             )}
             <h3 className="span-2">{t("section.todayObjective")}</h3>
             <label className="span-2">
+              Vital Sign
+              <ColorMarkupTextarea
+                value={patient.vitalSigns}
+                onChange={(value) => updateField("vitalSigns", value)}
+                onBlur={commitOnBlur}
+                onCompositionStart={onCompositionStart}
+                onCompositionEnd={handleCompositionEnd}
+                placeholder="Example: T 38.1, HR 102, BP 122/70, SpO2 96% RA"
+              />
+            </label>
+            <label className="span-2">
+              Blood Sugar
+              <ColorMarkupTextarea
+                value={patient.bloodSugar}
+                onChange={(value) => updateField("bloodSugar", value)}
+                onBlur={commitOnBlur}
+                onCompositionStart={onCompositionStart}
+                onCompositionEnd={handleCompositionEnd}
+                placeholder="Example: AC 180 / PC 240; adjust insulin"
+              />
+            </label>
+            <label className="span-2">
               {t("field.todayPeChange")}
               <ColorMarkupTextarea
                 value={patient.physicalExam}
@@ -319,6 +349,28 @@ function DailyNoteForm({
 
         {showObjective && (
           <>
+            <label className="span-2">
+              O - Vital Sign
+              <ColorMarkupTextarea
+                value={patient.vitalSigns}
+                onChange={(value) => updateField("vitalSigns", value)}
+                onBlur={commitOnBlur}
+                onCompositionStart={onCompositionStart}
+                onCompositionEnd={handleCompositionEnd}
+                placeholder="Example: T 38.1, HR 102, BP 122/70, SpO2 96% RA"
+              />
+            </label>
+            <label className="span-2">
+              O - Blood Sugar
+              <ColorMarkupTextarea
+                value={patient.bloodSugar}
+                onChange={(value) => updateField("bloodSugar", value)}
+                onBlur={commitOnBlur}
+                onCompositionStart={onCompositionStart}
+                onCompositionEnd={handleCompositionEnd}
+                placeholder="Example: AC 180 / PC 240; HS 210"
+              />
+            </label>
             <div className="span-2 objective-entry-panel">
               <div className="objective-entry-heading">
                 <strong>{t("field.pe")}</strong>

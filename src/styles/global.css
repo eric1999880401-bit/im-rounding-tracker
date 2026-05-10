@@ -1065,6 +1065,21 @@ input[type="checkbox"] {
   white-space: pre-wrap;
 }
 
+.ai-documents-page .ai-raw-textarea {
+  min-height: 220px;
+}
+
+.ai-document-review {
+  display: grid;
+  gap: 14px;
+}
+
+.ai-document-editor {
+  font-family: var(--font-mono);
+  line-height: 1.45;
+  min-height: 420px;
+}
+
 .auto-summary-item {
   background: var(--surface);
   border: 1px solid var(--border);
@@ -1173,6 +1188,80 @@ tbody tr:last-child td {
   min-height: 30px;
   min-width: 0;
   padding: 4px 8px;
+}
+
+.patient-board-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.patient-board-card {
+  background: var(--table-row-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.patient-board-card-header {
+  align-items: center;
+  background: var(--table-header-bg);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  padding: 10px 12px;
+}
+
+.patient-board-identity {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  min-width: 0;
+}
+
+.patient-board-identity strong {
+  color: var(--accent);
+  font-size: 18px;
+}
+
+.patient-board-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.patient-board-card-body {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(220px, 1.1fr) minmax(220px, 1fr) minmax(220px, 1fr) minmax(260px, 1.15fr) minmax(170px, 0.8fr) minmax(120px, 0.55fr);
+  padding: 12px;
+}
+
+.patient-board-section {
+  min-width: 0;
+}
+
+.patient-board-section + .patient-board-section {
+  border-left: 1px solid var(--border);
+  padding-left: 10px;
+}
+
+.patient-board-overview,
+.patient-board-tasks,
+.patient-board-discharge {
+  overflow-wrap: anywhere;
+}
+
+.patient-board-card-actions {
+  border-top: 1px solid var(--border);
+  padding: 8px 12px;
+}
+
+.patient-board-card-actions .board-action-buttons {
+  grid-template-columns: repeat(6, minmax(70px, 1fr));
+  max-width: 720px;
 }
 
 .icon-button {
@@ -2376,6 +2465,15 @@ tbody tr:last-child td {
    ============================================================ */
 
 @media (max-width: 1180px) {
+  .patient-board-card-body {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .patient-board-section + .patient-board-section {
+    border-left: 0;
+    padding-left: 0;
+  }
+
   .lab-editor-grid,
   .objective-entry-grid,
   .objective-entry-grid.single-column {
@@ -2417,6 +2515,7 @@ tbody tr:last-child td {
   }
 
   .form-grid,
+  .patient-board-card-body,
   .task-input-row,
   .presentation-grid,
   .auto-summary-grid,
@@ -2433,6 +2532,21 @@ tbody tr:last-child td {
 
   .span-2 {
     grid-column: auto;
+  }
+
+  .patient-board-card-header {
+    align-items: stretch;
+    display: grid;
+  }
+
+  .patient-board-badges,
+  .patient-board-card-actions .board-action-buttons {
+    justify-content: stretch;
+  }
+
+  .patient-board-card-actions .board-action-buttons {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    max-width: none;
   }
 
   .discharge-checklist h3 {

@@ -186,6 +186,8 @@ export function emptyDailyNote(date = todayKey()): DailyNote {
     importantRedFlags: "",
     overnightEvents: "",
     subjectiveOrChiefConcern: "",
+    vitalSigns: "",
+    bloodSugar: "",
     physicalExam: "",
     labSummary: "",
     imageSummary: "",
@@ -213,6 +215,8 @@ export function dailyNoteFromPatient(patient: Patient, date = todayKey()): Daily
     importantRedFlags: patient.importantRedFlags,
     overnightEvents: patient.overnightEvent,
     subjectiveOrChiefConcern: patient.subjectiveOrChiefConcern,
+    vitalSigns: patient.vitalSigns,
+    bloodSugar: patient.bloodSugar,
     physicalExam: patient.physicalExam,
     labSummary: patient.newLabs,
     imageSummary: patient.newImaging,
@@ -240,6 +244,8 @@ export function patientWithDailyNote(patient: Patient, note?: DailyNote): Patien
     importantRedFlags: note.importantRedFlags,
     overnightEvent: note.overnightEvents,
     subjectiveOrChiefConcern: note.subjectiveOrChiefConcern,
+    vitalSigns: note.vitalSigns,
+    bloodSugar: note.bloodSugar,
     physicalExam: note.physicalExam,
     newLabs: note.labSummary,
     newImaging: note.imageSummary,
@@ -279,6 +285,8 @@ export function getLatestNonEmptyDailyNote(notes: DailyNote[]) {
     hasText(note.importantRedFlags) ||
     hasText(note.overnightEvents) ||
     hasText(note.subjectiveOrChiefConcern) ||
+    hasText(note.vitalSigns) ||
+    hasText(note.bloodSugar) ||
     hasText(note.physicalExam) ||
     hasText(note.labSummary) ||
     hasText(note.rawLabText) ||
@@ -340,6 +348,8 @@ export function patientForDate(patient: Patient, dailyNotesByPatient: DailyNotes
     importantRedFlags: displayString(patient.importantRedFlags, todayNote, notes, "importantRedFlags"),
     overnightEvent: displayString(patient.overnightEvent, todayNote, notes, "overnightEvents"),
     subjectiveOrChiefConcern: displayString(patient.subjectiveOrChiefConcern, todayNote, notes, "subjectiveOrChiefConcern"),
+    vitalSigns: displayString(patient.vitalSigns, todayNote, notes, "vitalSigns"),
+    bloodSugar: displayString(patient.bloodSugar, todayNote, notes, "bloodSugar"),
     physicalExam: displayString(patient.physicalExam, todayNote, notes, "physicalExam"),
     newLabs: hasItems(patient.labReports)
       ? patient.newLabs
@@ -400,6 +410,8 @@ export interface PatientDisplaySummary {
   underlyingDiseases: string[];
   activeProblems: string[];
   subjective: string;
+  vitalSigns: string;
+  bloodSugar: string;
   physicalExam: string;
   physicalExamEntries: PhysicalExamEntry[];
   latestLabs: {
@@ -470,6 +482,8 @@ export function getPatientDisplaySummary(
     underlyingDiseases: getUnderlyingDiseaseItems(patient),
     activeProblems: getActiveProblemItems(patient),
     subjective: displayPatient.subjectiveOrChiefConcern,
+    vitalSigns: displayPatient.vitalSigns,
+    bloodSugar: displayPatient.bloodSugar,
     physicalExam: displayPatient.physicalExam,
     physicalExamEntries: hasItems(patient.physicalExamEntries) ? patient.physicalExamEntries : displayPatient.physicalExamEntries,
     latestLabs: {
@@ -813,11 +827,18 @@ export function emptyPatient(): Patient {
     initialPlan: "",
     earlyHospitalCourse: "",
     admissionBriefNotes: "",
+    generatedAdmissionNote: "",
+    generatedAdmissionSummary: "",
+    generatedDischargeSummary: "",
+    generatedWeeklySummary: "",
+    generatedSbarNote: "",
     isNewAdmission: false,
     showAdmissionBriefOnPrint: false,
     physicalExam: "",
     hospitalCourseHighlights: "",
     importantRedFlags: "",
+    vitalSigns: "",
+    bloodSugar: "",
     rawLabText: "",
     labDate: todayKey(),
     labReportTitle: "",
