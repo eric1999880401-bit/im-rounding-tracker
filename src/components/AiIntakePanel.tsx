@@ -137,6 +137,281 @@ function safeArray<T>(value: T[] | undefined) {
   return Array.isArray(value) ? value : [];
 }
 
+function normalizeCompareKey(value: unknown) {
+  return String(value ?? "")
+    .replace(/^!+/, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function appendUniqueStrings(existing: string[], additions: string[]) {
+  const lines = [...existing];
+  const seen = new Set(lines.map(normalizeCompareKey).filter(Boolean));
+
+  additions.map(String).map((line) => line.trim()).filter(Boolean).forEach((line) => {
+    const key = normalizeCompareKey(line);
+    if (!seen.has(key)) {
+      lines.push(line);
+      seen.add(key);
+    }
+  });
+
+  return lines;
+}
+
+function uniqueBy<T>(items: T[], getKey: (item: T) => string) {
+  const seen = new Set<string>();
+  const nextItems: T[] = [];
+
+  items.forEach((item) => {
+    const key = getKey(item);
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    nextItems.push(item);
+  });
+
+  return nextItems;
+}
+
+function parsedLabItemKey(item: ParsedLabItem) {
+  return [
+    item.name || item.label || item.displayName,
+    item.value,
+    item.unit,
+    item.previousValue,
+  ].map(normalizeCompareKey).join("|");
+}
+
+function uniqueParsedLabItems(items: ParsedLabItem[]) {
+  return uniqueBy(items, parsedLabItemKey);
+}
+
+function mergeLabReportsByDateTitle(reports: LabReport[]) {
+  const reportMap = new Map<string, LabReport>();
+
+  reports.forEach((report) => {
+    const date = normalizeDateKey(report.date);
+    const title = String(report.title || "AI Intake").trim();
+    const key = date;
+    const existing = reportMap.get(key);
+
+    if (!existing) {
+      reportMap.set(key, {
+        ...report,
+        date,
+        title,
+        rawText: appendUniqueLines("", [report.rawText]).trim(),
+        items: uniqueParsedLabItems(safeArray(report.items)),
+      });
+      return;
+    }
+
+    reportMap.set(key, {
+      ...existing,
+      title: appendUniqueStrings(existing.title.split("/"), [title]).join(" / "),
+      rawText: appendUniqueLines(existing.rawText, [report.rawText]),
+      items: uniqueParsedLabItems([...existing.items, ...safeArray(report.items)]),
+    });
+  });
+
+  return Array.from(reportMap.values());
+}
+
+const problemStopWords = new Set([
+  "acute",
+  "chronic",
+  "with",
+  "without",
+  "and",
+  "or",
+  "the",
+  "for",
+  "on",
+  "in",
+  "of",
+  "risk",
+  "concern",
+  "possible",
+  "suspected",
+  "suspect",
+  "rule",
+  "out",
+  "cf",
+  "ro",
+]);
+
+const problemTokenAliases: Record<string, string> = {
+  cap: "pneumonia",
+  pna: "pneumonia",
+  pneumonia: "pneumonia",
+  septic: "sepsis",
+  sepsis: "sepsis",
+  aki: "aki",
+  ckd: "ckd",
+  dm: "diabetes",
+  t2dm: "diabetes",
+  diabetes: "diabetes",
+  hyperglycemia: "hyperglycemia",
+  htn: "hypertension",
+  hypertension: "hypertension",
+};
+
+function assessmentProblemTokens(item: AssessmentPlanItem) {
+  const source = `${item.problemTitle} ${item.assessmentSummary}`;
+  return new Set(
+    source
+      .toLowerCase()
+      .replace(/c\/f/g, " cf ")
+      .replace(/r\/o/g, " ro ")
+      .replace(/[^a-z0-9]+/g, " ")
+      .split(/\s+/)
+      .map((token) => problemTokenAliases[token] ?? token)
+      .filter((token) => token.length > 2 && !problemStopWords.has(token)),
+  );
+}
+
+function hasTokenSet(tokens: Set<string>, requiredTokens: string[]) {
+  return requiredTokens.every((token) => tokens.has(token));
+}
+
+function areSimilarAssessmentProblems(a: AssessmentPlanItem, b: AssessmentPlanItem) {
+  const aKey = normalizeCompareKey(a.problemTitle || a.assessmentSummary);
+  const bKey = normalizeCompareKey(b.problemTitle || b.assessmentSummary);
+  if (aKey && aKey === bKey) return true;
+
+  const aTokens = assessmentProblemTokens(a);
+  const bTokens = assessmentProblemTokens(b);
+  const sharedTokens = [...aTokens].filter((token) => bTokens.has(token));
+  const smallestSetSize = Math.min(aTokens.size, bTokens.size);
+
+  if (hasTokenSet(aTokens, ["pneumonia", "sepsis"]) && hasTokenSet(bTokens, ["pneumonia", "sepsis"])) return true;
+  if (hasTokenSet(aTokens, ["aki", "ckd"]) && hasTokenSet(bTokens, ["aki", "ckd"])) return true;
+  if (aTokens.has("diabetes") && bTokens.has("diabetes")) return true;
+  if (aTokens.has("hypertension") && bTokens.has("hypertension")) return true;
+
+  return sharedTokens.length >= 2 || (smallestSetSize > 0 && sharedTokens.length / smallestSetSize >= 0.65);
+}
+
+function mergeAssessmentPlanItems(existingItems: AssessmentPlanItem[], additions: AssessmentPlanItem[]) {
+  const mergedItems: AssessmentPlanItem[] = [];
+  let nextOrder = 0;
+
+  [...existingItems, ...additions].forEach((addition) => {
+    const nextAddition = {
+      ...addition,
+      evidenceOrCourseItems: [...addition.evidenceOrCourseItems],
+      planItems: [...addition.planItems],
+    };
+    const match = mergedItems.find((item) => areSimilarAssessmentProblems(item, nextAddition));
+
+    if (!match) {
+      mergedItems.push({ ...nextAddition, order: nextOrder });
+      nextOrder += 1;
+      return;
+    }
+
+    match.assessmentSummary = match.assessmentSummary || nextAddition.assessmentSummary;
+    match.evidenceOrCourseItems = appendUniqueStrings(match.evidenceOrCourseItems, nextAddition.evidenceOrCourseItems);
+    match.planItems = appendUniqueStrings(match.planItems, nextAddition.planItems);
+    match.isImportant = match.isImportant || nextAddition.isImportant;
+    match.color = match.color || nextAddition.color;
+  });
+
+  return mergedItems;
+}
+
+function mergePhysicalExamEntries(existing: PhysicalExamEntry[], additions: PhysicalExamEntry[]) {
+  return uniqueBy([...existing, ...additions], (entry) =>
+    [entry.date, entry.system, entry.finding, entry.note].map(normalizeCompareKey).join("|"),
+  );
+}
+
+function mergeImageStudyEntries(existing: ImageStudyEntry[], additions: ImageStudyEntry[]) {
+  return uniqueBy([...existing, ...additions], (entry) =>
+    [entry.date, entry.studyType].map(normalizeCompareKey).join("|"),
+  );
+}
+
+const taskTokenAliases: Record<string, string> = {
+  f: "follow",
+  fu: "follow",
+  fup: "follow",
+  followup: "follow",
+  cx: "culture",
+  culture: "culture",
+  cultures: "culture",
+  spo2: "oxygen",
+  o2: "oxygen",
+  oxygen: "oxygen",
+  lactate: "lactate",
+  renal: "kidney",
+  cr: "kidney",
+  creatinine: "kidney",
+  glucose: "sugar",
+  sugar: "sugar",
+  bg: "sugar",
+};
+
+const taskStopWords = new Set(["the", "and", "or", "to", "as", "able", "result", "results", "need", "needs"]);
+
+function taskTokens(task: PatientTask) {
+  return new Set(
+    task.text
+      .toLowerCase()
+      .replace(/f\/u|f-u/g, "fu")
+      .replace(/[^a-z0-9]+/g, " ")
+      .split(/\s+/)
+      .map((token) => taskTokenAliases[token] ?? token)
+      .filter((token) => token.length > 1 && !taskStopWords.has(token)),
+  );
+}
+
+function areSimilarTasks(a: PatientTask, b: PatientTask) {
+  const aKey = normalizeCompareKey(a.text);
+  const bKey = normalizeCompareKey(b.text);
+  if (aKey && aKey === bKey) return true;
+
+  const aTokens = taskTokens(a);
+  const bTokens = taskTokens(b);
+  const shared = [...aTokens].filter((token) => bTokens.has(token));
+
+  if (aTokens.has("culture") && bTokens.has("culture")) return true;
+  if (aTokens.has("lactate") && bTokens.has("lactate")) return true;
+  if (aTokens.has("oxygen") && bTokens.has("oxygen")) return true;
+  if (aTokens.has("kidney") && bTokens.has("kidney")) return true;
+  if (aTokens.has("sugar") && bTokens.has("sugar")) return true;
+
+  return shared.length >= 2;
+}
+
+function mergeTasks(existing: PatientTask[], additions: PatientTask[]) {
+  const mergedTasks: PatientTask[] = [];
+
+  [...existing, ...additions].forEach((task) => {
+    const match = mergedTasks.find((item) => areSimilarTasks(item, task));
+    if (!match) {
+      mergedTasks.push(task);
+      return;
+    }
+
+    if (match.priority !== "urgent" && task.priority === "urgent") match.priority = "urgent";
+    if (!match.dueDate && task.dueDate) match.dueDate = task.dueDate;
+    if (match.category === "other" && task.category !== "other") match.category = task.category;
+  });
+
+  return mergedTasks;
+}
+
+function mergeThinkingPrompts(
+  existing: NonNullable<Patient["aiThinkingPrompts"]>,
+  additions: NonNullable<Patient["aiThinkingPrompts"]>,
+) {
+  return uniqueBy([...existing, ...additions], (prompt) =>
+    [prompt.kind, prompt.prompt, prompt.reason].map(normalizeCompareKey).join("|"),
+  ).filter((prompt) => prompt.prompt.trim());
+}
+
 function normalizeTaskPriority(value: unknown): TaskPriority {
   return value === "urgent" || value === "low" ? value : "normal";
 }
@@ -274,6 +549,33 @@ function parseCardValue(card: ReviewCard) {
   return mergeWithOriginalValue(card.originalValue, JSON.parse(card.valueText) as unknown);
 }
 
+function jsonPosition(errorMessage: string) {
+  const positionMatch = errorMessage.match(/position\s+(\d+)/i);
+  if (!positionMatch) return null;
+  const position = Number(positionMatch[1]);
+  return Number.isFinite(position) ? position : null;
+}
+
+function lineColumnAt(text: string, position: number) {
+  const before = text.slice(0, Math.max(0, position));
+  const lines = before.split(/\r?\n/);
+  return { line: lines.length, column: lines[lines.length - 1].length + 1 };
+}
+
+function getCardJsonError(card: ReviewCard) {
+  if (card.valueType !== "json") return "";
+  try {
+    JSON.parse(card.valueText);
+    return "";
+  } catch (error) {
+    const message = getErrorMessage(error);
+    const position = jsonPosition(message);
+    if (position === null) return message;
+    const location = lineColumnAt(card.valueText, position);
+    return `${message} (line ${location.line}, column ${location.column})`;
+  }
+}
+
 function getErrorMessage(error: unknown) {
   if (error instanceof Error) return error.message;
   return String(error ?? "Unknown error");
@@ -359,9 +661,34 @@ function AiIntakePanel({ patient, selectedDate, onApplyPatient }: AiIntakePanelP
       cards.map((card) => {
         if (card.status === "saved") return card;
         if (section && card.section !== section) return card;
+        if (status === "accepted" && getCardJsonError(card)) return { ...card, isEditing: true };
         return { ...card, status, isEditing: false };
       }),
     );
+  }
+
+  function toggleCardEditing(card: ReviewCard) {
+    const jsonError = card.isEditing ? getCardJsonError(card) : "";
+    if (jsonError) {
+      setError(`Fix ${card.section} / ${card.title}: ${jsonError}`);
+      updateCard(card.id, (item) => ({ ...item, isEditing: true }));
+      return;
+    }
+
+    setError("");
+    updateCard(card.id, (item) => ({ ...item, isEditing: !item.isEditing }));
+  }
+
+  function acceptCard(card: ReviewCard) {
+    const jsonError = getCardJsonError(card);
+    if (jsonError) {
+      setError(`Fix ${card.section} / ${card.title}: ${jsonError}`);
+      updateCard(card.id, (item) => ({ ...item, isEditing: true }));
+      return;
+    }
+
+    setError("");
+    updateCard(card.id, (item) => ({ ...item, status: "accepted", isEditing: false }));
   }
 
   async function applyAcceptedItems() {
@@ -373,11 +700,20 @@ function AiIntakePanel({ patient, selectedDate, onApplyPatient }: AiIntakePanelP
       return;
     }
 
-    let parsedCards: Array<{ card: ReviewCard; value: unknown }>;
-    try {
-      parsedCards = acceptedCards.map((card) => ({ card, value: parseCardValue(card) }));
-    } catch (nextError) {
-      setError(`One edited JSON card is invalid: ${getErrorMessage(nextError)}`);
+    const parsedCards: Array<{ card: ReviewCard; value: unknown }> = [];
+    for (const card of acceptedCards) {
+      const jsonError = getCardJsonError(card);
+      if (jsonError) {
+        setError(`Fix ${card.section} / ${card.title}: ${jsonError}`);
+        updateCard(card.id, (item) => ({ ...item, isEditing: true }));
+        return;
+      }
+
+      parsedCards.push({ card, value: parseCardValue(card) });
+    }
+
+    if (parsedCards.length === 0) {
+      setError("Accept at least one draft item before applying.");
       return;
     }
 
@@ -545,7 +881,7 @@ function AiIntakePanel({ patient, selectedDate, onApplyPatient }: AiIntakePanelP
 
     const nextPatient: Patient = {
       ...patient,
-      oneLiner: appendUniqueLines(patient.oneLiner, oneLiners),
+      oneLiner: oneLiners.map(String).map((line) => line.trim()).filter(Boolean).slice(-1)[0] ?? patient.oneLiner,
       subjectiveOrChiefConcern: appendUniqueLines(patient.subjectiveOrChiefConcern, subjectiveLines),
       overnightEvent: appendUniqueLines(patient.overnightEvent, overnightLines),
       vitalSigns: appendUniqueLines(patient.vitalSigns, vitalLines),
@@ -556,13 +892,13 @@ function AiIntakePanel({ patient, selectedDate, onApplyPatient }: AiIntakePanelP
       newImaging: appendUniqueLines(patient.newImaging, imageSummaryLines),
       importantRedFlags: appendUniqueLines(patient.importantRedFlags, redFlagLines),
       dischargeBarriers: appendUniqueLines(patient.dischargeBarriers, dischargeIssueLines),
-      labReports: [...safeArray(patient.labReports), ...labReports],
-      parsedLabItems: [...safeArray(patient.parsedLabItems), ...parsedLabItems],
-      physicalExamEntries: [...safeArray(patient.physicalExamEntries), ...physicalExamEntries],
-      imageStudyEntries: [...safeArray(patient.imageStudyEntries), ...imageStudyEntries],
-      assessmentPlanItems: [...safeArray(patient.assessmentPlanItems), ...assessmentPlanItems],
-      tasks: [...safeArray(patient.tasks), ...tasks.filter((task) => task.text.trim())],
-      aiThinkingPrompts: aiThinkingPrompts.filter((prompt) => prompt.prompt.trim()),
+      labReports: mergeLabReportsByDateTitle([...safeArray(patient.labReports), ...labReports]),
+      parsedLabItems: uniqueParsedLabItems([...safeArray(patient.parsedLabItems), ...parsedLabItems]),
+      physicalExamEntries: mergePhysicalExamEntries(safeArray(patient.physicalExamEntries), physicalExamEntries),
+      imageStudyEntries: mergeImageStudyEntries(safeArray(patient.imageStudyEntries), imageStudyEntries),
+      assessmentPlanItems: mergeAssessmentPlanItems(safeArray(patient.assessmentPlanItems), assessmentPlanItems),
+      tasks: mergeTasks(safeArray(patient.tasks), tasks.filter((task) => task.text.trim())),
+      aiThinkingPrompts: mergeThinkingPrompts(safeArray(patient.aiThinkingPrompts), aiThinkingPrompts),
       updatedAt: now,
     };
 
@@ -739,44 +1075,76 @@ function AiIntakePanel({ patient, selectedDate, onApplyPatient }: AiIntakePanelP
                 </div>
               </div>
               <div className="ai-review-card-grid">
-                {cards.map((card) => (
-                  <article className={`ai-review-card ai-review-card-${card.status}`} key={card.id}>
-                    <div className="ai-review-card-header">
-                      <strong>{card.title}</strong>
-                      <span className="badge normal">{card.status}</span>
-                    </div>
-                    <textarea
-                      value={card.valueText}
-                      readOnly={!card.isEditing || card.status === "saved" || card.status === "ignored"}
-                      onChange={(event) => updateCard(card.id, (item) => ({ ...item, valueText: event.target.value }))}
-                    />
-                    <div className="form-actions">
-                      <button
-                        type="button"
-                        disabled={card.status === "saved"}
-                        onClick={() => updateCard(card.id, (item) => ({ ...item, status: "accepted", isEditing: false }))}
-                      >
-                        Accept
-                      </button>
-                      <button
-                        type="button"
-                        className="secondary"
-                        disabled={card.status === "saved" || card.status === "ignored"}
-                        onClick={() => updateCard(card.id, (item) => ({ ...item, isEditing: !item.isEditing }))}
-                      >
-                        {card.isEditing ? "Done editing" : "Edit"}
-                      </button>
-                      <button
-                        type="button"
-                        className="secondary"
-                        disabled={card.status === "saved"}
-                        onClick={() => updateCard(card.id, (item) => ({ ...item, status: "ignored", isEditing: false }))}
-                      >
-                        Ignore
-                      </button>
-                    </div>
-                  </article>
-                ))}
+                {cards.map((card) => {
+                  const jsonError = getCardJsonError(card);
+                  const hasJsonError = Boolean(jsonError);
+
+                  return (
+                    <article
+                      className={`ai-review-card ai-review-card-${card.status}${hasJsonError ? " ai-review-card-invalid" : ""}`}
+                      key={card.id}
+                    >
+                      <div className="ai-review-card-header">
+                        <strong>{card.title}</strong>
+                        <span className="badge normal">{hasJsonError ? "needs fix" : card.status}</span>
+                      </div>
+                      <textarea
+                        className={hasJsonError ? "invalid-json-textarea" : ""}
+                        value={card.valueText}
+                        readOnly={!card.isEditing || card.status === "saved" || card.status === "ignored"}
+                        onChange={(event) => updateCard(card.id, (item) => ({ ...item, valueText: event.target.value }))}
+                      />
+                      {card.valueType === "json" && (
+                        <p className={`json-edit-hint${hasJsonError ? " json-edit-error" : ""}`}>
+                          {hasJsonError
+                            ? `JSON problem in this card: ${jsonError}`
+                            : "Edit carefully: quotes, commas, braces, and brackets must stay balanced."}
+                        </p>
+                      )}
+                      <div className="form-actions">
+                        <button
+                          type="button"
+                          disabled={card.status === "saved" || hasJsonError}
+                          onClick={() => acceptCard(card)}
+                        >
+                          Accept
+                        </button>
+                        <button
+                          type="button"
+                          className="secondary"
+                          disabled={card.status === "saved" || card.status === "ignored"}
+                          onClick={() => toggleCardEditing(card)}
+                        >
+                          {card.isEditing ? "Done editing" : "Edit"}
+                        </button>
+                        <button
+                          type="button"
+                          className="secondary"
+                          disabled={card.status === "saved"}
+                          onClick={() => updateCard(card.id, (item) => ({ ...item, status: "ignored", isEditing: false }))}
+                        >
+                          Ignore
+                        </button>
+                        {card.valueType === "json" && (
+                          <button
+                            type="button"
+                            className="secondary"
+                            disabled={card.status === "saved"}
+                            onClick={() =>
+                              updateCard(card.id, (item) => ({
+                                ...item,
+                                valueText: stringifyValue(item.originalValue, item.valueType),
+                                isEditing: false,
+                              }))
+                            }
+                          >
+                            Reset
+                          </button>
+                        )}
+                      </div>
+                    </article>
+                  );
+                })}
               </div>
             </section>
           ))}

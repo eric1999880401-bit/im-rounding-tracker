@@ -5,19 +5,25 @@ interface ClinicalTextProps {
   value: string;
   fallback?: string;
   maxLines?: number;
+  maxCharsPerLine?: number;
   importantDefault?: boolean;
 }
 
-function groupLines(lines: HighlightLine[]) {
+function shortenText(text: string, maxChars?: number) {
+  if (!maxChars || text.length <= maxChars) return text;
+  return `${text.slice(0, Math.max(0, maxChars - 1)).trimEnd()}...`;
+}
+
+function groupLines(lines: HighlightLine[], maxCharsPerLine?: number) {
   const cards: Array<HighlightLine & { children: HighlightLine[] }> = [];
 
   lines.forEach((line) => {
     if (line.kind === "arrow" && cards.length > 0) {
-      cards[cards.length - 1].children.push(line);
+      cards[cards.length - 1].children.push({ ...line, text: shortenText(line.text, maxCharsPerLine) });
       return;
     }
 
-    cards.push({ ...line, children: [] });
+    cards.push({ ...line, text: shortenText(line.text, maxCharsPerLine), children: [] });
   });
 
   return cards;
@@ -69,10 +75,10 @@ function renderMarkedText(text: string) {
   );
 }
 
-function renderLines(lines: HighlightLine[], fallback: string, importantDefault = false) {
+function renderLines(lines: HighlightLine[], fallback: string, importantDefault = false, maxCharsPerLine?: number) {
   if (lines.length === 0) return <span className="muted">{fallback}</span>;
 
-  return groupLines(lines).map((line, index) => {
+  return groupLines(lines, maxCharsPerLine).map((line, index) => {
     const numberMatch = line.text.match(/^(\d+)\.\s*(.*)$/);
     const displayText = numberMatch ? numberMatch[2] : line.kind === "arrow" ? stripArrow(line.text) : line.text;
     const isImportant = importantDefault || line.important;
@@ -107,13 +113,19 @@ function renderLines(lines: HighlightLine[], fallback: string, importantDefault 
   });
 }
 
-export function ClinicalText({ value, fallback = "-", maxLines, importantDefault = false }: ClinicalTextProps) {
+export function ClinicalText({
+  value,
+  fallback = "-",
+  maxLines,
+  maxCharsPerLine,
+  importantDefault = false,
+}: ClinicalTextProps) {
   const lines = splitHighlightLines(value);
   const important = lines.filter((line) => line.important);
   const normal = lines.filter((line) => !line.important);
   const visibleLines = maxLines ? [...important, ...normal].slice(0, maxLines) : lines;
 
-  return <>{renderLines(visibleLines, fallback, importantDefault)}</>;
+  return <>{renderLines(visibleLines, fallback, importantDefault, maxCharsPerLine)}</>;
 }
 
 export function ClinicalCardRenderer(props: ClinicalTextProps) {

@@ -5,6 +5,7 @@ import {
   getActiveProblemItems,
   getActiveAttendingNames,
   getActivePatients,
+  getLabFocusSummary,
   getPatientDisplaySummary,
   getUnderlyingDiseaseItems,
   groupPatientsByAttending,
@@ -14,9 +15,6 @@ import {
   sortPatients,
 } from "../utils";
 import { ClinicalText } from "../components/ClinicalText";
-import { LabChips } from "../components/LabChips";
-import AssessmentPlanDisplay from "../components/AssessmentPlanDisplay";
-import ActiveProblemDisplay from "../components/ActiveProblemDisplay";
 import { useT } from "../i18n";
 
 interface PageProps {
@@ -39,7 +37,7 @@ function PrintRoundingListPage({
   const [admissionBriefPrintMode, setAdmissionBriefPrintMode] = useState("newAdmissions");
   const [selectedAttending, setSelectedAttending] = useState("");
   const [hideCompletedTasks, setHideCompletedTasks] = useState(true);
-  const [density, setDensity] = useState<PrintDensity>("compact");
+  const [density, setDensity] = useState<PrintDensity>("ultra-compact");
   const [sortMode, setSortMode] = useState<SortMode>("bed");
   const [team, setTeam] = useState("Team A");
   const [attending, setAttending] = useState("");
@@ -87,60 +85,388 @@ function PrintRoundingListPage({
     );
   }
 
-  function compactText(value: string) {
+  function printLimits() {
+    if (density === "ultra-compact") {
+      return {
+        generalItems: 6,
+        chars: 34,
+        detailChars: 42,
+        redFlags: 2,
+        pmh: 3,
+        problems: 3,
+        subjective: 1,
+        pe: 1,
+        labReports: 1,
+        labItems: 4,
+        images: 1,
+        tasks: 3,
+        dcChars: 34,
+      };
+    }
+
+    if (density === "compact") {
+      return {
+        generalItems: 8,
+        chars: 42,
+        detailChars: 54,
+        redFlags: 2,
+        pmh: 4,
+        problems: 4,
+        subjective: 1,
+        pe: 1,
+        labReports: 1,
+        labItems: 5,
+        images: 1,
+        tasks: 3,
+        dcChars: 44,
+      };
+    }
+
+    return {
+      generalItems: 10,
+      chars: 54,
+      detailChars: 70,
+      redFlags: 3,
+      pmh: 5,
+      problems: 5,
+      subjective: 2,
+      pe: 2,
+      labReports: 2,
+      labItems: 7,
+      images: 2,
+      tasks: 5,
+      dcChars: 56,
+    };
+  }
+
+  function cleanPrintLine(value: string) {
+    return value
+      .replace(/\s+-\s*Reason:\s*.*$/i, "")
+      .replace(/\s*\(\s*source:\s*AI\s*\)\s*$/i, "")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function shortText(value: string, maxChars = printLimits().detailChars) {
+    const clean = cleanPrintLine(value);
+    const firstClause = clean.split(/[;\n。]/)[0]?.trim() || clean;
+    return toShortWords(firstClause, maxChars);
+  }
+
+  function toShortWords(value: string, maxChars = printLimits().detailChars) {
+    const clean = cleanPrintLine(value)
+      .replace(/\bright\b/gi, "R")
+      .replace(/\bleft\b/gi, "L")
+      .replace(/\bbilateral\b/gi, "B/L")
+      .replace(/\bwithout\b/gi, "w/o")
+      .replace(/\bwith\b/gi, "w/")
+      .replace(/\bsuspected\b/gi, "susp")
+      .replace(/\bcompatible with\b/gi, "c/w")
+      .replace(/\bconcerning for\b/gi, "c/f")
+      .replace(/\bfollow[- ]?up\b/gi, "f/u")
+      .replace(/\bacute ischemic stroke\b/gi, "AIS")
+      .replace(/\binfarctions?\b/gi, "infarct")
+      .replace(/\bhemorrhage\b/gi, "ICH")
+      .replace(/\bpneumonia\b/gi, "PNA")
+      .replace(/\bperoneal\/tibial CMAP & sural SNAP unelicitable\b/gi, "peroneal/tibial/sural unelicitable")
+      .replace(/\bCMAP & sural SNAP\b/gi, "CMAP/SNAP")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (clean.length <= maxChars) return clean;
+
+    const words = clean.split(" ");
+    const kept: string[] = [];
+    words.forEach((word) => {
+      const next = [...kept, word].join(" ");
+      if (next.length <= maxChars) kept.push(word);
+    });
+    return kept.join(" ") || clean.slice(0, maxChars).trim();
+  }
+
+  function splitClinicalClauses(value: string) {
+    return cleanPrintLine(value)
+      .replace(/\b\d+\.\s*/g, "; ")
+      .split(/\s*(?:;|。|\.|\n|, and | and )\s*/i)
+      .map(cleanPrintLine)
+      .filter(Boolean);
+  }
+
+  function lowValueClause(value: string) {
+    return /\b(unremarkable|normal|no acute|no definite|no evidence|negative for|within normal|stable|unchanged|mild atrophy|elderly|small vessel disease|degenerative|pulse \+|no cv angle|no cva)\b/i.test(value);
+  }
+
+  function clinicalSignalScore(value: string, kind: "image" | "pe") {
+    const text = value.toLowerCase();
+    let score = 0;
+    if (/!|critical|urgent|pending|new|acute|worsen|progress/.test(text)) score += 5;
+    if (kind === "image" && /infarct|stroke|ich|hemorrhage|bleed|hypodense|stenosis|occlusion|aneurysm|mass|tumou?r|abscess|pneumonia|edema|effusion|pe\b|dvt|fracture|hematoma|obstruction|pending|unelicitable/.test(text)) score += 7;
+    if (kind === "pe" && /weak|palsy|dysarth|aphasia|numb|sensory|motor|nystagmus|facial|pale|jaundice|crackle|wheeze|rales|murmur|jvp|edema|tender|guard|distend|melena|blood|cyanosis|rash|wound|pus|erythem|pooling|discharge/.test(text)) score += 7;
+    if (/\b(r|l|rt|lt|right|left|bil|b\/l)\b/.test(text)) score += 1;
+    if (/\d/.test(text)) score += 1;
+    if (lowValueClause(value)) score -= 8;
+    return score;
+  }
+
+  function bestClinicalSignal(value: string, kind: "image" | "pe", maxChars = printLimits().detailChars) {
+    const clauses = splitClinicalClauses(value);
+    if (clauses.length === 0) return "";
+    const scored = clauses
+      .map((clause) => ({ clause, score: clinicalSignalScore(clause, kind) }))
+      .sort((a, b) => b.score - a.score || a.clause.length - b.clause.length);
+    const best = scored.find((entry) => entry.score > 0)?.clause ?? scored.find((entry) => !lowValueClause(entry.clause))?.clause ?? scored[0]?.clause ?? "";
+    return toShortWords(best, maxChars);
+  }
+
+  function shortStudyType(value: string) {
+    const text = value.trim();
+    if (!text) return "";
+    if (/mri|mra/i.test(text) && /brain/i.test(text)) return "MRI/MRA brain";
+    if (/ct|cta/i.test(text) && /brain/i.test(text)) return "CT/CTA brain";
+    if (/cxr|chest x/i.test(text)) return "CXR";
+    if (/pelvis/i.test(text) && /mri/i.test(text)) return "MRI pelvis";
+    if (/carotid|tcd/i.test(text)) return "Carotid/TCD";
+    if (/abi/i.test(text)) return "ABI";
+    if (/ncv|emg/i.test(text)) return "NCV/EMG";
+    if (/ultrasound|sono|u\/s/i.test(text)) return "U/S";
+    return toShortWords(text, 18);
+  }
+
+  function uniqueTags(tags: string[]) {
+    const seen = new Set<string>();
+    return tags.filter((tag) => {
+      const clean = tag.trim();
+      const key = clean.toLowerCase();
+      if (!clean || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }
+
+  function joinTags(tags: string[], maxItems: number) {
+    const unique = uniqueTags(tags);
+    const visible = unique.slice(0, maxItems);
+    return visible.join(", ");
+  }
+
+  function sidePrefix(text: string) {
+    if (/\b(left|lt)\b/i.test(text)) return "L";
+    if (/\b(right|rt)\b/i.test(text)) return "R";
+    return "";
+  }
+
+  function diagnosisSummary(patient: Patient) {
+    const text = [patient.primaryDiagnosis, patient.oneLiner].filter(Boolean).join(" ");
+    const diagnosisText = patient.primaryDiagnosis || patient.oneLiner;
+    const lower = text.toLowerCase();
+    const tags: string[] = [];
+    const side = sidePrefix(diagnosisText);
+    const nihss = text.match(/\bnihss\s*[:=]?\s*(\d+)/i)?.[1];
+
+    if (/tia/.test(lower) && !/stroke|infarct/.test(lower)) tags.push("TIA");
+    if (/ischemic stroke|acute stroke|\bais\b|infarct|cva/.test(lower)) {
+      tags.push(`${side ? `${side} ` : ""}AIS${nihss ? ` NIHSS${nihss}` : ""}`);
+    }
+    if (/mca/.test(lower) && /stenos/.test(lower)) tags.push(`${side ? `${side} ` : ""}MCA stenosis`);
+    if (/ica|carotid/.test(lower) && /stenos/.test(lower)) tags.push(`${side ? `${side} ` : ""}ICA stenosis`);
+    if (/basal ganglia/.test(lower)) tags.push(`${side ? `${side} ` : ""}BG`);
+    if (/cerebell/.test(lower)) tags.push(`${side ? `${side} ` : ""}cerebellar`);
+    if (/pons|pontine/.test(lower)) tags.push("pontine");
+    if (/subcortical/.test(lower)) tags.push(`${side ? `${side} ` : ""}subcortical`);
+    if (/posterior circulation|post circ/.test(lower)) tags.push("post circ");
+    if (/a[\s-]*to[\s-]*a|artery[\s-]*to[\s-]*artery/.test(lower)) tags.push("r/o A-A");
+    if (/ramsay/.test(lower)) tags.push("Ramsay Hunt");
+    if (/parkinson/.test(lower)) tags.push("Parkinson");
+    if (/pneumonia|\bpna\b/.test(lower)) tags.push("PNA");
+    if (/sepsis/.test(lower)) tags.push("sepsis");
+    if (/urinary tract infection|\buti\b/.test(lower)) tags.push("UTI");
+    if (/postmenopausal bleeding|vaginal bleeding|\bpmb\b/.test(lower)) tags.push("PMB");
+    if (/diabetes|dm/.test(lower) && /poor|uncontrol|hypergly/.test(lower)) tags.push("DM poor ctrl");
+    if (/visual|auditory|hallucination/.test(lower)) tags.push("hallucination");
+
+    const summary = joinTags(tags, density === "ultra-compact" ? 3 : 4);
+    return summary || shortText(text, printLimits().detailChars);
+  }
+
+  function riskSummary(patient: Patient) {
+    const text = [
+      patient.underlyingDiseases,
+      patient.admissionPMH,
+      ...getUnderlyingDiseaseItems(patient),
+    ].join(" ");
+    const lower = text.toLowerCase();
+    const tags: string[] = [];
+
+    if (/\bhtn\b|hypertension/.test(lower)) tags.push("HTN");
+    if (/\bdm\b|diabetes|t2dm/.test(lower)) tags.push("DM");
+    if (/hyperlipidemia|\bhld\b|dyslipidemia/.test(lower)) tags.push("HLD");
+    if (/afib|atrial fibrillation|paroxysmal af/.test(lower)) tags.push("AF");
+    if (/\bcad\b|coronary/.test(lower)) tags.push("CAD");
+    if (/heart failure|\bhf\b|chf|lvhf|nyha|reduced ef|hfr?ef/.test(lower)) tags.push("HF");
+    if (/\bckd\b|esrd|dialysis|renal/.test(lower)) tags.push("CKD");
+    if (/tia|stroke|cva/.test(lower)) tags.push("old CVA/TIA");
+    if (/\bsle\b|lupus/.test(lower)) tags.push("SLE");
+    if (/\bhbv\b|hepatitis b/.test(lower)) tags.push("HBV");
+    if (/\bhcv\b|hepatitis c/.test(lower)) tags.push("HCV");
+    if (/cirrhosis/.test(lower)) tags.push("cirrhosis");
+    if (/copd|asthma/.test(lower)) tags.push("COPD/asthma");
+    if (/pulmonary hypertension|phtn/.test(lower)) tags.push("pulm HTN");
+    if (/tricuspid regurgitation|\btr\b/.test(lower)) tags.push("TR");
+    if (/hypothyroid|hyperthyroid|thyroid/.test(lower)) tags.push("thyroid");
+    if (/cancer|malign|carcinoma|tumou?r|ca\b/.test(lower)) tags.push("CA hx");
+
+    const maxItems = density === "ultra-compact" ? 4 : 5;
+    return joinTags(tags, maxItems) || compactList(getUnderlyingDiseaseItems(patient), Math.min(printLimits().pmh, 2), 22);
+  }
+
+  function issueSummary(patient: Patient) {
+    const text = [
+      patient.activeProblems,
+      ...getActiveProblemItems(patient),
+      ...patient.assessmentPlanItems.map((item) => `${item.problemTitle} ${item.assessmentSummary}`),
+    ].join(" ");
+    const lower = text.toLowerCase();
+    const tags: string[] = [];
+
+    if (/urinary tract infection|\buti\b/.test(lower)) tags.push("UTI");
+    if (/postmenopausal bleeding|vaginal bleeding|\bpmb\b|ob gyn|obgyn/.test(lower)) tags.push("PMB");
+    if (/diabetes|dm/.test(lower) && /poor|uncontrol|hypergly/.test(lower)) tags.push("DM poor ctrl");
+    if (/aki|acute kidney|renal function/.test(lower)) tags.push("AKI");
+    if (/anemia|bleed|hb drop/.test(lower)) tags.push("anemia/bleed");
+    if (/neutropenic|neutropenia|leukopenia|wbc low/.test(lower)) tags.push("neutropenia");
+    if (/infection|sepsis|pneumonia|\bpna\b/.test(lower)) tags.push(/pneumonia|\bpna\b/.test(lower) ? "PNA" : "infection");
+    if (/dysphag|swallow/.test(lower)) tags.push("dysphagia");
+    if (/carotid|mca|ica/.test(lower) && /stenos/.test(lower)) tags.push("large-vessel stenosis");
+    if (/weak|paresis|palsy|numbness|sensory/.test(lower)) tags.push("neuro deficit");
+
+    const maxItems = density === "ultra-compact" ? 2 : 4;
+    return joinTags(tags, maxItems);
+  }
+
+  function clinicalItems(value: string) {
     const text = plainClinicalText(value, "");
-    return text === "-" ? "" : text;
+    if (!text || text === "-") return [];
+    return text.split(/\s*;\s*|\r?\n/).map(cleanPrintLine).filter(Boolean);
   }
 
-  function inlineList(items: string[]) {
-    return items.map((item) => item.trim()).filter(Boolean).join("; ");
+  function compactList(items: string[], maxItems: number, maxChars = printLimits().chars) {
+    const cleanItems = items.map(cleanPrintLine).filter(Boolean);
+    const visible = cleanItems.slice(0, maxItems).map((item) => shortText(item, maxChars));
+    return visible.filter(Boolean).join("; ");
   }
 
-  function labReportGroups(patient: Patient) {
-    const reportsWithItems = patient.labReports.filter((report) => report.items.length > 0);
-    const reports = reportsWithItems.length > 0 ? reportsWithItems : [{ id: "legacy", date: patient.labDate, title: "", rawText: "", items: patient.parsedLabItems }];
-
-    return reports
-      .filter((report) => report.items.length > 0)
-      .map((report) => ({ ...report, date: formatDateLabel(report.date || patient.labDate) }));
+  function compactText(value: string, maxChars = printLimits().detailChars, maxItems = 2) {
+    return compactList(clinicalItems(value), maxItems, maxChars);
   }
 
-  function labReportChips(patient: Patient) {
-    const labGroups = labReportGroups(patient);
-    if (labGroups.length === 0) return null;
+  function importantObjectiveText(value: string, maxChars = printLimits().chars, maxItems = 1) {
+    const importantPattern = /abnormal|important|\bfever\b|\bfebrile\b|hypotherm|tachy|brady|hypot|hypert|shock|desat|hypox|spo2|oxygen|nasal|nc\b|o2\b|high|low|elevat|drop|worse|hypergly|hypogly|bleed|pain|unstable/i;
+    const normalOnlyPattern = /\bafebrile\b|\bnormal\b|\bstable\b|within normal/i;
+    const items = clinicalItems(value).filter((item) => {
+      if (normalOnlyPattern.test(item) && !/(abnormal|important|hypot|hypert|tachy|brady|desat|hypox|high|low|elevat|drop|worse|hypergly|hypogly|bleed|pain|unstable)/i.test(item)) {
+        return false;
+      }
+      return importantPattern.test(item);
+    });
+    return compactList(items, maxItems, maxChars);
+  }
 
-    return (
-      <div className="print-lab-groups">
-        {labGroups.map((report) => (
-          <div className="print-lab-group" key={report.id}>
-            <span className="print-lab-date">{report.date}</span>
-            <LabChips items={report.items} />
-          </div>
-        ))}
-      </div>
-    );
+  function shortDateSortValue(value: string) {
+    return String(value || "").replace(/\D/g, "");
+  }
+
+  function uniqueLines(lines: string[]) {
+    const seen = new Set<string>();
+    return lines.filter((line) => {
+      const key = cleanPrintLine(line).toLowerCase();
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }
+
+  function labFocusText(patient: Patient) {
+    return getLabFocusSummary(patient, dailyNotesByPatient[patient.id] ?? [], {
+      maxCritical: 2,
+      maxTrend: density === "normal" ? 4 : 3,
+      maxAnchors: density === "ultra-compact" ? 2 : 3,
+      separator: " | ",
+    }).text.replace(/\s*\|\s*\+\d+\s+labs\b/g, "").replace(/\n\+\d+\s+labs\b/g, "").trim();
   }
 
   function imageLines(patient: Patient) {
-    const structured = patient.imageStudyEntries
+    const limits = printLimits();
+    const structured = [...patient.imageStudyEntries]
       .filter((entry) => entry.impression.trim() || entry.finding.trim() || entry.studyType.trim())
-      .map((entry) => [entry.date, entry.studyType, entry.impression || entry.finding || entry.note].filter(Boolean).join(" "));
-    return [compactText(patient.newImaging), ...structured].filter(Boolean);
+      .sort((a, b) => shortDateSortValue(b.date).localeCompare(shortDateSortValue(a.date)))
+      .map((entry) =>
+        [
+          entry.date ? formatDateLabel(entry.date) : "",
+          shortStudyType(entry.studyType),
+          bestClinicalSignal(entry.impression || entry.finding || entry.note || entry.studyType, "image", limits.detailChars),
+        ]
+          .filter(Boolean)
+          .join(" "),
+      );
+    const legacy = clinicalItems(patient.newImaging).map((line) => bestClinicalSignal(line, "image", limits.detailChars));
+    return uniqueLines([...structured, ...legacy]).slice(0, limits.images);
   }
 
   function peSummaryText(patient: Patient) {
-    const structured = patient.physicalExamEntries
+    const limits = printLimits();
+    const structured = [...patient.physicalExamEntries]
       .filter((entry) => entry.finding.trim() || entry.system.trim())
-      .map((entry) => [entry.system, entry.finding || entry.note].filter(Boolean).join(" "));
-    return inlineList([compactText(patient.physicalExam), ...structured]);
+      .map((entry) => {
+        const raw = entry.finding || entry.note || entry.system;
+        const signal = bestClinicalSignal(raw, "pe", limits.detailChars);
+        const score = clinicalSignalScore(raw, "pe") + Number(entry.isImportant) * 3;
+        return {
+          score,
+          text: [entry.system, signal].filter(Boolean).join(": "),
+        };
+      });
+    const legacy = clinicalItems(patient.physicalExam).map((line) => ({
+      score: clinicalSignalScore(line, "pe"),
+      text: bestClinicalSignal(line, "pe", limits.detailChars),
+    }));
+    const ranked = [...structured, ...legacy]
+      .filter((item) => item.text.trim() && item.score > -1)
+      .sort((a, b) => b.score - a.score || a.text.length - b.text.length)
+      .map((item) => item.text);
+    return compactList(ranked, limits.pe, limits.detailChars);
   }
 
   function taskSummaryText(patient: Patient) {
+    const limits = printLimits();
     const tasks = hideCompletedTasks ? patient.tasks.filter((task) => !task.done) : patient.tasks;
-    return tasks
-      .map((task) => `${task.priority === "urgent" ? "[URGENT] " : ""}${task.text.trim().startsWith("!") ? task.text.trim().slice(1).trim() : task.text}${task.dueDate ? ` (${task.dueDate})` : ""}`)
-      .filter(Boolean)
-      .join("; ");
+    const sortedTasks = [...tasks].sort((a, b) => {
+      const priority = { urgent: 0, normal: 1, low: 2 };
+      return priority[a.priority] - priority[b.priority];
+    });
+    const visible = sortedTasks.slice(0, limits.tasks).map((task) => {
+      const text = task.text.trim().startsWith("!") ? task.text.trim().slice(1).trim() : task.text;
+      return `${task.priority === "urgent" ? "[URGENT] " : ""}${shortText(text, limits.chars)}${task.dueDate ? ` (${task.dueDate})` : ""}`;
+    });
+    return visible.filter(Boolean).join("; ");
+  }
+
+  function assessmentPlanSummaryText(patient: Patient) {
+    const limits = printLimits();
+    if (patient.assessmentPlanItems.length === 0) {
+      return compactList([...clinicalItems(patient.assessment), ...clinicalItems(patient.plan)], limits.problems, limits.detailChars);
+    }
+
+    const sortedItems = [...patient.assessmentPlanItems]
+      .filter((item) => item.category !== "underlyingDisease")
+      .sort((a, b) => {
+        const importantOrder = Number(!a.isImportant) - Number(!b.isImportant);
+        if (importantOrder !== 0) return importantOrder;
+        return a.order - b.order;
+      });
+    const visible = sortedItems
+      .slice(0, limits.problems)
+      .map((item) => shortText(item.problemTitle || item.assessmentSummary, limits.detailChars))
+      .filter(Boolean);
+    return visible.join("; ");
   }
 
   function fieldLine(label: string, value: ReactNode) {
@@ -182,9 +508,26 @@ function PrintRoundingListPage({
           {(unfinishedMiscTasks.length > 0 || openStudyTopics.length > 0 || printContacts.length > 0) && (
             <div className="print-general-notes">
               <strong>{t("print.generalNotes")}</strong>
-              {printContacts.length > 0 && <span>{t("print.phonebook")}: {printContacts.map((contact) => `${contact.name || contact.roleOrUnit} ${contact.phone}`).join("; ")}</span>}
-              {unfinishedMiscTasks.length > 0 && <span>{t("print.miscTasks")}: {unfinishedMiscTasks.map((task) => task.text).join("; ")}</span>}
-              {openStudyTopics.length > 0 && <span>{t("print.studyTopics")}: {openStudyTopics.map((topic) => topic.topic).join("; ")}</span>}
+              {printContacts.length > 0 && (
+                <span>
+                  {t("print.phonebook")}:{" "}
+                  {compactList(
+                    printContacts.map((contact) => `${contact.name || contact.roleOrUnit} ${contact.phone}`),
+                    printLimits().generalItems,
+                    printLimits().detailChars,
+                  )}
+                </span>
+              )}
+              {unfinishedMiscTasks.length > 0 && (
+                <span>
+                  {t("print.miscTasks")}: {compactList(unfinishedMiscTasks.map((task) => task.text), printLimits().generalItems, printLimits().detailChars)}
+                </span>
+              )}
+              {openStudyTopics.length > 0 && (
+                <span>
+                  {t("print.studyTopics")}: {compactList(openStudyTopics.map((topic) => topic.topic), printLimits().generalItems, printLimits().detailChars)}
+                </span>
+              )}
             </div>
           )}
         </div>
@@ -194,7 +537,7 @@ function PrintRoundingListPage({
             <tr>
               <th>Bed</th>
               <th>Pt</th>
-              <th>PMH / Problems</th>
+              <th>Dx / Risks</th>
               <th>S / PE</th>
               <th>Labs / Imaging</th>
               <th>A/P</th>
@@ -217,45 +560,33 @@ function PrintRoundingListPage({
                   <td>
                     {patient.importantRedFlags.trim() && (
                       <div className="print-red-flags">
-                        <strong>Red Flags:</strong> {compactText(patient.importantRedFlags)}
+                        <strong>Red Flags:</strong> {compactText(patient.importantRedFlags, printLimits().detailChars, printLimits().redFlags)}
                       </div>
                     )}
-                    {fieldLine("Dx", patient.primaryDiagnosis)}
-                    {fieldLine("PMH", getUnderlyingDiseaseItems(patient).join(", "))}
-                    {getActiveProblemItems(patient).length > 0 && (
-                      <div className="print-field-line">
-                        <strong>Problems:</strong>{" "}
-                        <ActiveProblemDisplay
-                          items={patient.activeProblemStructuredItems}
-                          fallbackItems={getActiveProblemItems(patient)}
-                        />
-                      </div>
-                    )}
+                    {fieldLine("Dx", diagnosisSummary(patient))}
+                    {fieldLine("Risk", riskSummary(patient))}
+                    {fieldLine("Issues", issueSummary(patient))}
                   </td>
                   <td>
-                    {fieldLine("S", compactText(patient.subjectiveOrChiefConcern))}
+                    {fieldLine("VS", importantObjectiveText(patient.vitalSigns, printLimits().chars, 1))}
+                    {fieldLine("BS", importantObjectiveText(patient.bloodSugar, printLimits().chars, 1))}
+                    {fieldLine("S", compactText(patient.subjectiveOrChiefConcern, printLimits().detailChars, printLimits().subjective))}
                     {fieldLine("PE", peSummaryText(patient))}
                   </td>
                   <td>
-                    {labReportChips(patient)}
+                    {fieldLine("Lab", labFocusText(patient))}
                     {images.length > 0 && fieldLine("Img", images.join("; "))}
                   </td>
-                  <td className="print-ap-cell">
-                    <AssessmentPlanDisplay
-                      items={patient.assessmentPlanItems}
-                      legacyAssessment={patient.assessment}
-                      legacyPlan={patient.plan}
-                    />
-                  </td>
+                  <td className="print-ap-cell">{assessmentPlanSummaryText(patient)}</td>
                   <td>{taskSummaryText(patient)}</td>
                   <td>
                     {fieldLine("DC", patient.dischargeTargetDate)}
-                    {fieldLine("Plan", compactText(patient.dischargePlan))}
-                    {fieldLine("Barrier", patient.dischargeBarriers)}
+                    {fieldLine("Plan", compactText(patient.dischargePlan, printLimits().dcChars, 1))}
+                    {fieldLine("Barrier", shortText(patient.dischargeBarriers, printLimits().dcChars))}
                     <div className="print-field-line">
                       <strong>DC prep:</strong> {dischargePrepText(patient)}
                     </div>
-                    {fieldLine("VS", compactText(patient.vsOrder))}
+                    {fieldLine("VS order", compactText(patient.vsOrder, printLimits().dcChars, 1))}
                   </td>
                 </tr>
               );

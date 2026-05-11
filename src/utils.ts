@@ -661,6 +661,364 @@ export function formatLabItem(item: ParsedLabItem) {
   return { label, value, previous: item.previousValue ? `prev ${item.previousValue}` : "" };
 }
 
+interface LabObservation {
+  key: string;
+  label: string;
+  value: string;
+  unit: string;
+  previousValue: string;
+  date: string;
+  item: ParsedLabItem;
+}
+
+interface LabFocusEntry {
+  key: string;
+  text: string;
+  score: number;
+  anchor: boolean;
+  critical: boolean;
+  trend: boolean;
+}
+
+export interface LabFocusSummary {
+  critical: string[];
+  trend: string[];
+  anchors: string[];
+  hiddenCount: number;
+  text: string;
+}
+
+export interface LabFocusOptions {
+  maxCritical?: number;
+  maxTrend?: number;
+  maxAnchors?: number;
+  separator?: string;
+}
+
+function numericLabValue(value: string) {
+  const normalized = value.replace(/,/g, "").match(/[<>]?\s*(-?\d+(?:\.\d+)?)/)?.[1];
+  if (!normalized) return null;
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function canonicalLabKey(label: string) {
+  const normalized = label.toLowerCase().replace(/[^a-z0-9]+/g, "");
+  if (normalized.includes("ntprobnp") || normalized.includes("ntprobnp")) return "NT-proBNP";
+  if (normalized === "probnp") return "NT-proBNP";
+  if (normalized.includes("bnp")) return "BNP";
+  if (normalized.includes("hba1c") || normalized === "a1c") return "HbA1c";
+  if (normalized === "chol" || normalized.includes("cholesterol")) return "Cholesterol";
+  if (normalized === "tg" || normalized.includes("triglyceride")) return "TG";
+  if (normalized === "ldl" || normalized.includes("ldlc")) return "LDL";
+  if (normalized === "wbc") return "WBC";
+  if (normalized === "neu" || normalized.includes("neutrophil")) return "Neu";
+  if (normalized === "hb" || normalized === "hgb" || normalized.includes("hemoglobin")) return "Hb";
+  if (normalized === "plt" || normalized.includes("platelet")) return "Plt";
+  if (normalized === "cr" || normalized.includes("creatinine")) return "Cr";
+  if (normalized === "egfr") return "eGFR";
+  if (normalized === "na" || normalized === "sodium") return "Na";
+  if (normalized === "k" || normalized === "potassium") return "K";
+  if (normalized.includes("lactate")) return "Lactate";
+  if (normalized === "crp") return "CRP";
+  if (normalized === "pct" || normalized.includes("procalcitonin")) return "PCT";
+  if (normalized.includes("ddimer")) return "D-dimer";
+  if (normalized === "inr") return "INR";
+  if (normalized === "pt") return "PT";
+  if (normalized === "aptt" || normalized === "ptt") return "aPTT";
+  if (normalized.includes("glucose") || normalized === "ac" || normalized === "pc" || normalized.includes("sugar")) return "Glucose";
+  if (normalized === "alt" || normalized === "gpt") return "ALT";
+  if (normalized === "ast" || normalized === "got") return "AST";
+  if (normalized.includes("albumin") || normalized === "alb") return "Alb";
+  if (normalized.includes("bilirubin") || normalized === "bili") return "Bilirubin";
+  if (normalized === "ca125") return "CA125";
+  if (normalized === "cea") return "CEA";
+  if (normalized === "scc") return "SCC";
+  if (normalized === "esr") return "ESR";
+  if (normalized === "fib" || normalized.includes("fibrinogen")) return "Fibrinogen";
+  if (normalized === "troponin" || normalized === "trop" || normalized.includes("troponini")) return "Troponin";
+  return normalizeLabDisplayName(label);
+}
+
+function labDisplayLabel(key: string) {
+  if (key === "Cholesterol") return "Chol";
+  if (key === "Glucose") return "Glu";
+  return key;
+}
+
+function labClinicalNumericValue(key: string, value: number | null) {
+  if (value === null) return null;
+  if ((key === "WBC" || key === "Plt") && value > 1000) return value / 1000;
+  return value;
+}
+
+function labDirection(key: string, value: number, previous: number | null) {
+  if (previous === null || value === previous) return "";
+  const arrow = value > previous ? "\u2191" : "\u2193";
+  return `${arrow}(${formatLabFocusValue(key, previous)})`;
+}
+
+function formatNumeric(value: number) {
+  return Number.isInteger(value) ? String(value) : String(Number(value.toFixed(2)));
+}
+
+function formatLabFocusValue(key: string, value: number) {
+  if (key === "WBC" && value >= 1000) return `${formatNumeric(value / 1000)}k`;
+  if (key === "Plt" && value >= 1000) return `${formatNumeric(value / 1000)}k`;
+  if ((key === "WBC" || key === "Plt") && value < 1000) return formatNumeric(value);
+  return formatNumeric(value);
+}
+
+function labAbnormalLevel(key: string, value: number | null) {
+  if (value === null) return 0;
+
+  switch (key) {
+    case "Hb":
+      return value < 8 || value > 18 ? 2 : value < 10 || value > 17 ? 1 : 0;
+    case "WBC":
+      return value > 20 || value < 2 ? 2 : value > 12 || value < 4 ? 1 : 0;
+    case "Neu":
+      return value > 80 || value < 40 ? 1 : 0;
+    case "Plt":
+      return value < 50 ? 2 : value < 100 || value > 450 ? 1 : 0;
+    case "Cr":
+      return value >= 2 ? 2 : value > 1.3 ? 1 : 0;
+    case "eGFR":
+      return value < 30 ? 2 : value < 60 ? 1 : 0;
+    case "Na":
+      return value < 130 || value > 150 ? 2 : value < 135 || value > 145 ? 1 : 0;
+    case "K":
+      return value < 3 || value > 5.5 ? 2 : value < 3.5 || value > 5 ? 1 : 0;
+    case "Glucose":
+      return value < 70 || value >= 300 ? 2 : value >= 180 ? 1 : 0;
+    case "HbA1c":
+      return value >= 7 ? 1 : 0;
+    case "LDL":
+      return value >= 100 ? 1 : 0;
+    case "TG":
+      return value >= 200 ? 1 : 0;
+    case "BNP":
+      return value >= 100 ? 1 : 0;
+    case "NT-proBNP":
+      return value >= 300 ? 1 : 0;
+    case "Lactate":
+      return value >= 4 ? 2 : value >= 2 ? 1 : 0;
+    case "CRP":
+      return value > 0.5 ? 1 : 0;
+    case "PCT":
+      return value >= 2 ? 2 : value >= 0.5 ? 1 : 0;
+    case "D-dimer":
+      return value > 500 ? 1 : 0;
+    case "ESR":
+      return value > 30 ? 1 : 0;
+    case "Fibrinogen":
+      return value > 450 || value < 180 ? 1 : 0;
+    case "INR":
+      return value >= 3 ? 2 : value >= 1.5 ? 1 : 0;
+    case "PT":
+      return value >= 18 ? 2 : value > 14 ? 1 : 0;
+    case "aPTT":
+      return value >= 60 ? 2 : value > 36 ? 1 : 0;
+    case "Alb":
+      return value < 3 ? 1 : 0;
+    case "Troponin":
+      return value > 0 ? 2 : 0;
+    default:
+      return 0;
+  }
+}
+
+function meaningfulLabDelta(key: string, value: number | null, previous: number | null) {
+  if (value === null || previous === null) return false;
+  const delta = Math.abs(value - previous);
+  const percent = previous === 0 ? 1 : delta / Math.abs(previous);
+
+  switch (key) {
+    case "Hb":
+      return delta >= 0.8;
+    case "WBC":
+      return delta >= 2;
+    case "Plt":
+      return delta >= 50 || percent >= 0.25;
+    case "Cr":
+      return delta >= 0.3 || percent >= 0.25;
+    case "eGFR":
+      return delta >= 10 || percent >= 0.25;
+    case "Na":
+      return delta >= 3;
+    case "K":
+      return delta >= 0.4;
+    case "Glucose":
+      return delta >= 50;
+    case "Lactate":
+      return delta >= 1;
+    case "CRP":
+    case "PCT":
+      return delta >= 1 || percent >= 0.3;
+    case "BNP":
+    case "NT-proBNP":
+      return percent >= 0.3;
+    default:
+      return percent >= 0.35;
+  }
+}
+
+function isDiseaseAnchorLab(key: string, patient: Patient) {
+  const context = [
+    patient.primaryDiagnosis,
+    patient.activeProblems,
+    ...patient.activeProblemItems,
+    ...patient.activeProblemStructuredItems.map((item) => `${item.title} ${item.note}`),
+    patient.underlyingDiseases,
+    ...patient.underlyingDiseaseItems,
+    ...patient.assessmentPlanItems.map((item) => `${item.problemTitle} ${item.assessmentSummary}`),
+  ]
+    .join(" ")
+    .toLowerCase();
+
+  const hasStroke = /stroke|cva|tia|ischemic|infarct|nihss|carotid|mca|aca|pca|pons|basal ganglia/.test(context);
+  const hasHf = /heart failure|\bhf\b|chf|lvhf|nyha|pulmonary edema|hfr?ef|reduced ef/.test(context);
+  const hasDm = /\bdm\b|diabetes|hypergly/.test(context);
+  const hasRenal = /\backi\b|\bckd\b|renal|esrd|dialysis/.test(context);
+  const hasBleeding = /bleed|bleeding|anemia|melena|hematemesis|hematuria|vaginal|postmenopausal|ob gyn|obgyn/.test(context);
+  const hasLiver = /cirrhosis|hepatitis|liver|jaundice/.test(context);
+  const hasCancerOrGyn = /cancer|tumor|malign|carcinoma|ca\?|ca |gyn|ob|ovary|ovarian|cervical|uterine|postmenopausal/.test(context);
+
+  if (hasStroke && ["HbA1c", "LDL", "TG", "Cholesterol"].includes(key)) return true;
+  if (hasHf && ["BNP", "NT-proBNP", "Cr", "eGFR", "Na", "K"].includes(key)) return true;
+  if (hasDm && ["HbA1c", "Glucose", "Cr", "eGFR"].includes(key)) return true;
+  if (hasRenal && ["Cr", "eGFR", "K", "Na"].includes(key)) return true;
+  if (hasBleeding && ["Hb", "Plt", "PT", "INR", "aPTT"].includes(key)) return true;
+  if (hasLiver && ["AST", "ALT", "Bilirubin", "Alb", "INR"].includes(key)) return true;
+  if (hasCancerOrGyn && ["CA125", "CEA", "SCC", "Hb"].includes(key)) return true;
+  return false;
+}
+
+function shouldShowAnchorLab(key: string, abnormalLevel: number) {
+  const persistentAnchorKeys = new Set(["HbA1c", "LDL", "TG", "Cholesterol", "BNP", "NT-proBNP", "CA125", "CEA", "SCC"]);
+  return abnormalLevel >= 1 || persistentAnchorKeys.has(key);
+}
+
+function collectLabObservations(patient: Patient, notes: DailyNote[] = []) {
+  const observations: LabObservation[] = [];
+
+  function addItems(items: ParsedLabItem[], date: string) {
+    items.forEach((item) => {
+      const label = item.name || item.label;
+      if (!label || !String(item.value ?? "").trim()) return;
+      observations.push({
+        key: canonicalLabKey(label),
+        label,
+        value: String(item.value ?? ""),
+        unit: String(item.unit ?? ""),
+        previousValue: String(item.previousValue ?? ""),
+        date: normalizeDateKey(date || todayKey()),
+        item,
+      });
+    });
+  }
+
+  function addReports(reports: LabReport[], fallbackDate: string) {
+    reports.forEach((report) => addItems(report.items, report.date || fallbackDate));
+  }
+
+  addReports(patient.labReports, patient.labDate || todayKey());
+  if (patient.labReports.length === 0) addItems(patient.parsedLabItems, patient.labDate || todayKey());
+  notes.forEach((note) => {
+    addReports(note.labReports, note.labDate || note.date);
+    if (note.labReports.length === 0) addItems(note.parsedLabItems, note.labDate || note.date);
+  });
+
+  const seen = new Set<string>();
+  return observations
+    .sort((a, b) => a.date.localeCompare(b.date))
+    .filter((observation) => {
+      const key = [observation.date, observation.key, observation.value, observation.previousValue].join("|");
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+}
+
+export function getLabFocusSummary(
+  patient: Patient,
+  notes: DailyNote[] = [],
+  options: LabFocusOptions = {},
+): LabFocusSummary {
+  const maxCritical = options.maxCritical ?? 2;
+  const maxTrend = options.maxTrend ?? 3;
+  const maxAnchors = options.maxAnchors ?? 2;
+  const separator = options.separator ?? "\n";
+  const observations = collectLabObservations(patient, notes);
+  const byKey = new Map<string, LabObservation[]>();
+
+  observations.forEach((observation) => {
+    const group = byKey.get(observation.key) ?? [];
+    group.push(observation);
+    byKey.set(observation.key, group);
+  });
+
+  const entries: LabFocusEntry[] = [];
+
+  byKey.forEach((group, key) => {
+    const ordered = [...group].sort((a, b) => a.date.localeCompare(b.date));
+    const latest = ordered[ordered.length - 1];
+    const previousObservation = [...ordered].reverse().find((item) => item.date < latest.date && item.value !== latest.value);
+    const rawValue = numericLabValue(latest.value);
+    const rawPrevious = numericLabValue(latest.previousValue) ?? numericLabValue(previousObservation?.value ?? "");
+    const value = labClinicalNumericValue(key, rawValue);
+    const previous = labClinicalNumericValue(key, rawPrevious);
+    const level = labAbnormalLevel(key, value);
+    const hasDelta = meaningfulLabDelta(key, value, previous);
+    const anchor = isDiseaseAnchorLab(key, patient) && shouldShowAnchorLab(key, level);
+    const direction = value !== null ? labDirection(key, value, previous) : latest.previousValue ? `(${latest.previousValue})` : "";
+    const formattedValue = value !== null ? formatLabFocusValue(key, value) : latest.value;
+    const text = `${labDisplayLabel(key)} ${formattedValue}${direction}`;
+    const critical = level >= 2;
+    const trend = hasDelta || (level >= 1 && !anchor) || level >= 2;
+    const score = level * 100 + Number(hasDelta) * 35 + Number(anchor) * 25 + Number(latest.item.important || latest.item.isImportant) * 40;
+
+    if (critical || trend || anchor) {
+      entries.push({ key, text, score, anchor, critical, trend });
+    }
+  });
+
+  const used = new Set<string>();
+  const critical = entries
+    .filter((entry) => entry.critical)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, maxCritical);
+  critical.forEach((entry) => used.add(entry.key));
+
+  const trend = entries
+    .filter((entry) => entry.trend && !used.has(entry.key))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, maxTrend);
+  trend.forEach((entry) => used.add(entry.key));
+
+  const anchors = entries
+    .filter((entry) => entry.anchor && !used.has(entry.key))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, maxAnchors);
+  anchors.forEach((entry) => used.add(entry.key));
+
+  const hiddenCount = Math.max(entries.length - used.size, 0);
+  const sections = [
+    critical.length > 0 ? `!Critical: ${critical.map((entry) => entry.text).join(", ")}` : "",
+    trend.length > 0 ? `Lab \u0394: ${trend.map((entry) => entry.text).join(", ")}` : "",
+    anchors.length > 0 ? `Anchor: ${anchors.map((entry) => entry.text).join(", ")}` : "",
+  ].filter(Boolean);
+  const text = [sections.join(separator), hiddenCount > 0 ? `+${hiddenCount} labs` : ""].filter(Boolean).join(separator);
+
+  return {
+    critical: critical.map((entry) => entry.text),
+    trend: trend.map((entry) => entry.text),
+    anchors: anchors.map((entry) => entry.text),
+    hiddenCount,
+    text,
+  };
+}
+
 export function keyLabItems(items: ParsedLabItem[], maxItems = 8) {
   const priority = [
     "WBC",

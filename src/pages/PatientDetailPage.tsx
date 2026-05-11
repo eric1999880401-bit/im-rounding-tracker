@@ -6,7 +6,8 @@ import AdmissionBriefForm from "../components/AdmissionBriefForm";
 import DailyNoteForm from "../components/DailyNoteForm";
 import TaskList from "../components/TaskList";
 import AiIntakePanel from "../components/AiIntakePanel";
-import { ClinicalText } from "../components/ClinicalText";
+import { ClinicalText, CompactItemList } from "../components/ClinicalText";
+import AssessmentPlanDisplay from "../components/AssessmentPlanDisplay";
 import LabHistoryPanel from "../components/LabHistoryPanel";
 import ActiveProblemEditor from "../components/ActiveProblemEditor";
 import {
@@ -17,6 +18,7 @@ import {
   IconInfo,
   IconObjective,
   IconQuickUpdate,
+  IconRounds,
   IconSubjective,
   IconTasks,
 } from "../components/icons";
@@ -26,6 +28,7 @@ import {
   emptyDailyNote,
   getActiveProblemItems,
   getUnderlyingDiseaseItems,
+  getLabFocusSummary,
   getLatestNonEmptyDailyNote,
   getPatientDisplaySummary,
   nowIso,
@@ -43,11 +46,12 @@ interface PageProps {
   onSaveDailyNote: (patientId: string, note: DailyNote) => Promise<void>;
 }
 
-type DetailTab = "subjective" | "quick" | "objective" | "assessmentPlan" | "tasksDischarge" | "aiIntake" | "admission" | "history" | "info";
+type DetailTab = "rounds" | "subjective" | "quick" | "objective" | "assessmentPlan" | "tasksDischarge" | "aiIntake" | "admission" | "history" | "info";
 
 type DetailTabIcon = (props: React.SVGProps<SVGSVGElement>) => React.ReactElement;
 
 const detailTabs: Array<{ id: DetailTab; labelKey: string; shortKey: string; Icon: DetailTabIcon }> = [
+  { id: "rounds", labelKey: "detail.tabs.rounds", shortKey: "detail.tabs.short.rounds", Icon: IconRounds },
   { id: "quick", labelKey: "detail.tabs.quick", shortKey: "detail.tabs.short.quick", Icon: IconQuickUpdate },
   { id: "subjective", labelKey: "detail.tabs.subjective", shortKey: "detail.tabs.short.subjective", Icon: IconSubjective },
   { id: "objective", labelKey: "detail.tabs.objective", shortKey: "detail.tabs.short.objective", Icon: IconObjective },
@@ -78,7 +82,7 @@ function PatientDetailPage({
   const initialDraft = displayFallbackPatient ? patientWithDailyNote(displayFallbackPatient, selectedDraftNote) : null;
   const [draftPatient, setDraftPatient] = useState<Patient | null>(initialDraft);
   const [isDirty, setIsDirty] = useState(false);
-  const [activeTab, setActiveTab] = useState<DetailTab>("quick");
+  const [activeTab, setActiveTab] = useState<DetailTab>("rounds");
   const [selectedDittoDate, setSelectedDittoDate] = useState("");
   const draftRef = useRef<Patient | null>(initialDraft);
   const isDirtyRef = useRef(false);
@@ -292,6 +296,175 @@ function PatientDetailPage({
     );
   }
 
+  function conciseLines(value: string, limit = 3) {
+    return value
+      .split(/\r?\n/)
+      .map((line) => line.replace(/^!+/, "").replace(/\s+-\s+Reason:.*/i, "").trim())
+      .filter(Boolean)
+      .slice(0, limit);
+  }
+
+  function shortLine(value: string, maxChars = 72) {
+    const clean = value.replace(/\s+-\s+Reason:.*/i, "").trim();
+    const firstClause = clean.split(/[;。]/)[0]?.trim() || clean;
+    if (firstClause.length <= maxChars) return firstClause;
+    return `${firstClause.slice(0, Math.max(0, maxChars - 1)).trimEnd()}...`;
+  }
+
+  function roundsImageSummary(patient: Patient) {
+    if (patient.imageStudyEntries.length > 0) {
+      return patient.imageStudyEntries
+        .filter((entry) => entry.studyType.trim() || entry.impression.trim() || entry.finding.trim())
+        .slice(0, 3)
+        .map((entry) =>
+          [entry.date, entry.studyType, shortLine(entry.impression || entry.finding || entry.note, 54)]
+            .filter(Boolean)
+            .join(" - "),
+        )
+        .join("\n");
+    }
+
+    return conciseLines(patient.newImaging, 3).map((line) => shortLine(line, 72)).join("\n");
+  }
+
+  function pendingTasks() {
+    return currentPatient.tasks.filter((task) => !task.done);
+  }
+
+  function urgentTasks() {
+    return pendingTasks().filter((task) => task.priority === "urgent" || task.text.trim().startsWith("!"));
+  }
+
+  function criticalLines() {
+    const vitalSignals = conciseLines(currentPatient.vitalSigns, 4)
+      .filter((line) => !/\bnormal\b/i.test(line) && /fever|tachy|hypo|hyper|low|elevated|spo2|desat|bp|hr|rr/i.test(line))
+      .slice(0, 2)
+      .map((line) => shortLine(line, 58));
+    const labFocus = getLabFocusSummary(currentPatient, patientNotes, {
+      maxCritical: 2,
+      maxTrend: 1,
+      maxAnchors: 0,
+    });
+    const labSignals = [...labFocus.critical, ...labFocus.trend.slice(0, 1)].map((line) => `Lab: ${line}`);
+    const firstProblem = currentPatient.assessmentPlanItems.find((item) => item.problemTitle || item.assessmentSummary);
+
+    return [
+      ...conciseLines(currentPatient.importantRedFlags, 3),
+      ...vitalSignals,
+      ...urgentTasks().slice(0, 2).map((task) => task.text.replace(/^!+/, "").trim()),
+      ...labSignals,
+      firstProblem?.problemTitle ? `A/P: ${shortLine(firstProblem.problemTitle, 48)}` : "",
+    ].filter(Boolean).slice(0, 5);
+  }
+
+  function attendingLines() {
+    const firstProblem = currentPatient.assessmentPlanItems.find((item) => item.problemTitle || item.assessmentSummary);
+    return [
+      conciseLines(currentPatient.oneLiner, 1)[0] || currentPatient.primaryDiagnosis,
+      ...conciseLines(currentPatient.overnightEvent, 2).map((line) => `ON: ${line}`),
+      firstProblem?.problemTitle ? `A/P: ${firstProblem.problemTitle}` : "",
+      firstProblem?.planItems[0] ? `Plan: ${firstProblem.planItems[0]}` : "",
+    ].filter(Boolean).slice(0, 5).join("\n");
+  }
+
+  function taskLines() {
+    return [...urgentTasks(), ...pendingTasks().filter((task) => !urgentTasks().includes(task))]
+      .slice(0, 6)
+      .map((task) => `${task.priority === "urgent" ? "!" : ""}${task.text.replace(/^!+/, "").trim()}`)
+      .join("\n");
+  }
+
+  function dischargeLines() {
+    return [
+      currentPatient.dischargeTargetDate ? `Target: ${currentPatient.dischargeTargetDate}` : "",
+      currentPatient.dischargePlan,
+      currentPatient.dischargeBarriers ? `Barrier: ${currentPatient.dischargeBarriers}` : "",
+    ].filter(Boolean).join("\n");
+  }
+
+  function renderRoundsMode() {
+    const roundsSummary = displaySummary?.patient ?? currentPatient;
+    const critical = criticalLines().map((line) => `!${line}`).join("\n");
+    const tasks = taskLines();
+
+    return (
+      <section className="panel rounds-mode-panel">
+        <div className="section-heading">
+          <h2>Rounds Mode</h2>
+          <span className="muted">{selectedDate}</span>
+        </div>
+
+        <div className="rounds-focus-grid">
+          <section className="rounds-focus-block rounds-critical-block">
+            <span className="board-label">See first</span>
+            <ClinicalText value={critical} fallback="No urgent signal" maxCharsPerLine={58} importantDefault />
+          </section>
+          <section className="rounds-focus-block">
+            <span className="board-label">Tell attending</span>
+            <ClinicalText value={attendingLines()} fallback="No summary yet" maxCharsPerLine={74} />
+          </section>
+          <section className="rounds-focus-block">
+            <span className="board-label">Do today</span>
+            <ClinicalText value={tasks} fallback="No pending tasks" maxCharsPerLine={58} />
+          </section>
+        </div>
+
+        <div className="rounds-detail-grid">
+          <section className="rounds-block">
+            <span className="board-label">S / Overnight</span>
+            <ClinicalText
+              value={[roundsSummary.subjectiveOrChiefConcern, roundsSummary.overnightEvent].filter(Boolean).join("\n")}
+              fallback="-"
+              maxLines={4}
+              maxCharsPerLine={58}
+            />
+          </section>
+
+          <section className="rounds-block">
+            <span className="board-label">V/S / Sugar / PE</span>
+            <ClinicalText
+              value={[roundsSummary.vitalSigns, roundsSummary.bloodSugar, roundsSummary.physicalExam].filter(Boolean).join("\n")}
+              fallback="-"
+              maxLines={5}
+              maxCharsPerLine={64}
+            />
+          </section>
+
+          <section className="rounds-block">
+            <span className="board-label">Lab / Image</span>
+            <ClinicalText
+              value={getLabFocusSummary(roundsSummary, patientNotes, {
+                maxCritical: 2,
+                maxTrend: 3,
+                maxAnchors: 2,
+              }).text}
+              fallback="No lab signal"
+              maxLines={3}
+              maxCharsPerLine={72}
+            />
+            <ClinicalText value={roundsImageSummary(roundsSummary)} fallback="-" maxLines={3} maxCharsPerLine={72} />
+          </section>
+
+          <section className="rounds-block rounds-ap-block">
+            <span className="board-label">A/P</span>
+            <AssessmentPlanDisplay
+              items={roundsSummary.assessmentPlanItems}
+              legacyAssessment={roundsSummary.assessment}
+              legacyPlan={roundsSummary.plan}
+              compact
+              micro
+            />
+          </section>
+
+          <section className="rounds-block">
+            <span className="board-label">DC</span>
+            <ClinicalText value={dischargeLines()} fallback="TBD" maxLines={4} maxCharsPerLine={64} />
+          </section>
+        </div>
+      </section>
+    );
+  }
+
   return (
     <div className="page">
       <header className="page-header">
@@ -319,18 +492,24 @@ function PatientDetailPage({
           {currentPatient.attending && <span>Att: {currentPatient.attending}</span>}
         </div>
         <div className="detail-header-grid">
-          {currentPatient.primaryDiagnosis && <div><strong>Dx:</strong> {currentPatient.primaryDiagnosis}</div>}
+          {currentPatient.primaryDiagnosis && <div><strong>Dx:</strong> {shortLine(currentPatient.primaryDiagnosis, 92)}</div>}
           {currentPatient.dischargeTargetDate && <div><strong>DC:</strong> {currentPatient.dischargeTargetDate}</div>}
           {getUnderlyingDiseaseItems(currentPatient).length > 0 && (
-            <div><strong>PMH:</strong> {getUnderlyingDiseaseItems(currentPatient).join(", ")}</div>
+            <div>
+              <strong>PMH:</strong>
+              <CompactItemList items={getUnderlyingDiseaseItems(currentPatient).map((item) => shortLine(item, 34))} maxItems={4} />
+            </div>
           )}
           {getActiveProblemItems(currentPatient).length > 0 && (
-            <div><strong>Problems:</strong> {getActiveProblemItems(currentPatient).join("; ")}</div>
+            <div>
+              <strong>Problems:</strong>
+              <CompactItemList items={getActiveProblemItems(currentPatient).map((item) => shortLine(item, 42))} maxItems={4} />
+            </div>
           )}
         </div>
         {currentPatient.importantRedFlags.trim() && (
           <div className="detail-header-red-flags">
-            <strong>Red Flags:</strong> <ClinicalText value={currentPatient.importantRedFlags} importantDefault />
+            <strong>Red Flags:</strong> <ClinicalText value={currentPatient.importantRedFlags} maxLines={4} maxCharsPerLine={72} importantDefault />
           </div>
         )}
       </section>
@@ -379,6 +558,8 @@ function PatientDetailPage({
           })}
         </div>
       </section>
+
+      {activeTab === "rounds" && renderRoundsMode()}
 
       {activeTab === "subjective" && (
         <DailyNoteForm

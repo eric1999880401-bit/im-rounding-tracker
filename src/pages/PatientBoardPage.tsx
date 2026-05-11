@@ -7,6 +7,7 @@ import {
   getActiveProblemItems,
   getActiveAttendingNames,
   getActivePatients,
+  getLabFocusSummary,
   getPatientDisplaySummary,
   getUnderlyingDiseaseItems,
   hasUpcomingDischarge,
@@ -17,7 +18,6 @@ import {
 } from "../utils";
 import PatientForm from "../components/PatientForm";
 import { ClinicalText, CompactItemList } from "../components/ClinicalText";
-import { LabChips } from "../components/LabChips";
 import AssessmentPlanDisplay from "../components/AssessmentPlanDisplay";
 import ActiveProblemDisplay from "../components/ActiveProblemDisplay";
 import {
@@ -53,8 +53,9 @@ function PatientBoardPage({
   const [sortMode, setSortMode] = useState<SortMode>("bed");
   const [attendingFilter, setAttendingFilter] = useState("all");
   const attendingNames = getActiveAttendingNames(patients);
+  const uniquePatients = Array.from(new Map(patients.map((patient) => [patient.id, patient])).values());
   const activePatients = sortPatients(
-    getActivePatients(patients).filter(
+    getActivePatients(uniquePatients).filter(
       (patient) => attendingFilter === "all" || patient.attending.trim() === attendingFilter,
     ).map((patient) => getPatientDisplaySummary(patient, dailyNotesByPatient).patient),
     sortMode,
@@ -62,6 +63,15 @@ function PatientBoardPage({
   const dischargeAlerts = activePatients
     .map((patient) => ({ patient, pending: pendingDischargePrep(patient) }))
     .filter(({ patient, pending }) => hasUpcomingDischarge(patient) && pending.length > 0);
+  const mustSeePatients = activePatients
+    .filter((patient) => patientUrgentReasons(patient).length > 0)
+    .slice(0, 6);
+  const newAdmissionPatients = activePatients
+    .filter((patient) => patient.isNewAdmission || patient.showAdmissionBriefOnPrint)
+    .slice(0, 6);
+  const dischargeSoonPatients = activePatients
+    .filter((patient) => hasUpcomingDischarge(patient) || pendingDischargePrep(patient).length > 0)
+    .slice(0, 6);
 
   async function addPatient() {
     const now = nowIso();
@@ -126,10 +136,71 @@ function PatientBoardPage({
     );
   }
 
+  function textLines(value: string, limit = 2) {
+    return value
+      .split(/\r?\n/)
+      .map((line) => line.replace(/^!+/, "").replace(/\s+-\s+Reason:.*/i, "").trim())
+      .filter(Boolean)
+      .slice(0, limit);
+  }
+
+  function pendingTasks(patient: Patient) {
+    return patient.tasks.filter((task) => !task.done);
+  }
+
+  function urgentTasks(patient: Patient) {
+    return pendingTasks(patient).filter(
+      (task) => task.priority === "urgent" || task.text.trim().startsWith("!"),
+    );
+  }
+
+  function patientUrgentReasons(patient: Patient) {
+    const labFocus = getLabFocusSummary(patient, dailyNotesByPatient[patient.id] ?? [], {
+      maxCritical: 2,
+      maxTrend: 1,
+      maxAnchors: 0,
+    });
+    const reasons = [
+      ...textLines(patient.importantRedFlags, 2),
+      ...importantLines(patient.vitalSigns).map((line) => line.text).slice(0, 2),
+      ...labFocus.critical.map((line) => `Lab: ${line}`),
+      ...labFocus.trend.slice(0, 1).map((line) => `Lab: ${line}`),
+      ...urgentTasks(patient)
+        .slice(0, 2)
+        .map((task) => task.text.replace(/^!+/, "").trim()),
+    ].filter(Boolean);
+
+    return Array.from(new Set(reasons.map((line) => line.trim()))).slice(0, 3);
+  }
+
+  function patientAction(patient: Patient) {
+    if (patientUrgentReasons(patient).length > 0) return "See now";
+    if (patient.isNewAdmission || patient.showAdmissionBriefOnPrint) return "New admit";
+    if (hasUpcomingDischarge(patient)) return "DC prep";
+    if (pendingTasks(patient).length > 0) return "Tasks";
+    return "Round";
+  }
+
+  function cockpitLine(patient: Patient) {
+    const urgent = patientUrgentReasons(patient)[0];
+    if (urgent) return urgent;
+    const pending = pendingTasks(patient)[0]?.text.replace(/^!+/, "").trim();
+    if (pending) return pending;
+    return patient.primaryDiagnosis || patient.oneLiner || "-";
+  }
+
   function dischargeReminder(patient: Patient) {
     const pending = pendingDischargePrep(patient);
     if (!hasUpcomingDischarge(patient) || pending.length === 0) return "";
     return `DC prep pending: ${pending.join(" / ")}`;
+  }
+
+  function labFocusText(patient: Patient) {
+    return getLabFocusSummary(patient, dailyNotesByPatient[patient.id] ?? [], {
+      maxCritical: 2,
+      maxTrend: 3,
+      maxAnchors: 2,
+    }).text;
   }
 
   function structuredPeSummary(patient: Patient) {
@@ -164,6 +235,29 @@ function PatientBoardPage({
     await onSavePatient({ ...patient, [field]: status, updatedAt: nowIso() });
   }
 
+  function renderCockpitColumn(title: string, items: Patient[], emptyText: string) {
+    return (
+      <section className="cockpit-column">
+        <div className="cockpit-column-header">
+          <h3>{title}</h3>
+          <span className="badge normal">{items.length}</span>
+        </div>
+        <div className="cockpit-list">
+          {items.map((patient) => (
+            <Link className="cockpit-item" to={`/patients/${patient.id}`} key={`${title}-${patient.id}`}>
+              <span className="cockpit-bed">{patient.bed || "-"}</span>
+              <span className="cockpit-main">
+                <strong>{patientAction(patient)}</strong>
+                <span>{cockpitLine(patient)}</span>
+              </span>
+            </Link>
+          ))}
+          {items.length === 0 && <span className="muted">{emptyText}</span>}
+        </div>
+      </section>
+    );
+  }
+
   return (
     <div className="page">
       <header className="page-header">
@@ -184,6 +278,18 @@ function PatientBoardPage({
           onCancel={() => setShowForm(false)}
         />
       )}
+
+      <section className="panel morning-cockpit">
+        <div className="section-heading">
+          <h3>Morning Cockpit</h3>
+          <span className="muted">{activePatients.length} active</span>
+        </div>
+        <div className="cockpit-grid">
+          {renderCockpitColumn("See First", mustSeePatients, "No red flags")}
+          {renderCockpitColumn("New Admits", newAdmissionPatients, "No new admits")}
+          {renderCockpitColumn("DC Soon", dischargeSoonPatients, "No DC prep")}
+        </div>
+      </section>
 
       {dischargeAlerts.length > 0 && (
         <section className="dc-alert-panel">
@@ -295,7 +401,7 @@ function PatientBoardPage({
                   {patient.importantRedFlags.trim() && (
                     <div className="board-red-flags">
                       <span className="board-label">Red Flags</span>
-                      <ClinicalText value={patient.importantRedFlags} maxLines={3} importantDefault />
+                      <ClinicalText value={patient.importantRedFlags} maxLines={3} maxCharsPerLine={64} importantDefault />
                     </div>
                   )}
                   <strong>{patient.primaryDiagnosis || "-"}</strong>
@@ -315,17 +421,17 @@ function PatientBoardPage({
 
                 <section className="patient-board-section">
                   <span className="board-label">Sx</span>
-                  <ClinicalText value={patient.subjectiveOrChiefConcern} maxLines={2} />
+                  <ClinicalText value={patient.subjectiveOrChiefConcern} maxLines={2} maxCharsPerLine={58} />
                   {patient.vitalSigns.trim() && (
                     <div className="board-subsection">
                       <span className="board-label">V/S</span>
-                      <ClinicalText value={patient.vitalSigns} maxLines={2} />
+                      <ClinicalText value={patient.vitalSigns} maxLines={2} maxCharsPerLine={58} />
                     </div>
                   )}
                   {patient.bloodSugar.trim() && (
                     <div className="board-subsection">
                       <span className="board-label">Sugar</span>
-                      <ClinicalText value={patient.bloodSugar} maxLines={2} />
+                      <ClinicalText value={patient.bloodSugar} maxLines={2} maxCharsPerLine={58} />
                     </div>
                   )}
                   {(patient.physicalExam.trim() ||
@@ -333,7 +439,7 @@ function PatientBoardPage({
                     patient.physicalExamEntries.length > 0) && (
                     <div className="board-subsection">
                       <span className="board-label">PE</span>
-                      <ClinicalText value={patient.physicalExam} maxLines={2} />
+                      <ClinicalText value={patient.physicalExam} maxLines={2} maxCharsPerLine={58} />
                       <div className="objective-chip-row">{structuredPeSummary(patient)}</div>
                     </div>
                   )}
@@ -341,8 +447,8 @@ function PatientBoardPage({
 
                 <section className="patient-board-section">
                   <span className="board-label">Lab / Image</span>
-                  <LabChips items={patient.parsedLabItems} />
-                  <ClinicalText value={patient.newImaging} maxLines={1} />
+                  <ClinicalText value={labFocusText(patient)} fallback="No lab signal" maxLines={3} maxCharsPerLine={58} />
+                  <ClinicalText value={patient.newImaging} maxLines={1} maxCharsPerLine={58} />
                   <div className="objective-chip-row">{structuredImageSummary(patient)}</div>
                 </section>
 
@@ -353,6 +459,7 @@ function PatientBoardPage({
                     legacyAssessment={patient.assessment}
                     legacyPlan={patient.plan}
                     compact
+                    micro
                   />
                 </section>
 

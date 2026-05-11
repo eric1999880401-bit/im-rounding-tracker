@@ -929,6 +929,54 @@ input[type="checkbox"] {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.rounds-mode-panel {
+  display: grid;
+  gap: 16px;
+}
+
+.rounds-focus-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: 1fr 1.2fr 1fr;
+}
+
+.rounds-focus-block,
+.rounds-block {
+  min-width: 0;
+}
+
+.rounds-focus-block {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+}
+
+.rounds-critical-block {
+  background: var(--danger-bg);
+  border-color: var(--danger-border);
+}
+
+.rounds-detail-grid {
+  border-top: 1px solid var(--border);
+  display: grid;
+  gap: 14px 16px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  padding-top: 14px;
+}
+
+.rounds-block {
+  border-top: 1px solid var(--border);
+  display: grid;
+  gap: 7px;
+  padding-top: 10px;
+}
+
+.rounds-ap-block {
+  grid-row: span 2;
+}
+
 /* ============================================================
    AI Intake
    ============================================================ */
@@ -1051,6 +1099,10 @@ input[type="checkbox"] {
   border-color: var(--success-border);
 }
 
+.ai-review-card-invalid {
+  border-color: var(--danger-border);
+}
+
 .ai-review-card-header {
   align-items: center;
   display: flex;
@@ -1063,6 +1115,22 @@ input[type="checkbox"] {
   min-height: 116px;
   resize: vertical;
   white-space: pre-wrap;
+}
+
+.ai-review-card textarea.invalid-json-textarea {
+  border-color: var(--danger-border);
+  box-shadow: 0 0 0 3px rgb(154 74 58 / 0.12);
+}
+
+.json-edit-hint {
+  color: var(--text-subtle);
+  font-size: 12px;
+  margin: 0;
+}
+
+.json-edit-error {
+  color: var(--danger-text);
+  font-weight: 600;
 }
 
 .ai-documents-page .ai-raw-textarea {
@@ -1188,6 +1256,91 @@ tbody tr:last-child td {
   min-height: 30px;
   min-width: 0;
   padding: 4px 8px;
+}
+
+.morning-cockpit {
+  display: grid;
+  gap: 12px;
+}
+
+.cockpit-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.cockpit-column {
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 12px;
+}
+
+.cockpit-column-header {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+}
+
+.cockpit-column-header h3 {
+  margin: 0;
+}
+
+.cockpit-list {
+  display: grid;
+  gap: 6px;
+}
+
+.cockpit-item {
+  align-items: flex-start;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(70px, auto) minmax(0, 1fr);
+  padding: 8px 10px;
+  text-decoration: none;
+}
+
+.cockpit-item:hover {
+  background: var(--surface-hover);
+  border-color: var(--border-strong);
+}
+
+.cockpit-bed {
+  color: var(--accent);
+  font-family: var(--font-serif);
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.cockpit-main {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.cockpit-main strong {
+  color: var(--danger-text);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.cockpit-main span {
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .patient-board-grid {
@@ -2469,6 +2622,11 @@ tbody tr:last-child td {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .cockpit-grid,
+  .rounds-focus-grid {
+    grid-template-columns: 1fr;
+  }
+
   .patient-board-section + .patient-board-section {
     border-left: 0;
     padding-left: 0;
@@ -2516,6 +2674,7 @@ tbody tr:last-child td {
 
   .form-grid,
   .patient-board-card-body,
+  .rounds-detail-grid,
   .task-input-row,
   .presentation-grid,
   .auto-summary-grid,

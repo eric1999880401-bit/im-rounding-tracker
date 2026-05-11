@@ -18,6 +18,17 @@ export function IconQuickUpdate(props: SVGProps<SVGSVGElement>) {
   );
 }
 
+export function IconRounds(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...baseProps} {...props}>
+      <path d="M4 6h16" />
+      <path d="M4 12h10" />
+      <path d="M4 18h7" />
+      <path d="M17 11l3 3-5 5-3 1 1-3 5-5z" />
+    </svg>
+  );
+}
+
 export function IconSubjective(props: SVGProps<SVGSVGElement>) {
   return (
     <svg {...baseProps} {...props}>
