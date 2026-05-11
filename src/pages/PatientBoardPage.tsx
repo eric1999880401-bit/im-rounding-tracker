@@ -4,22 +4,16 @@ import type { DailyNotesByPatient, Patient, SortMode } from "../types";
 import {
   createTodayFromYesterday,
   emptyPatient,
-  getActiveProblemItems,
   getActiveAttendingNames,
   getActivePatients,
-  getLabFocusSummary,
   getPatientDisplaySummary,
-  getUnderlyingDiseaseItems,
   hasUpcomingDischarge,
-  importantLines,
   nowIso,
   pendingDischargePrep,
   sortPatients,
 } from "../utils";
 import PatientForm from "../components/PatientForm";
-import { ClinicalText, CompactItemList } from "../components/ClinicalText";
-import AssessmentPlanDisplay from "../components/AssessmentPlanDisplay";
-import ActiveProblemDisplay from "../components/ActiveProblemDisplay";
+import { ClinicalText } from "../components/ClinicalText";
 import {
   IconArchive,
   IconBrief,
@@ -29,6 +23,7 @@ import {
   IconStar,
 } from "../components/icons";
 import { useT } from "../i18n";
+import { getRoundingDigest, type RoundingDigest } from "../roundingDigest";
 
 interface PageProps {
   patients: Patient[];
@@ -113,64 +108,34 @@ function PatientBoardPage({
     });
   }
 
-  function taskSummary(patient: Patient) {
+  function boardDigest(patient: Patient) {
+    return getRoundingDigest(patient, dailyNotesByPatient[patient.id] ?? [], {
+      mode: "board",
+      hideCompletedTasks: true,
+    });
+  }
+
+  function taskSummary(patient: Patient, digest: RoundingDigest) {
     const pendingTasks = patient.tasks.filter((task) => !task.done);
     const urgentTasks = pendingTasks.filter(
       (task) => task.priority === "urgent" || task.text.trim().startsWith("!"),
     );
-    const visibleTasks = [...urgentTasks, ...pendingTasks.filter((task) => !urgentTasks.includes(task))].slice(0, 3);
 
     return (
       <div>
         {urgentTasks.length > 0 && <span className="badge urgent">{urgentTasks.length} urgent</span>}{" "}
         <span>{pendingTasks.length} pending</span>
-        {visibleTasks.map((task) => (
-          <div
-            className={task.priority === "urgent" || task.text.trim().startsWith("!") ? "important-line" : "muted"}
-            key={task.id}
-          >
-            {task.text.trim().startsWith("!") ? task.text.trim().slice(1).trim() : task.text}
-          </div>
-        ))}
+        <ClinicalText value={digest.tasks} fallback="No pending tasks" maxLines={3} maxCharsPerLine={46} />
       </div>
     );
-  }
-
-  function textLines(value: string, limit = 2) {
-    return value
-      .split(/\r?\n/)
-      .map((line) => line.replace(/^!+/, "").replace(/\s+-\s+Reason:.*/i, "").trim())
-      .filter(Boolean)
-      .slice(0, limit);
   }
 
   function pendingTasks(patient: Patient) {
     return patient.tasks.filter((task) => !task.done);
   }
 
-  function urgentTasks(patient: Patient) {
-    return pendingTasks(patient).filter(
-      (task) => task.priority === "urgent" || task.text.trim().startsWith("!"),
-    );
-  }
-
   function patientUrgentReasons(patient: Patient) {
-    const labFocus = getLabFocusSummary(patient, dailyNotesByPatient[patient.id] ?? [], {
-      maxCritical: 2,
-      maxTrend: 1,
-      maxAnchors: 0,
-    });
-    const reasons = [
-      ...textLines(patient.importantRedFlags, 2),
-      ...importantLines(patient.vitalSigns).map((line) => line.text).slice(0, 2),
-      ...labFocus.critical.map((line) => `Lab: ${line}`),
-      ...labFocus.trend.slice(0, 1).map((line) => `Lab: ${line}`),
-      ...urgentTasks(patient)
-        .slice(0, 2)
-        .map((task) => task.text.replace(/^!+/, "").trim()),
-    ].filter(Boolean);
-
-    return Array.from(new Set(reasons.map((line) => line.trim()))).slice(0, 3);
+    return boardDigest(patient).urgentLines.slice(0, 3);
   }
 
   function patientAction(patient: Patient) {
@@ -182,49 +147,18 @@ function PatientBoardPage({
   }
 
   function cockpitLine(patient: Patient) {
-    const urgent = patientUrgentReasons(patient)[0];
+    const digest = boardDigest(patient);
+    const urgent = digest.urgentLines[0];
     if (urgent) return urgent;
     const pending = pendingTasks(patient)[0]?.text.replace(/^!+/, "").trim();
     if (pending) return pending;
-    return patient.primaryDiagnosis || patient.oneLiner || "-";
+    return digest.issues || digest.diagnosis || patient.primaryDiagnosis || patient.oneLiner || "-";
   }
 
   function dischargeReminder(patient: Patient) {
     const pending = pendingDischargePrep(patient);
     if (!hasUpcomingDischarge(patient) || pending.length === 0) return "";
     return `DC prep pending: ${pending.join(" / ")}`;
-  }
-
-  function labFocusText(patient: Patient) {
-    return getLabFocusSummary(patient, dailyNotesByPatient[patient.id] ?? [], {
-      maxCritical: 2,
-      maxTrend: 3,
-      maxAnchors: 2,
-    }).text;
-  }
-
-  function structuredPeSummary(patient: Patient) {
-    return patient.physicalExamEntries
-      .filter((entry) => entry.finding.trim() || entry.system.trim())
-      .slice(0, 3)
-      .map((entry) => (
-        <span className={`objective-chip ${entry.isImportant ? "important-objective-chip" : ""}`} key={entry.id}>
-          {entry.system && <span className="objective-chip-label">{entry.system}</span>}
-          {entry.finding || entry.note}
-        </span>
-      ));
-  }
-
-  function structuredImageSummary(patient: Patient) {
-    return patient.imageStudyEntries
-      .filter((entry) => entry.impression.trim() || entry.finding.trim() || entry.studyType.trim())
-      .slice(0, 3)
-      .map((entry) => (
-        <span className={`objective-chip ${entry.isImportant ? "important-objective-chip" : ""}`} key={entry.id}>
-          {entry.studyType && <span className="objective-chip-label">{entry.studyType}</span>}
-          {entry.impression || entry.finding || entry.note}
-        </span>
-      ));
   }
 
   async function updateDischargePrep(
@@ -382,7 +316,10 @@ function PatientBoardPage({
         {dataLoading && <p className="muted">{t("board.loading")}</p>}
         {dataError && <p className="error-message">{dataError}</p>}
         <div className="patient-board-grid">
-          {activePatients.map((patient) => (
+          {activePatients.map((patient) => {
+            const digest = boardDigest(patient);
+
+            return (
             <article className="patient-board-card" key={patient.id}>
               <header className="patient-board-card-header">
                 <div className="patient-board-identity">
@@ -398,73 +335,49 @@ function PatientBoardPage({
 
               <div className="patient-board-card-body">
                 <section className="patient-board-section patient-board-overview">
-                  {patient.importantRedFlags.trim() && (
+                  {digest.redFlags && (
                     <div className="board-red-flags">
                       <span className="board-label">Red Flags</span>
-                      <ClinicalText value={patient.importantRedFlags} maxLines={3} maxCharsPerLine={64} importantDefault />
+                      <ClinicalText value={digest.redFlags} maxLines={2} maxCharsPerLine={52} importantDefault />
                     </div>
                   )}
-                  <strong>{patient.primaryDiagnosis || "-"}</strong>
-                  <div className="board-subsection">
-                    <span className="board-label">PMH</span>
-                    <CompactItemList items={getUnderlyingDiseaseItems(patient)} />
+                  <div className="digest-line">
+                    <span className="board-label">Dx</span>
+                    <strong>{digest.diagnosis || "-"}</strong>
                   </div>
-                  <div className="board-subsection">
-                    <span className="board-label">Problems</span>
-                    <ActiveProblemDisplay
-                      items={patient.activeProblemStructuredItems}
-                      fallbackItems={getActiveProblemItems(patient)}
-                    />
+                  <div className="digest-line">
+                    <span className="board-label">Risk</span>
+                    <span>{digest.risks || "-"}</span>
+                  </div>
+                  <div className="digest-line">
+                    <span className="board-label">Issues</span>
+                    <span>{digest.issues || "-"}</span>
                   </div>
                   <div className="muted">Attending: {patient.attending || t("board.unassigned")}</div>
                 </section>
 
                 <section className="patient-board-section">
                   <span className="board-label">Sx</span>
-                  <ClinicalText value={patient.subjectiveOrChiefConcern} maxLines={2} maxCharsPerLine={58} />
-                  {patient.vitalSigns.trim() && (
-                    <div className="board-subsection">
-                      <span className="board-label">V/S</span>
-                      <ClinicalText value={patient.vitalSigns} maxLines={2} maxCharsPerLine={58} />
-                    </div>
-                  )}
-                  {patient.bloodSugar.trim() && (
-                    <div className="board-subsection">
-                      <span className="board-label">Sugar</span>
-                      <ClinicalText value={patient.bloodSugar} maxLines={2} maxCharsPerLine={58} />
-                    </div>
-                  )}
-                  {(patient.physicalExam.trim() ||
-                    importantLines(patient.physicalExam).length > 0 ||
-                    patient.physicalExamEntries.length > 0) && (
-                    <div className="board-subsection">
-                      <span className="board-label">PE</span>
-                      <ClinicalText value={patient.physicalExam} maxLines={2} maxCharsPerLine={58} />
-                      <div className="objective-chip-row">{structuredPeSummary(patient)}</div>
-                    </div>
-                  )}
+                  <ClinicalText value={digest.subjective} fallback="-" maxLines={2} maxCharsPerLine={48} />
+                  <div className="board-subsection">
+                    <span className="board-label">V/S / PE</span>
+                    <ClinicalText value={digest.objective} fallback="-" maxLines={3} maxCharsPerLine={48} />
+                  </div>
                 </section>
 
                 <section className="patient-board-section">
                   <span className="board-label">Lab / Image</span>
-                  <ClinicalText value={labFocusText(patient)} fallback="No lab signal" maxLines={3} maxCharsPerLine={58} />
-                  <ClinicalText value={patient.newImaging} maxLines={1} maxCharsPerLine={58} />
-                  <div className="objective-chip-row">{structuredImageSummary(patient)}</div>
+                  <ClinicalText value={digest.lab} fallback="No lab signal" maxLines={3} maxCharsPerLine={50} />
+                  <ClinicalText value={digest.image} fallback="-" maxLines={1} maxCharsPerLine={50} />
                 </section>
 
                 <section className="patient-board-section">
                   <span className="board-label">A/P</span>
-                  <AssessmentPlanDisplay
-                    items={patient.assessmentPlanItems}
-                    legacyAssessment={patient.assessment}
-                    legacyPlan={patient.plan}
-                    compact
-                    micro
-                  />
+                  <ClinicalText value={digest.assessmentPlan} fallback="-" maxLines={3} maxCharsPerLine={50} />
                 </section>
 
                 <section className="patient-board-section patient-board-tasks">
-                  {taskSummary(patient)}
+                  {taskSummary(patient, digest)}
                 </section>
 
                 <section className="patient-board-section patient-board-discharge">
@@ -542,7 +455,8 @@ function PatientBoardPage({
                 </div>
               </footer>
             </article>
-          ))}
+            );
+          })}
           {activePatients.length === 0 && <p className="muted">{t("board.noActivePatients")}</p>}
         </div>
       </section>
