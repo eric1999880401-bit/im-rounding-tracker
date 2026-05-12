@@ -21,6 +21,7 @@ export type DischargePrepStatus = "pending" | "done" | "notNeeded";
 
 export type AiClinicalSourceType =
   | "mixed"
+  | "dailyUpdate"
   | "admission"
   | "vitals"
   | "lab"
@@ -42,6 +43,8 @@ export interface AiSoapDraft {
     chiefConcern: string;
     symptoms: string[];
     overnightEvents: string[];
+    importantSymptoms: string[];
+    importantOvernightEvents: string[];
   };
   objective: {
     vitals: Array<{

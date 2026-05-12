@@ -11,6 +11,7 @@ const MAX_RAW_TEXT_CHARS = 12000;
 
 const sourceTypes = new Set([
   "mixed",
+  "dailyUpdate",
   "admission",
   "vitals",
   "lab",
@@ -50,11 +51,13 @@ const aiSoapDraftSchema = {
     subjective: {
       type: "object",
       additionalProperties: false,
-      required: ["chiefConcern", "symptoms", "overnightEvents"],
+      required: ["chiefConcern", "symptoms", "overnightEvents", "importantSymptoms", "importantOvernightEvents"],
       properties: {
         chiefConcern: stringSchema,
         symptoms: { type: "array", items: stringSchema },
         overnightEvents: { type: "array", items: stringSchema },
+        importantSymptoms: { type: "array", items: stringSchema },
+        importantOvernightEvents: { type: "array", items: stringSchema },
       },
     },
     objective: {
@@ -241,6 +244,7 @@ const aiDocumentDraftSchema = {
 
 type SourceType =
   | "mixed"
+  | "dailyUpdate"
   | "admission"
   | "vitals"
   | "lab"
@@ -347,10 +351,24 @@ function extractRefusal(response: Record<string, unknown>) {
 }
 
 function makePrompt(sourceType: SourceType, rawText: string, patientContext: ReturnType<typeof sanitizePatientContext>) {
+  const workflowIntent =
+    sourceType === "dailyUpdate"
+      ? [
+          "Workflow intent:",
+          "Today update mode. The clinician may paste mixed V/S, labs, image reports, progress snippets, consults, and nursing notes.",
+          "Use the existing context as yesterday's baseline only. Return only new or changed clinically relevant items from the pasted text.",
+          "If pasted V/S are stable, include them in objective.vitals only when useful for recordkeeping and keep isImportant false; do not create S/O/A/P from stable V/S.",
+          "If labs/images are unchanged or non-actionable, omit A/P and red flags unless they change today's management.",
+          "If a new diagnosis, complication, discharge blocker, pending task, or safety issue appears, surface it clearly and mark it important.",
+          "",
+        ].join("\n")
+      : "";
+
   return [
     "Source type:",
     sourceType,
     "",
+    workflowIntent,
     "Allowed patient context, if provided:",
     JSON.stringify(patientContext ?? {}, null, 2),
     "",
@@ -611,15 +629,21 @@ export const analyzeClinicalText = onCall(
               "Preserve dates, lab values, units, and abnormal findings exactly when available.",
               "Keep all SOAP-facing text concise and easy to scan for inpatient IM rounds.",
               "Assume the reviewer slept 3 hours and has seconds per patient: use telegraphic clinical fragments, not polished prose.",
+              "Use the allowed patient context only to judge relevance and importance. Do not convert context-only facts into new SOAP draft items unless the pasted text explicitly supports them.",
+              "For sourceType dailyUpdate, behave like a delta updater: compare pasted text against context and output only clinically meaningful new/changed items.",
+              "If the source text contains only stable V/S, lab, image, consult, or nursing updates, leave unrelated S, PE, and A/P arrays empty rather than restating prior SOAP context.",
               "Use common, unambiguous medical abbreviations when they save space, such as c/f, r/o, s/p, SOB, CP, N/V, Abd, CV, Resp, Neuro, HEENT, MSK, WBC, Hb, Plt, Cr, Na, K, AST, ALT, CRP, UA, U/C, B/C, CXR, CT, MRI, U/S, Abx, cont, hold, f/u, pending, DC, OPD.",
               "Avoid rare or ambiguous abbreviations, and do not abbreviate in a way that changes clinical meaning.",
               "For diagnosis-like summaries, prefer short clinical labels over prose, e.g. AIS NIHSS3, R MCA stenosis, UTI, PMB, HF, AKI, PNA, sepsis.",
               "Do not copy long PMH medication histories into SOAP-facing fields; preserve PMH concepts as short comorbidity labels when needed.",
+              "For subjective.importantSymptoms and subjective.importantOvernightEvents, include only patient-reported or overnight items that should appear on the board/rounding list; otherwise return empty arrays.",
+              "For S/O/A/P importance, be selective: mark isImportant true only when the item affects today's rounds, orders, handoff, discharge readiness, or safety.",
               "Put vital signs in objective.vitals and bedside blood sugar, glucose stick, AC/PC glucose, or SMBG values in objective.bloodSugars.",
               "Prefer concise fragments over long sentences in symptoms, PE findings, interpretations, assessment summaries, evidence items, plan items, red flags, tasks, discharge issues, and thinking prompts.",
               "PE output must contain abnormal/actionable findings only. Avoid full sentences and omit normal exam templates unless a negative finding directly changes management.",
               "Image output must be extremely short: studyType plus the key actionable impression only. Do not copy report prose, numbered lists, or normal/negative details unless they change management.",
               "A/P output must be compact: problemTitle under 6 words, assessmentSummary under 12 words, evidenceOrCourseItems under 8 words each, planItems under 8 words each.",
+              "A/P output should include the active diagnoses that matter today, not the first or easiest diagnosis. If today's pasted data does not change assessment/plan, return an empty assessmentPlan array.",
               "Do not repeat the same fact across assessmentSummary, evidence, and plan; keep the most useful place only.",
               "Tasks and red flags should be action labels under 10 words when possible.",
               "Identify possible red flags, pending tasks, discharge issues, uncertainty, and thinking prompts.",

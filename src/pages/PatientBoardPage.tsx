@@ -11,6 +11,7 @@ import {
   nowIso,
   pendingDischargePrep,
   sortPatients,
+  todayKey,
 } from "../utils";
 import PatientForm from "../components/PatientForm";
 import { ClinicalText } from "../components/ClinicalText";
@@ -65,7 +66,7 @@ function PatientBoardPage({
     .filter((patient) => patient.isNewAdmission || patient.showAdmissionBriefOnPrint)
     .slice(0, 6);
   const dischargeSoonPatients = activePatients
-    .filter((patient) => hasUpcomingDischarge(patient) || pendingDischargePrep(patient).length > 0)
+    .filter(hasDischargeSoonSignal)
     .slice(0, 6);
 
   async function addPatient() {
@@ -138,12 +139,48 @@ function PatientBoardPage({
     return boardDigest(patient).urgentLines.slice(0, 3);
   }
 
-  function patientAction(patient: Patient) {
-    if (patientUrgentReasons(patient).length > 0) return "See now";
-    if (patient.isNewAdmission || patient.showAdmissionBriefOnPrint) return "New admit";
-    if (hasUpcomingDischarge(patient)) return "DC prep";
-    if (pendingTasks(patient).length > 0) return "Tasks";
-    return "Round";
+  function shortCockpitText(value: string, maxChars = 72) {
+    const clean = value
+      .replace(/^!+/, "")
+      .replace(/\s+-\s*Reason:\s*.*$/i, "")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (clean.length <= maxChars) return clean;
+    const firstClause = clean.split(/[;；。]/)[0]?.trim() || clean;
+    if (firstClause.length <= maxChars) return firstClause;
+    return firstClause.slice(0, maxChars).trim();
+  }
+
+  function dateIsTodayOrTomorrow(date: string) {
+    if (!date) return false;
+    const today = todayKey();
+    const tomorrowDate = new Date(`${today}T00:00:00`);
+    tomorrowDate.setDate(tomorrowDate.getDate() + 1);
+    const tomorrow = tomorrowDate.toISOString().slice(0, 10);
+    return date === today || date === tomorrow;
+  }
+
+  function dischargeTasks(patient: Patient) {
+    return patient.tasks.filter((task) => {
+      if (task.done) return false;
+      const text = `${task.category} ${task.text}`.toLowerCase();
+      const isDischargeTask = task.category === "discharge" || /\bdc\b|discharge|出院|opd|certificate|診斷書|帶藥|meds/i.test(text);
+      return isDischargeTask && (!task.dueDate || dateIsTodayOrTomorrow(task.dueDate) || task.priority === "urgent");
+    });
+  }
+
+  function hasDischargeTextSignal(patient: Patient) {
+    const text = [patient.dischargePlan, patient.dischargeBarriers, patient.vsOrder].join(" ");
+    return /\bdc\b|discharge|出院|home|transfer|OPD|certificate|診斷書|帶藥/i.test(text);
+  }
+
+  function hasDischargeSoonSignal(patient: Patient) {
+    return (
+      hasUpcomingDischarge(patient) ||
+      dischargeTasks(patient).length > 0 ||
+      Boolean(patient.dischargeTargetDate && dateIsTodayOrTomorrow(patient.dischargeTargetDate)) ||
+      (hasDischargeTextSignal(patient) && pendingDischargePrep(patient).length > 0)
+    );
   }
 
   function cockpitLine(patient: Patient) {
@@ -153,6 +190,28 @@ function PatientBoardPage({
     const pending = pendingTasks(patient)[0]?.text.replace(/^!+/, "").trim();
     if (pending) return pending;
     return digest.issues || digest.diagnosis || patient.primaryDiagnosis || patient.oneLiner || "-";
+  }
+
+  function dischargeCockpitLine(patient: Patient) {
+    const pending = pendingDischargePrep(patient);
+    if (hasUpcomingDischarge(patient)) {
+      return [
+        patient.dischargeTargetDate ? `Target ${patient.dischargeTargetDate}` : "",
+        pending.length > 0 ? `pending ${pending.join("/")}` : "ready",
+      ].filter(Boolean).join("; ");
+    }
+
+    const task = dischargeTasks(patient)[0];
+    if (task) return `Task: ${shortCockpitText(task.text)}`;
+    if (patient.dischargeTargetDate) return `Target ${patient.dischargeTargetDate}`;
+    if (patient.dischargePlan.trim()) return shortCockpitText(patient.dischargePlan);
+    if (patient.dischargeBarriers.trim()) return `Barrier: ${shortCockpitText(patient.dischargeBarriers)}`;
+    return pending.length > 0 ? `pending ${pending.join("/")}` : "DC prep";
+  }
+
+  function newAdmissionCockpitLine(patient: Patient) {
+    const digest = boardDigest(patient);
+    return digest.diagnosis || patient.oneLiner || patient.primaryDiagnosis || "Needs admission summary";
   }
 
   function dischargeReminder(patient: Patient) {
@@ -169,7 +228,7 @@ function PatientBoardPage({
     await onSavePatient({ ...patient, [field]: status, updatedAt: nowIso() });
   }
 
-  function renderCockpitColumn(title: string, items: Patient[], emptyText: string) {
+  function renderCockpitColumn(title: string, items: Patient[], emptyText: string, kind: "urgent" | "admission" | "discharge") {
     return (
       <section className="cockpit-column">
         <div className="cockpit-column-header">
@@ -181,8 +240,14 @@ function PatientBoardPage({
             <Link className="cockpit-item" to={`/patients/${patient.id}`} key={`${title}-${patient.id}`}>
               <span className="cockpit-bed">{patient.bed || "-"}</span>
               <span className="cockpit-main">
-                <strong>{patientAction(patient)}</strong>
-                <span>{cockpitLine(patient)}</span>
+                <strong>{kind === "urgent" ? "See now" : kind === "admission" ? "New admit" : "DC prep"}</strong>
+                <span>
+                  {kind === "urgent"
+                    ? cockpitLine(patient)
+                    : kind === "admission"
+                      ? newAdmissionCockpitLine(patient)
+                      : dischargeCockpitLine(patient)}
+                </span>
               </span>
             </Link>
           ))}
@@ -219,9 +284,9 @@ function PatientBoardPage({
           <span className="muted">{activePatients.length} active</span>
         </div>
         <div className="cockpit-grid">
-          {renderCockpitColumn("See First", mustSeePatients, "No red flags")}
-          {renderCockpitColumn("New Admits", newAdmissionPatients, "No new admits")}
-          {renderCockpitColumn("DC Soon", dischargeSoonPatients, "No DC prep")}
+          {renderCockpitColumn("See First", mustSeePatients, "No red flags", "urgent")}
+          {renderCockpitColumn("New Admits", newAdmissionPatients, "No new admits", "admission")}
+          {renderCockpitColumn("DC Soon", dischargeSoonPatients, "No DC prep", "discharge")}
         </div>
       </section>
 

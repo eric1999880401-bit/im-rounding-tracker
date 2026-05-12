@@ -16,6 +16,7 @@ import {
 } from "../utils";
 import { ClinicalText } from "../components/ClinicalText";
 import { useT } from "../i18n";
+import { getRoundingDigest } from "../roundingDigest";
 
 interface PageProps {
   patients: Patient[];
@@ -450,23 +451,10 @@ function PrintRoundingListPage({
   }
 
   function assessmentPlanSummaryText(patient: Patient) {
-    const limits = printLimits();
-    if (patient.assessmentPlanItems.length === 0) {
-      return compactList([...clinicalItems(patient.assessment), ...clinicalItems(patient.plan)], limits.problems, limits.detailChars);
-    }
-
-    const sortedItems = [...patient.assessmentPlanItems]
-      .filter((item) => item.category !== "underlyingDisease")
-      .sort((a, b) => {
-        const importantOrder = Number(!a.isImportant) - Number(!b.isImportant);
-        if (importantOrder !== 0) return importantOrder;
-        return a.order - b.order;
-      });
-    const visible = sortedItems
-      .slice(0, limits.problems)
-      .map((item) => shortText(item.problemTitle || item.assessmentSummary, limits.detailChars))
-      .filter(Boolean);
-    return visible.join("; ");
+    return getRoundingDigest(patient, dailyNotesByPatient[patient.id] ?? [], {
+      mode: "board",
+      hideCompletedTasks,
+    }).assessmentPlan.replace(/\n/g, "; ");
   }
 
   function fieldLine(label: string, value: ReactNode) {

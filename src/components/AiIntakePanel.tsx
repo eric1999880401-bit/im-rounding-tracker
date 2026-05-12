@@ -4,6 +4,7 @@ import type {
   AiClinicalSourceType,
   AiSoapDraft,
   AssessmentPlanItem,
+  DailyNote,
   ImageStudyEntry,
   LabReport,
   ParsedLabItem,
@@ -25,6 +26,7 @@ const MAX_INPUT_CHARS = 12000;
 
 const sourceTypes: Array<{ value: AiClinicalSourceType; label: string }> = [
   { value: "mixed", label: "Mixed text" },
+  { value: "dailyUpdate", label: "Today's update" },
   { value: "admission", label: "Admission note" },
   { value: "vitals", label: "V/S" },
   { value: "lab", label: "Lab" },
@@ -44,7 +46,9 @@ type ReviewCardKind =
   | "oneLiner"
   | "chiefConcern"
   | "symptom"
+  | "importantSymptom"
   | "overnightEvent"
+  | "importantOvernightEvent"
   | "vital"
   | "bloodSugar"
   | "physicalExam"
@@ -74,7 +78,7 @@ interface ReviewCard {
 interface AiIntakePanelProps {
   patient: Patient;
   selectedDate: string;
-  onApplyPatient: (patient: Patient) => Promise<void>;
+  onApplyPatient: (patient: Patient, acceptedNotePatch?: Partial<DailyNote>) => Promise<void>;
 }
 
 function hasText(value: unknown) {
@@ -116,17 +120,28 @@ function appendUniqueLines(existing: string, additions: string[]) {
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean);
-  const seen = new Set(lines.map((line) => line.toLowerCase()));
+  const lineIndexByKey = new Map<string, number>();
+
+  lines.forEach((line, index) => {
+    const key = normalizeCompareKey(line);
+    if (key) lineIndexByKey.set(key, index);
+  });
 
   additions
     .flatMap((item) => item.split(/\r?\n/))
     .map((line) => line.trim())
     .filter(Boolean)
     .forEach((line) => {
-      const key = line.toLowerCase();
-      if (!seen.has(key)) {
+      const key = normalizeCompareKey(line);
+      const existingIndex = lineIndexByKey.get(key);
+      if (existingIndex === undefined) {
         lines.push(line);
-        seen.add(key);
+        lineIndexByKey.set(key, lines.length - 1);
+        return;
+      }
+
+      if (line.startsWith("!") && !lines[existingIndex].startsWith("!")) {
+        lines[existingIndex] = line;
       }
     });
 
@@ -470,6 +485,16 @@ function sourceTypeLabel(sourceType: AiClinicalSourceType) {
   return sourceTypes.find((item) => item.value === sourceType)?.label ?? "Mixed text";
 }
 
+function sourcePlaceholder(sourceType: AiClinicalSourceType) {
+  if (sourceType === "dailyUpdate") {
+    return "Paste today's de-identified V/S, labs, image reports, progress notes, consults, and nursing notes. AI should return only meaningful changes.";
+  }
+  if (sourceType === "vitals") return "Paste today's V/S or bedside sugar. Stable values should not rewrite S/O/A/P.";
+  if (sourceType === "lab") return "Paste today's lab data. Important changes will be extracted into Smart Lab Reports.";
+  if (sourceType === "image") return "Paste image report impression/findings. AI should keep only actionable findings.";
+  return "Paste de-identified admission note, V/S, labs, image report, progress note, consult note, or mixed text.";
+}
+
 function getNonEmptySourceBlocks(blocks: IntakeSourceBlock[]) {
   return blocks
     .map((block) => ({ ...block, text: block.text.trim() }))
@@ -517,7 +542,13 @@ function buildCards(draft: AiSoapDraft): ReviewCard[] {
 
   addCard("One-liner", "One-liner", "oneLiner", draft.oneLiner, "string");
   addCard("S", "Chief concern", "chiefConcern", draft.subjective.chiefConcern, "string");
+  safeArray(draft.subjective.importantSymptoms).forEach((symptom, index) =>
+    addCard("S", `Important symptom ${index + 1}`, "importantSymptom", symptom, "string"),
+  );
   safeArray(draft.subjective.symptoms).forEach((symptom, index) => addCard("S", `Symptom ${index + 1}`, "symptom", symptom, "string"));
+  safeArray(draft.subjective.importantOvernightEvents).forEach((event, index) =>
+    addCard("S", `Important overnight ${index + 1}`, "importantOvernightEvent", event, "string"),
+  );
   safeArray(draft.subjective.overnightEvents).forEach((event, index) =>
     addCard("S", `Overnight event ${index + 1}`, "overnightEvent", event, "string"),
   );
@@ -612,6 +643,13 @@ function AiIntakePanel({ patient, selectedDate, onApplyPatient }: AiIntakePanelP
 
   function addSourceBlock(sourceType: AiClinicalSourceType = "mixed") {
     setSourceBlocks((blocks) => [...blocks, createSourceBlock(sourceType)]);
+  }
+
+  function startDailyUpdateMode() {
+    setSourceBlocks([createSourceBlock("dailyUpdate")]);
+    setReviewCards([]);
+    setError("");
+    setStatusMessage("Today's update mode: paste all new de-identified data, then review only meaningful changes before saving.");
   }
 
   function removeSourceBlock(blockId: string) {
@@ -746,8 +784,16 @@ function AiIntakePanel({ patient, selectedDate, onApplyPatient }: AiIntakePanelP
         subjectiveLines.push(value);
       }
 
+      if (card.kind === "importantSymptom" && typeof value === "string") {
+        subjectiveLines.push(`!${value.replace(/^!+/, "").trim()}`);
+      }
+
       if (card.kind === "overnightEvent" && typeof value === "string") {
         overnightLines.push(value);
+      }
+
+      if (card.kind === "importantOvernightEvent" && typeof value === "string") {
+        overnightLines.push(`!${value.replace(/^!+/, "").trim()}`);
       }
 
       if (card.kind === "vital") {
@@ -902,8 +948,54 @@ function AiIntakePanel({ patient, selectedDate, onApplyPatient }: AiIntakePanelP
       updatedAt: now,
     };
 
+    const acceptedNotePatch: Partial<DailyNote> = {};
+    const setTextPatch = (field: keyof Pick<
+      DailyNote,
+      | "importantRedFlags"
+      | "overnightEvents"
+      | "subjectiveOrChiefConcern"
+      | "vitalSigns"
+      | "bloodSugar"
+      | "physicalExam"
+      | "labSummary"
+      | "rawLabText"
+      | "imageSummary"
+      | "dischargePlan"
+      | "vsOrder"
+    >, additions: string[]) => {
+      const text = appendUniqueLines("", additions);
+      if (text) {
+        acceptedNotePatch[field] = text as never;
+      }
+    };
+
+    setTextPatch("importantRedFlags", redFlagLines);
+    setTextPatch("overnightEvents", overnightLines);
+    setTextPatch("subjectiveOrChiefConcern", subjectiveLines);
+    setTextPatch("vitalSigns", vitalLines);
+    setTextPatch("bloodSugar", bloodSugarLines);
+    setTextPatch("physicalExam", physicalExamLines);
+    setTextPatch("labSummary", labSummaryLines);
+    setTextPatch("rawLabText", labSummaryLines);
+    setTextPatch("imageSummary", imageSummaryLines);
+    if (labReports.length > 0) {
+      acceptedNotePatch.labDate = selectedDate;
+      acceptedNotePatch.labReportTitle = "AI Intake";
+      acceptedNotePatch.labReports = mergeLabReportsByDateTitle(labReports);
+      acceptedNotePatch.parsedLabItems = uniqueParsedLabItems(parsedLabItems);
+    }
+    if (physicalExamEntries.length > 0) {
+      acceptedNotePatch.physicalExamEntries = physicalExamEntries;
+    }
+    if (imageStudyEntries.length > 0) {
+      acceptedNotePatch.imageStudyEntries = imageStudyEntries;
+    }
+    if (assessmentPlanItems.length > 0) {
+      acceptedNotePatch.assessmentPlanItems = assessmentPlanItems;
+    }
+
     try {
-      await onApplyPatient(nextPatient);
+      await onApplyPatient(nextPatient, acceptedNotePatch);
       setReviewCards((cards) =>
         cards.map((card) => (card.status === "accepted" ? { ...card, status: "saved", isEditing: false } : card)),
       );
@@ -930,6 +1022,9 @@ function AiIntakePanel({ patient, selectedDate, onApplyPatient }: AiIntakePanelP
         <div className="ai-source-toolbar span-2">
           <strong>Input blocks</strong>
           <div className="form-actions">
+            <button type="button" onClick={startDailyUpdateMode}>
+              Today's update
+            </button>
             <button type="button" className="secondary" onClick={() => addSourceBlock("admission")}>
               Add admission
             </button>
@@ -985,7 +1080,7 @@ function AiIntakePanel({ patient, selectedDate, onApplyPatient }: AiIntakePanelP
                   className="ai-raw-textarea"
                   value={block.text}
                   onChange={(event) => updateSourceBlock(block.id, (item) => ({ ...item, text: event.target.value }))}
-                  placeholder="Paste de-identified admission note, V/S, labs, image report, progress note, consult note, or mixed text."
+                  placeholder={sourcePlaceholder(block.sourceType)}
                 />
               </label>
             </article>

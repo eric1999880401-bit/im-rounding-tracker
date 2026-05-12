@@ -6,6 +6,7 @@ import {
   getUnderlyingDiseaseItems,
   pendingDischargePrep,
   plainClinicalText,
+  splitHighlightLines,
 } from "./utils";
 
 type DigestMode = "board" | "rounds";
@@ -128,6 +129,25 @@ function joinTags(tags: string[], maxItems: number) {
   return uniqueLines(tags).slice(0, maxItems).join(", ");
 }
 
+const problemStopWords = new Set([
+  "acute",
+  "chronic",
+  "with",
+  "without",
+  "and",
+  "or",
+  "for",
+  "from",
+  "rule",
+  "out",
+  "suspect",
+  "suspected",
+  "possible",
+  "probable",
+  "problem",
+  "plan",
+]);
+
 function clinicalItems(value: string) {
   const text = plainClinicalText(value, "");
   if (!text || text === "-") return [];
@@ -146,6 +166,16 @@ function compactText(value: string, maxItems: number, maxChars: number) {
   return compactList(clinicalItems(value), maxItems, maxChars);
 }
 
+function highlightedClinicalItems(value: string) {
+  return splitHighlightLines(value)
+    .map((line, index) => ({
+      index,
+      important: line.important,
+      text: cleanDigestLine(line.text),
+    }))
+    .filter((line) => line.text);
+}
+
 function subjectiveSignalScore(value: string) {
   const text = value.toLowerCase();
   let score = 0;
@@ -162,7 +192,12 @@ function subjectiveSignalScore(value: string) {
 }
 
 function compactPriorityText(value: string, maxItems: number, maxChars: number) {
-  return uniqueLines(clinicalItems(value))
+  const highlighted = highlightedClinicalItems(value);
+  const important = highlighted.filter((item) => item.important);
+  const highSignal = highlighted.filter((item) => !item.important && subjectiveSignalScore(item.text) >= 5);
+  const candidates = important.length > 0 ? important : highSignal;
+
+  return uniqueLines(candidates.map((item) => item.text))
     .map((item, index) => ({ item, index, score: subjectiveSignalScore(item) }))
     .sort((a, b) => b.score - a.score || a.index - b.index)
     .slice(0, maxItems)
@@ -172,7 +207,11 @@ function compactPriorityText(value: string, maxItems: number, maxChars: number) 
 }
 
 function topSubjectiveSignals(patient: Patient, maxItems: number, maxChars: number) {
-  return uniqueLines([...clinicalItems(patient.overnightEvent), ...clinicalItems(patient.subjectiveOrChiefConcern)])
+  const highlighted = [...highlightedClinicalItems(patient.overnightEvent), ...highlightedClinicalItems(patient.subjectiveOrChiefConcern)];
+  const important = highlighted.filter((item) => item.important);
+  const candidates = important.length > 0 ? important : highlighted.filter((item) => subjectiveSignalScore(item.text) >= 5);
+
+  return uniqueLines(candidates.map((item) => item.text))
     .map((item, index) => ({ item, index, score: subjectiveSignalScore(item) }))
     .filter((entry) => entry.score >= 4)
     .sort((a, b) => b.score - a.score || a.index - b.index)
@@ -370,9 +409,9 @@ function riskSummary(patient: Patient, maxItems: number, maxChars: number) {
   if (/\bhtn\b|hypertension/.test(lower)) tags.push("HTN");
   if (/\bdm\b|diabetes|t2dm/.test(lower)) tags.push("DM");
   if (/hyperlipidemia|\bhld\b|dyslipidemia/.test(lower)) tags.push("HLD");
-  if (/afib|atrial fibrillation|paroxysmal af/.test(lower)) tags.push("AF");
+  if (/\baf\b|afib|atrial fibrillation|paroxysmal af/.test(lower)) tags.push("AF");
   if (/\bcad\b|coronary/.test(lower)) tags.push("CAD");
-  if (/heart failure|\bhf\b|chf|lvhf|nyha|reduced ef|hfr?ef/.test(lower)) tags.push("HF");
+  if (/heart failure|\bhf\b|chf|lvhf|nyha|reduced ef|hfpef|hfref|hfr?ef/.test(lower)) tags.push("HF");
   if (/\bckd\b|esrd|dialysis|renal/.test(lower)) tags.push("CKD");
   if (/tia|stroke|cva/.test(lower)) tags.push("old CVA/TIA");
   if (/\bsle\b|lupus/.test(lower)) tags.push("SLE");
@@ -416,18 +455,14 @@ function importantObjectiveText(value: string, maxChars: number, maxItems: numbe
   const importantPattern =
     /abnormal|important|\bfever\b|\bfebrile\b|hypotherm|tachy|brady|hypot|hypert|shock|desat|hypox|spo2|oxygen|nasal|nc\b|o2\b|high|low|elevat|drop|worse|hypergly|hypogly|bleed|pain|unstable/i;
   const normalOnlyPattern = /\bafebrile\b|\bnormal\b|\bstable\b|within normal/i;
-  const items = clinicalItems(value).filter((item) => {
-    if (
-      normalOnlyPattern.test(item) &&
-      !/(abnormal|important|hypot|hypert|tachy|brady|desat|hypox|high|low|elevat|drop|worse|hypergly|hypogly|bleed|pain|unstable)/i.test(
-        item,
-      )
-    ) {
+  const items = highlightedClinicalItems(value).filter((item) => {
+    if (item.important) return true;
+    if (normalOnlyPattern.test(item.text) && !/(abnormal|important|hypot|hypert|tachy|brady|desat|hypox|high|low|elevat|drop|worse|hypergly|hypogly|bleed|pain|unstable)/i.test(item.text)) {
       return false;
     }
-    return importantPattern.test(item);
+    return importantPattern.test(item.text);
   });
-  return compactList(items, maxItems, maxChars);
+  return compactList(items.map((item) => item.text), maxItems, maxChars);
 }
 
 function shortDateSortValue(value: string) {
@@ -491,16 +526,28 @@ function imageSummaryText(patient: Patient, maxItems: number, maxChars: number) 
   const structured = [...patient.imageStudyEntries]
     .filter((entry) => entry.impression.trim() || entry.finding.trim() || entry.studyType.trim())
     .sort((a, b) => shortDateSortValue(b.date).localeCompare(shortDateSortValue(a.date)))
-    .map((entry) =>
-      [
-        entry.date ? compactDateLabel(entry.date) : "",
-        shortStudyType(entry.studyType) || "Image",
-        imageFindingLabel(entry.studyType, entry.impression || entry.finding || entry.note || entry.studyType, maxChars),
-      ]
-        .filter(Boolean)
-        .join(": "),
-    );
-  const legacy = clinicalItems(patient.newImaging).map((line) => imageFindingLabel("", line, maxChars));
+    .map((entry) => {
+      const raw = entry.impression || entry.finding || entry.note || entry.studyType;
+      return {
+        score: clinicalSignalScore(raw, "image") + Number(entry.isImportant) * 10,
+        text: [
+          entry.date ? compactDateLabel(entry.date) : "",
+          shortStudyType(entry.studyType) || "Image",
+          imageFindingLabel(entry.studyType, raw, maxChars),
+        ]
+          .filter(Boolean)
+          .join(": "),
+      };
+    })
+    .filter((entry) => entry.score >= 7)
+    .map((entry) => entry.text);
+  const legacy = highlightedClinicalItems(patient.newImaging)
+    .map((line) => ({
+      score: clinicalSignalScore(line.text, "image") + Number(line.important) * 10,
+      text: imageFindingLabel("", line.text, maxChars),
+    }))
+    .filter((entry) => entry.score >= 7)
+    .map((entry) => entry.text);
   return uniqueLines([...structured, ...legacy])
     .slice(0, maxItems)
     .join("\n");
@@ -512,18 +559,18 @@ function peSummaryText(patient: Patient, maxItems: number, maxChars: number) {
     .map((entry) => {
       const raw = entry.finding || entry.note || entry.system;
       const signal = bestClinicalSignal(raw, "pe", maxChars);
-      const score = clinicalSignalScore(raw, "pe") + Number(entry.isImportant) * 3;
+      const score = clinicalSignalScore(raw, "pe") + Number(entry.isImportant) * 10;
       return {
         score,
         text: [entry.system, signal].filter(Boolean).join(": "),
       };
     });
-  const legacy = clinicalItems(patient.physicalExam).map((line) => ({
-    score: clinicalSignalScore(line, "pe"),
-    text: bestClinicalSignal(line, "pe", maxChars),
+  const legacy = highlightedClinicalItems(patient.physicalExam).map((line) => ({
+    score: clinicalSignalScore(line.text, "pe") + Number(line.important) * 10,
+    text: bestClinicalSignal(line.text, "pe", maxChars),
   }));
   const ranked = [...structured, ...legacy]
-    .filter((item) => item.text.trim() && item.score > -1)
+    .filter((item) => item.text.trim() && item.score >= 7)
     .sort((a, b) => b.score - a.score || a.text.length - b.text.length)
     .map((item) => item.text);
   return compactList(ranked, maxItems, maxChars);
@@ -532,12 +579,10 @@ function peSummaryText(patient: Patient, maxItems: number, maxChars: number) {
 function objectiveSummaryText(patient: Patient, maxItems: number, maxChars: number) {
   const vitalImportant = importantObjectiveText(patient.vitalSigns, maxChars, maxItems);
   const sugarImportant = importantObjectiveText(patient.bloodSugar, maxChars, maxItems);
-  const vitalFallback = compactText(patient.vitalSigns, 1, maxChars);
-  const sugarFallback = compactText(patient.bloodSugar, 1, maxChars);
   const pe = peSummaryText(patient, maxItems, maxChars);
   return [
-    vitalImportant || vitalFallback ? `V/S: ${vitalImportant || vitalFallback}` : "",
-    sugarImportant || sugarFallback ? `Sugar: ${sugarImportant || sugarFallback}` : "",
+    vitalImportant ? `V/S: ${vitalImportant}` : "",
+    sugarImportant ? `Sugar: ${sugarImportant}` : "",
     pe ? `PE: ${pe}` : "",
   ]
     .filter(Boolean)
@@ -554,28 +599,71 @@ function assessmentPlanSummaryText(patient: Patient, maxItems: number, maxChars:
     return hasTaskWords && !hasClinicalProblem;
   }
 
+  function assessmentImportanceScore(value: string, itemImportant = false) {
+    const lower = value.toLowerCase();
+    let score = itemImportant ? 100 : 0;
+    if (/stroke|ais|tia|infarct|ich|hemorrhage|bleed|anemia|hb drop|sepsis|shock|resp failure|hypox|desat|acs|mi|arrhythm|af\b/.test(lower)) score += 14;
+    if (/cancer|carcinoma|tumou?r|\bca\b|mass|metasta|cervical|malign|biopsy|pathology/.test(lower)) score += 13;
+    if (/aki|renal failure|hf|heart failure|pna|pneumonia|uti|infection|dysphag|aspirat|fracture|hematoma/.test(lower)) score += 10;
+    if (/stenos|occlusion|aneurysm|thromb|embol|dvt|pe\b/.test(lower)) score += 9;
+    if (/pending|f\/u|follow|consult|hold|resume|repeat|monitor|titrate|adjust|dc|discharge/.test(lower)) score += 3;
+    if (/\d/.test(lower)) score += 1;
+
+    const context = [
+      patient.primaryDiagnosis,
+      patient.oneLiner,
+      patient.activeProblems,
+      patient.importantRedFlags,
+      patient.newImaging,
+      patient.rawLabText,
+      patient.newLabs,
+    ]
+      .join(" ")
+      .toLowerCase();
+    const titleWords = value
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, " ")
+      .split(/\s+/)
+      .filter((word) => word.length > 3 && !problemStopWords.has(word));
+    const matchedWords = titleWords.filter((word) => context.includes(word));
+    score += Math.min(matchedWords.length, 3) * 3;
+    return score;
+  }
+
   if (patient.assessmentPlanItems.length === 0) {
-    return uniqueLines(
-      [...clinicalItems(patient.assessment), ...clinicalItems(patient.plan)]
-        .filter((item) => !isOperationalTaskLine(item))
-        .map((item) => problemLabel(item, maxChars)),
-    )
+    const legacyItems = [...clinicalItems(patient.assessment), ...clinicalItems(patient.plan)]
+      .filter((item) => !isOperationalTaskLine(item))
+      .map((item, index) => ({ item, index, score: assessmentImportanceScore(item) }))
+      .filter((item) => item.score >= 8)
+      .sort((a, b) => b.score - a.score || a.index - b.index)
+      .map((item) => problemLabel(item.item, maxChars));
+
+    return uniqueLines(legacyItems)
       .slice(0, maxItems)
       .join("\n");
   }
 
-  const sortedItems = [...patient.assessmentPlanItems]
+  const scoredItems = [...patient.assessmentPlanItems]
     .filter((item) => item.category !== "underlyingDisease")
     .filter((item) => !isOperationalTaskLine(`${item.problemTitle} ${item.assessmentSummary}`))
-    .sort((a, b) => {
-      const importantOrder = Number(!a.isImportant) - Number(!b.isImportant);
-      if (importantOrder !== 0) return importantOrder;
-      return a.order - b.order;
+    .map((item) => {
+      const source = [
+        item.problemTitle,
+        item.assessmentSummary,
+        ...item.evidenceOrCourseItems,
+        ...item.planItems,
+      ].join(" ");
+      return {
+        item,
+        score: assessmentImportanceScore(source, item.isImportant),
+      };
     });
 
-  return sortedItems
+  return scoredItems
+    .filter((entry) => entry.score >= 8)
+    .sort((a, b) => b.score - a.score || a.item.order - b.item.order)
     .slice(0, maxItems)
-    .map((item) => problemLabel(item.problemTitle || item.assessmentSummary, maxChars))
+    .map(({ item }) => problemLabel(item.problemTitle || item.assessmentSummary, maxChars))
     .filter(Boolean)
     .join("\n");
 }
@@ -646,22 +734,25 @@ export function getRoundingDigest(
     importantObjectiveText(patient.bloodSugar, limits.detailChars, 1),
   ].filter(Boolean);
   const subjectiveSignals = topSubjectiveSignals(patient, 1, limits.detailChars).map((line) => `S: ${line}`);
-  const labSignals = [...lab.labFocus.critical, ...lab.labFocus.trend.slice(0, 1)].map((line) => `Lab: ${line}`);
-  const firstAssessmentLine = assessmentPlan.split(/\n|;/)[0]?.trim() ?? "";
+  const labSignals = lab.labFocus.critical.map((line) => `Lab: ${line}`);
+  const assessmentLines = assessmentPlan.split(/\n|;/).map((line) => line.trim()).filter(Boolean).slice(0, 2);
+  const urgentAssessmentLines = assessmentLines
+    .filter((line) => /ais|acute stroke|stroke|tia|ich|sepsis|shock|acs|stemi|nstemi|resp failure|hypox|desat|bleed|hb drop|aki/i.test(line))
+    .map((line) => `A/P: ${line}`);
   const urgentLines = uniqueLines([
     ...clinicalItems(redFlags),
     ...subjectiveSignals,
     ...vitalSignals,
     ...urgentTasks,
     ...labSignals,
-    firstAssessmentLine ? `A/P: ${firstAssessmentLine}` : "",
+    ...urgentAssessmentLines,
   ]).slice(0, limits.urgent);
   const attendingSummary = uniqueLines([
     diagnosis ? `Dx: ${diagnosis}` : "",
     issues ? `Issues: ${issues}` : "",
     subjective,
     lab.text,
-    firstAssessmentLine ? `A/P: ${firstAssessmentLine}` : "",
+    ...assessmentLines.map((line) => `A/P: ${line}`),
   ])
     .slice(0, mode === "rounds" ? 5 : 4)
     .join("\n");

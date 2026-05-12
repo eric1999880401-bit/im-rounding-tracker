@@ -86,6 +86,43 @@ function crisisCarryForwardScore(value: string) {
   return score;
 }
 
+function dailyNoteArrayKey(value: unknown) {
+  const item = value as Record<string, unknown>;
+  return [
+    item.date,
+    item.problemTitle,
+    item.assessmentSummary,
+    item.studyType,
+    item.impression,
+    item.finding,
+    item.system,
+    item.label,
+    item.name,
+    item.value,
+    item.unit,
+    item.previousValue,
+    item.title,
+    item.rawText,
+  ]
+    .map((part) => String(part ?? "").toLowerCase().replace(/^!+/, "").replace(/\s+/g, " ").trim())
+    .filter(Boolean)
+    .join("|");
+}
+
+function mergeDailyNoteArrays<T>(existing: T[] = [], additions: T[] = []) {
+  const merged = [...existing];
+  const seen = new Set(merged.map(dailyNoteArrayKey).filter(Boolean));
+
+  additions.forEach((item) => {
+    const key = dailyNoteArrayKey(item);
+    if (!key || seen.has(key)) return;
+    merged.push(item);
+    seen.add(key);
+  });
+
+  return merged;
+}
+
 function PatientDetailPage({
   patients,
   dailyNotesByPatient = {},
@@ -193,7 +230,85 @@ function PatientDetailPage({
     await commitDraft(draftRef.current);
   }
 
-  async function applyAiIntakePatient(nextPatient: Patient) {
+  function buildAiAcceptedDailyNote(
+    acceptedNotePatch: Partial<DailyNote> = {},
+    previousNote: DailyNote | null,
+  ): DailyNote {
+    const now = nowIso();
+    const baseNote = selectedNote ?? emptyDailyNote(selectedDate);
+    const nextNote: DailyNote = {
+      ...baseNote,
+      date: selectedDate,
+      createdAt: selectedNote?.createdAt || now,
+      updatedAt: now,
+    };
+    const textFields: Array<keyof Pick<
+      DailyNote,
+      | "importantRedFlags"
+      | "overnightEvents"
+      | "subjectiveOrChiefConcern"
+      | "vitalSigns"
+      | "bloodSugar"
+      | "physicalExam"
+      | "labSummary"
+      | "rawLabText"
+      | "imageSummary"
+      | "dischargePlan"
+      | "vsOrder"
+    >> = [
+      "importantRedFlags",
+      "overnightEvents",
+      "subjectiveOrChiefConcern",
+      "vitalSigns",
+      "bloodSugar",
+      "physicalExam",
+      "labSummary",
+      "rawLabText",
+      "imageSummary",
+      "dischargePlan",
+      "vsOrder",
+    ];
+
+    textFields.forEach((field) => {
+      const patchText = String(acceptedNotePatch[field] ?? "").trim();
+      if (patchText) {
+        nextNote[field] = appendUniqueClinicalText(String(baseNote[field] ?? ""), [patchText]) as never;
+      }
+    });
+
+    const carriedRedFlags = previousNote?.importantRedFlags
+      .split(/\r?\n/)
+      .filter((line) => crisisCarryForwardScore(line) > 0) ?? [];
+    if (carriedRedFlags.length > 0) {
+      nextNote.importantRedFlags = appendUniqueClinicalText(nextNote.importantRedFlags, carriedRedFlags);
+    }
+
+    nextNote.labReports = mergeDailyNoteArrays(baseNote.labReports, acceptedNotePatch.labReports);
+    nextNote.parsedLabItems = mergeDailyNoteArrays(baseNote.parsedLabItems, acceptedNotePatch.parsedLabItems);
+    nextNote.physicalExamEntries = mergeDailyNoteArrays(baseNote.physicalExamEntries, acceptedNotePatch.physicalExamEntries);
+    nextNote.imageStudyEntries = mergeDailyNoteArrays(baseNote.imageStudyEntries, acceptedNotePatch.imageStudyEntries);
+    nextNote.assessmentPlanItems = mergeDailyNoteArrays(baseNote.assessmentPlanItems, acceptedNotePatch.assessmentPlanItems);
+
+    const carriedAssessmentPlanItems =
+      (previousNote?.assessmentPlanItems ?? []).filter((item) =>
+        item.isImportant || crisisCarryForwardScore(`${item.problemTitle} ${item.assessmentSummary} ${item.planItems.join(" ")}`) >= 4,
+      );
+    nextNote.assessmentPlanItems = mergeDailyNoteArrays(nextNote.assessmentPlanItems, carriedAssessmentPlanItems).map((item, index) => ({
+      ...item,
+      order: index,
+    }));
+
+    if (acceptedNotePatch.labDate) nextNote.labDate = acceptedNotePatch.labDate;
+    if (acceptedNotePatch.labReportTitle) nextNote.labReportTitle = acceptedNotePatch.labReportTitle;
+    if ((acceptedNotePatch.labReports?.length ?? 0) > 0 || (acceptedNotePatch.parsedLabItems?.length ?? 0) > 0) {
+      nextNote.labDate = nextNote.labDate || selectedDate;
+      nextNote.labReportTitle = nextNote.labReportTitle || "AI Intake";
+    }
+
+    return nextNote;
+  }
+
+  async function applyAiIntakePatient(nextPatient: Patient, acceptedNotePatch: Partial<DailyNote> = {}) {
     const previousNote = selectedNote ? null : getLatestNonEmptyDailyNote(patientNotes.filter((note) => note.date < selectedDate));
     const carriedRedFlags = previousNote?.importantRedFlags
       .split(/\r?\n/)
@@ -218,7 +333,14 @@ function PatientDetailPage({
         }),
       ].map((item, index) => ({ ...item, order: index })),
     };
-    await commitDraft(safeNextPatient);
+    const acceptedNote = buildAiAcceptedDailyNote(acceptedNotePatch, previousNote ?? null);
+
+    draftRef.current = safeNextPatient;
+    setDraftPatient(safeNextPatient);
+    await onSavePatient(safeNextPatient);
+    await onSaveDailyNote(safeNextPatient.id, acceptedNote);
+    setIsDirty(false);
+    isDirtyRef.current = false;
   }
 
   async function appendQuickVsOrder() {
@@ -230,9 +352,16 @@ function PatientDetailPage({
       vsOrder: appendUniqueClinicalText(draftRef.current.vsOrder, [orderText]),
       updatedAt: nowIso(),
     };
+    const previousNote = selectedNote ? null : getLatestNonEmptyDailyNote(patientNotes.filter((note) => note.date < selectedDate));
+    const nextNote = buildAiAcceptedDailyNote({ vsOrder: orderText }, previousNote ?? null);
     isComposingRef.current = false;
     setQuickVsOrder("");
-    await commitDraft(nextPatient);
+    draftRef.current = nextPatient;
+    setDraftPatient(nextPatient);
+    await onSavePatient(nextPatient);
+    await onSaveDailyNote(nextPatient.id, nextNote);
+    setIsDirty(false);
+    isDirtyRef.current = false;
   }
 
   async function dittoSelectedNote() {
