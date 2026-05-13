@@ -22,7 +22,7 @@ import {
   nowIso,
 } from "../utils";
 
-const MAX_INPUT_CHARS = 12000;
+const MAX_INPUT_CHARS = 18000;
 
 const sourceTypes: Array<{ value: AiClinicalSourceType; label: string }> = [
   { value: "mixed", label: "Mixed text" },
@@ -44,6 +44,8 @@ interface IntakeSourceBlock {
 
 type ReviewCardKind =
   | "oneLiner"
+  | "admissionSummary"
+  | "isbarHandoff"
   | "chiefConcern"
   | "symptom"
   | "importantSymptom"
@@ -546,6 +548,13 @@ function hasActionableSignal(value: unknown) {
 }
 
 function sourceAllowsReviewCard(sourceType: AiClinicalSourceType, kind: ReviewCardKind, value: unknown) {
+  if (
+    (kind === "admissionSummary" || kind === "isbarHandoff") &&
+    (sourceType === "vitals" || sourceType === "lab" || sourceType === "image")
+  ) {
+    return false;
+  }
+
   if (sourceType !== "vitals") return true;
   if (kind === "vital" || kind === "bloodSugar") return true;
   if ((kind === "redFlag" || kind === "task") && hasActionableSignal(value)) return true;
@@ -564,6 +573,12 @@ function initialReviewStatus(
 
   if (sourceType === "lab" && kind === "lab") return "accepted";
   if (sourceType === "image" && kind === "image") return "accepted";
+  if (
+    (kind === "admissionSummary" || kind === "isbarHandoff") &&
+    (sourceType === "admission" || sourceType === "mixed" || sourceType === "progress")
+  ) {
+    return "accepted";
+  }
 
   if (sourceType === "dailyUpdate" || sourceType === "mixed" || sourceType === "progress" || sourceType === "consult" || sourceType === "nursing") {
     if (kind === "vital" || kind === "bloodSugar" || kind === "redFlag" || kind === "task") return "accepted";
@@ -602,6 +617,8 @@ function buildCards(draft: AiSoapDraft, sourceType: AiClinicalSourceType): Revie
   };
 
   addCard("One-liner", "One-liner", "oneLiner", draft.oneLiner, "string");
+  addCard("AI Summary", "Admission summary", "admissionSummary", draft.admissionSummary, "string");
+  addCard("AI Summary", "iSBAR handoff", "isbarHandoff", draft.isbarHandoff, "string");
   addCard("S", "Chief concern", "chiefConcern", draft.subjective.chiefConcern, "string");
   safeArray(draft.subjective.importantSymptoms).forEach((symptom, index) =>
     addCard("S", `Important symptom ${index + 1}`, "importantSymptom", symptom, "string"),
@@ -840,11 +857,21 @@ function AiIntakePanel({ patient, selectedDate, onApplyPatient }: AiIntakePanelP
     const tasks: PatientTask[] = [];
     const aiThinkingPrompts = [...safeArray(patient.aiThinkingPrompts)];
     const oneLiners: string[] = [];
+    const admissionSummaries: string[] = [];
+    const isbarHandoffs: string[] = [];
     let nextAssessmentOrder = safeArray(patient.assessmentPlanItems).length;
 
     parsedCards.forEach(({ card, value }) => {
       if (card.kind === "oneLiner" && typeof value === "string") {
         oneLiners.push(value);
+      }
+
+      if (card.kind === "admissionSummary" && typeof value === "string") {
+        admissionSummaries.push(value);
+      }
+
+      if (card.kind === "isbarHandoff" && typeof value === "string") {
+        isbarHandoffs.push(value);
       }
 
       if ((card.kind === "chiefConcern" || card.kind === "symptom") && typeof value === "string") {
@@ -992,9 +1019,15 @@ function AiIntakePanel({ patient, selectedDate, onApplyPatient }: AiIntakePanelP
       }
     });
 
+    const acceptedAdmissionSummary = admissionSummaries.map(String).map((line) => line.trim()).filter(Boolean).slice(-1)[0] ?? "";
+    const acceptedIsbarHandoff = isbarHandoffs.map(String).map((line) => line.trim()).filter(Boolean).slice(-1)[0] ?? "";
+
     const nextPatient: Patient = {
       ...patient,
       oneLiner: oneLiners.map(String).map((line) => line.trim()).filter(Boolean).slice(-1)[0] ?? patient.oneLiner,
+      admissionBriefFreeText: acceptedAdmissionSummary || patient.admissionBriefFreeText,
+      generatedAdmissionSummary: acceptedAdmissionSummary || patient.generatedAdmissionSummary,
+      generatedSbarNote: acceptedIsbarHandoff || patient.generatedSbarNote,
       subjectiveOrChiefConcern: appendUniqueLines(patient.subjectiveOrChiefConcern, subjectiveLines),
       overnightEvent: appendUniqueLines(patient.overnightEvent, overnightLines),
       vitalSigns: appendUniqueLines(patient.vitalSigns, vitalLines),

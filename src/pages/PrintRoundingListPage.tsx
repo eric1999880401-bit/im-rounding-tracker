@@ -359,6 +359,44 @@ function PrintRoundingListPage({
     return compactList(clinicalItems(value), maxItems, maxChars);
   }
 
+  function presentationSummary(patient: Patient) {
+    return compactList(
+      [
+        patient.oneLiner,
+        patient.chiefComplaint || patient.admissionChiefConcern,
+        patient.presentIllnessOrHPI || patient.hpiOrAdmissionStory,
+        patient.admissionBriefFreeText,
+      ],
+      2,
+      printLimits().detailChars,
+    );
+  }
+
+  function pmhSummary(patient: Patient) {
+    return compactList(
+      [...getUnderlyingDiseaseItems(patient), patient.admissionPMH].filter(Boolean),
+      printLimits().pmh,
+      24,
+    );
+  }
+
+  function activeProblemSummary(patient: Patient) {
+    return compactList(getActiveProblemItems(patient), printLimits().problems, printLimits().chars);
+  }
+
+  function courseSummary(patient: Patient) {
+    return compactList(
+      [
+        patient.hospitalCourseHighlights,
+        patient.earlyHospitalCourse,
+        patient.generatedWeeklySummary,
+        patient.generatedDischargeSummary,
+      ],
+      density === "ultra-compact" ? 1 : 2,
+      printLimits().detailChars,
+    );
+  }
+
   function importantObjectiveText(value: string, maxChars = printLimits().chars, maxItems = 1) {
     const importantPattern = /abnormal|important|\bfever\b|\bfebrile\b|hypotherm|tachy|brady|hypot|hypert|shock|desat|hypox|spo2|oxygen|nasal|nc\b|o2\b|high|low|elevat|drop|worse|hypergly|hypogly|bleed|pain|unstable/i;
     const normalOnlyPattern = /\bafebrile\b|\bnormal\b|\bwnl\b|\bstable\b|within normal/i;
@@ -425,6 +463,30 @@ function PrintRoundingListPage({
       return `${task.priority === "urgent" ? "[URGENT] " : ""}${shortText(text, limits.chars)}${task.dueDate ? ` (${task.dueDate})` : ""}`;
     });
     return visible.filter(Boolean).join("; ");
+  }
+
+  function careMilestoneText(patient: Patient) {
+    const sourceLines = [
+      patient.hospitalCourseHighlights,
+      patient.earlyHospitalCourse,
+      patient.initialPlan,
+      patient.assessment,
+      patient.plan,
+      patient.dischargePlan,
+      ...patient.assessmentPlanItems.flatMap((item) => [
+        item.problemTitle,
+        item.assessmentSummary,
+        ...item.evidenceOrCourseItems,
+        ...item.planItems,
+      ]),
+      ...patient.tasks.map((task) => task.text),
+    ].flatMap(clinicalItems);
+    const importantPattern = /\b(abx|antibiotic|ceftriaxone|cefazolin|cefepime|ceftazidime|ampicillin|sulbactam|zosyn|piperacillin|tazobactam|vanco|vancomycin|meropenem|ertapenem|levofloxacin|ciprofloxacin|metronidazole|procedure|operation|surgery|biopsy|scope|egd|cfs|catheter|drain|stent|pci|ptca|intubation|extubation|central line|consult|referral|rehab|pt|ot|st|swallow|id|nephro|cardio|neuro|gi|gs|obgyn|urology)\b/i;
+    return compactList(
+      sourceLines.filter((line) => importantPattern.test(line)),
+      density === "normal" ? 3 : 2,
+      printLimits().detailChars,
+    );
   }
 
   function assessmentPlanSummaryText(patient: Patient) {
@@ -501,13 +563,13 @@ function PrintRoundingListPage({
           <thead>
             <tr>
               <th>Bed</th>
-              <th>Pt</th>
-              <th>Dx / Risks</th>
-              <th>S / PE</th>
-              <th>Labs / Imaging</th>
-              <th>A/P</th>
-              <th>Tasks</th>
-              <th>DC / Attention</th>
+              <th>Pt / Team</th>
+              <th>Presentation / PMH</th>
+              <th>Course / Problems</th>
+              <th>Today S/O</th>
+              <th>Labs / Img / Tx</th>
+              <th>A/P / Tasks</th>
+              <th>DC / Safety</th>
             </tr>
           </thead>
           <tbody>
@@ -515,24 +577,26 @@ function PrintRoundingListPage({
               const images = imageLines(patient);
               return (
                 <tr className="patient-print-row" key={patient.id}>
-                  <td className="print-bed">{patient.bed}</td>
+                  <td className="print-bed">{patient.bed || "-"}</td>
                   <td>
-                    <strong>{patient.patientCode}</strong>
+                    <strong>{patient.patientCode || "-"}</strong>
                     <br />
-                    {patient.age}/{patient.sex}
+                    {patient.age || "-"}/{patient.sex || "-"}
                     {patient.attending && <div>Att: {patient.attending}</div>}
+                    {patient.teamOrService && <div>Svc: {patient.teamOrService}</div>}
                   </td>
                   <td>
-                    {patient.importantRedFlags.trim() && (
-                      <div className="print-red-flags">
-                        <strong>Red Flags:</strong> {compactText(patient.importantRedFlags, printLimits().detailChars, printLimits().redFlags)}
-                      </div>
-                    )}
                     {fieldLine("Dx", diagnosisSummary(patient))}
-                    {fieldLine("Risk", riskSummary(patient))}
+                    {fieldLine("Brief", presentationSummary(patient))}
+                    {fieldLine("PMH", pmhSummary(patient) || riskSummary(patient))}
+                  </td>
+                  <td>
+                    {fieldLine("Course", courseSummary(patient))}
+                    {fieldLine("Active", activeProblemSummary(patient))}
                     {fieldLine("Issues", issueSummary(patient))}
                   </td>
                   <td>
+                    {fieldLine("ON", compactText(patient.overnightEvent, printLimits().detailChars, 1))}
                     {fieldLine("VS", importantObjectiveText(patient.vitalSigns, printLimits().chars, 1))}
                     {fieldLine("BS", importantObjectiveText(patient.bloodSugar, printLimits().chars, 1))}
                     {fieldLine("S", compactText(patient.subjectiveOrChiefConcern, printLimits().detailChars, printLimits().subjective))}
@@ -541,10 +605,18 @@ function PrintRoundingListPage({
                   <td>
                     {fieldLine("Lab", labFocusText(patient))}
                     {images.length > 0 && fieldLine("Img", images.join("; "))}
+                    {fieldLine("Tx/Consult", careMilestoneText(patient))}
                   </td>
-                  <td className="print-ap-cell">{assessmentPlanSummaryText(patient)}</td>
-                  <td>{taskSummaryText(patient)}</td>
+                  <td className="print-ap-cell">
+                    {fieldLine("A/P", assessmentPlanSummaryText(patient))}
+                    {fieldLine("Tasks", taskSummaryText(patient))}
+                  </td>
                   <td>
+                    {patient.importantRedFlags.trim() && (
+                      <div className="print-red-flags">
+                        <strong>Red Flags:</strong> {compactText(patient.importantRedFlags, printLimits().detailChars, printLimits().redFlags)}
+                      </div>
+                    )}
                     {fieldLine("DC", patient.dischargeTargetDate)}
                     {fieldLine("Plan", compactText(patient.dischargePlan, printLimits().dcChars, 1))}
                     {fieldLine("Barrier", shortText(patient.dischargeBarriers, printLimits().dcChars))}
@@ -556,6 +628,11 @@ function PrintRoundingListPage({
                 </tr>
               );
             })}
+            {sectionPatients.length === 0 && (
+              <tr>
+                <td colSpan={8}>No active patients selected for this print view.</td>
+              </tr>
+            )}
           </tbody>
         </table>
       </section>

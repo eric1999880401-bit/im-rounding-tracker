@@ -821,6 +821,7 @@ export function getRoundingDigest(
   const subjectiveSignals = topSubjectiveSignals(patient, 1, limits.detailChars).map((line) => `S: ${line}`);
   const labSignals = lab.labFocus.critical.map((line) => `Lab: ${line}`);
   const assessmentLines = assessmentPlan.split(/\n|;/).map((line) => line.trim()).filter(Boolean).slice(0, 2);
+  const aiPatientPicture = shortDigestText(patient.generatedAdmissionSummary || patient.admissionBriefFreeText, limits.detailChars);
   const urgentAssessmentLines = assessmentLines
     .filter((line) => /ais|acute stroke|stroke|tia|ich|sepsis|shock|acs|stemi|nstemi|resp failure|hypox|desat|bleed|hb drop|aki/i.test(line))
     .map((line) => `A/P: ${line}`);
@@ -833,6 +834,7 @@ export function getRoundingDigest(
     ...urgentAssessmentLines,
   ]).slice(0, limits.urgent);
   const attendingSummary = uniqueLines([
+    aiPatientPicture ? `Summary: ${aiPatientPicture}` : "",
     diagnosis ? `Dx: ${diagnosis}` : "",
     issues ? `Issues: ${issues}` : "",
     subjective,

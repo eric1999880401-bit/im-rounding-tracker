@@ -6,6 +6,7 @@ import AdmissionBriefForm from "../components/AdmissionBriefForm";
 import DailyNoteForm from "../components/DailyNoteForm";
 import TaskList from "../components/TaskList";
 import AiIntakePanel from "../components/AiIntakePanel";
+import { AiHighlightsPanel } from "../components/AiHighlightsPanel";
 import { ClinicalText } from "../components/ClinicalText";
 import LabHistoryPanel from "../components/LabHistoryPanel";
 import ActiveProblemEditor from "../components/ActiveProblemEditor";
@@ -608,6 +609,8 @@ function PatientDetailPage({
           </div>
         )}
       </section>
+
+      <AiHighlightsPanel patient={currentPatient} notes={patientNotes} className="detail-ai-highlights" />
 
       <section className="panel detail-date-bar">
         <label>
