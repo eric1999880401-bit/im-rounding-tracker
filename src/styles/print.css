@@ -59,7 +59,7 @@
 }
 
 .print-title p {
-  color: #b42318;
+  color: #4b5563;
   font-size: var(--print-small-font-size);
   font-weight: 700;
   margin: 0;
@@ -478,7 +478,7 @@
 }
 
 .print-briefs-heading p {
-  color: #b42318;
+  color: #4b5563;
   font-size: var(--print-small-font-size);
   font-weight: 700;
 }
