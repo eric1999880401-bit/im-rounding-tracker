@@ -359,12 +359,16 @@ function PrintRoundingListPage({
   function compactList(items: string[], maxItems: number, maxChars = printLimits().chars) {
     const cleanItems = items.map(cleanPrintLine).filter(Boolean);
     const visible = cleanItems.slice(0, maxItems).map((item) => shortText(item, maxChars));
-    const hiddenCount = Math.max(cleanItems.length - visible.length, 0);
-    return [...visible.filter(Boolean), hiddenCount > 0 ? `+${hiddenCount} more` : ""].filter(Boolean).join("; ");
+    return visible.filter(Boolean).join("; ");
   }
 
   function compactText(value: string, maxChars = printLimits().detailChars, maxItems = 2) {
     return compactList(clinicalItems(value), maxItems, maxChars);
+  }
+
+  function allClinicalText(value: string, maxChars = printLimits().detailChars) {
+    const items = clinicalItems(value);
+    return compactList(items, items.length, maxChars);
   }
 
   function presentationSummary(patient: Patient) {
@@ -405,15 +409,16 @@ function PrintRoundingListPage({
   }
 
   function importantObjectiveText(value: string, maxChars = printLimits().chars, maxItems = 1) {
-    const importantPattern = /abnormal|important|\bfever\b|\bfebrile\b|hypotherm|tachy|brady|hypot|hypert|shock|desat|hypox|spo2|oxygen|nasal|nc\b|o2\b|high|low|elevat|drop|worse|hypergly|hypogly|bleed|pain|unstable/i;
+    const importantPattern = /abnormal|important|\bfever\b|\bfebrile\b|hypotherm|tachy|brady|hypot|hypert|shock|desat|hypox|spo2|oxygen|nasal|nc\b|o2\b|high|low|elevat|drop|worse|hypergly|hypogly|sugar|glucose|\bac\b|\bpc\b|\bhs\b|insulin|bleed|pain|unstable/i;
     const normalOnlyPattern = /\bafebrile\b|\bnormal\b|\bwnl\b|\bstable\b|within normal/i;
     const items = clinicalItems(value).filter((item) => {
+      if (item.trim().startsWith("!")) return true;
       if (normalOnlyPattern.test(item) && !/(abnormal|important|hypot|hypert|tachy|brady|desat|hypox|high|low|elevat|drop|worse|hypergly|hypogly|bleed|pain|unstable)/i.test(item)) {
         return false;
       }
       return importantPattern.test(item);
     });
-    return compactList(items, maxItems, maxChars);
+    return compactList(items, Math.max(items.length, maxItems), maxChars);
   }
 
   function shortDateSortValue(value: string) {
@@ -432,18 +437,18 @@ function PrintRoundingListPage({
 
   function labFocusText(patient: Patient) {
     return getLabFocusSummary(patient, dailyNotesByPatient[patient.id] ?? [], {
-      maxCritical: 2,
-      maxTrend: density === "normal" ? 4 : 3,
-      maxAnchors: density === "ultra-compact" ? 2 : 3,
+      maxCritical: 99,
+      maxTrend: 99,
+      maxAnchors: 99,
       separator: " | ",
     }).text.replace(/\s*\|\s*\+\d+\s+labs\b/g, "").replace(/\n\+\d+\s+labs\b/g, "").trim();
   }
 
   function renderPrintLabFocus(patient: Patient) {
     const labFocus = getLabFocusSummary(patient, dailyNotesByPatient[patient.id] ?? [], {
-      maxCritical: 2,
-      maxTrend: density === "normal" ? 4 : 3,
-      maxAnchors: density === "ultra-compact" ? 2 : 3,
+      maxCritical: 99,
+      maxTrend: 99,
+      maxAnchors: 99,
       separator: "\n",
     });
     const groups = [
@@ -468,7 +473,6 @@ function PrintRoundingListPage({
             </span>
           </div>
         ))}
-        {labFocus.hiddenCount > 0 && <span className="print-lab-chip">+{labFocus.hiddenCount} labs</span>}
       </div>
     );
   }
@@ -499,7 +503,13 @@ function PrintRoundingListPage({
       const priority = { urgent: 0, normal: 1, low: 2 };
       return priority[a.priority] - priority[b.priority];
     });
-    const visible = sortedTasks.slice(0, limits.tasks).map((task) => {
+    const urgentTasks = sortedTasks.filter((task) => task.priority === "urgent" || task.text.trim().startsWith("!"));
+    const routineTasks = sortedTasks.filter((task) => !urgentTasks.includes(task));
+    const selectedTasks = [
+      ...urgentTasks,
+      ...routineTasks.slice(0, Math.max(limits.tasks - urgentTasks.length, 0)),
+    ];
+    const visible = selectedTasks.map((task) => {
       const text = task.text.trim().startsWith("!") ? task.text.trim().slice(1).trim() : task.text;
       return `${task.priority === "urgent" ? "[URGENT] " : ""}${shortText(text, limits.chars)}${task.dueDate ? ` (${task.dueDate})` : ""}`;
     });
@@ -523,11 +533,8 @@ function PrintRoundingListPage({
       ...patient.tasks.map((task) => task.text),
     ].flatMap(clinicalItems);
     const importantPattern = /\b(abx|antibiotic|ceftriaxone|cefazolin|cefepime|ceftazidime|ampicillin|sulbactam|zosyn|piperacillin|tazobactam|vanco|vancomycin|meropenem|ertapenem|levofloxacin|ciprofloxacin|metronidazole|procedure|operation|surgery|biopsy|scope|egd|cfs|catheter|drain|stent|pci|ptca|intubation|extubation|central line|consult|referral|rehab|pt|ot|st|swallow|id|nephro|cardio|neuro|gi|gs|obgyn|urology)\b/i;
-    return compactList(
-      sourceLines.filter((line) => importantPattern.test(line)),
-      density === "normal" ? 3 : 2,
-      printLimits().detailChars,
-    );
+    const importantLines = sourceLines.filter((line) => importantPattern.test(line));
+    return compactList(importantLines, importantLines.length, printLimits().detailChars);
   }
 
   function assessmentPlanSummaryText(patient: Patient) {
@@ -656,7 +663,7 @@ function PrintRoundingListPage({
                   <td>
                     {patient.importantRedFlags.trim() && (
                       <div className="print-red-flags">
-                        <strong>Red Flags:</strong> {compactText(patient.importantRedFlags, printLimits().detailChars, printLimits().redFlags)}
+                        <strong>Red Flags:</strong> {allClinicalText(patient.importantRedFlags, printLimits().detailChars)}
                       </div>
                     )}
                     {fieldLine("DC", patient.dischargeTargetDate)}
