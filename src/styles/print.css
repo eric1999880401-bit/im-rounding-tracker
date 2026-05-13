@@ -232,6 +232,10 @@
   line-height: var(--print-line-height) !important;
 }
 
+.rounding-table .print-ap-cell {
+  white-space: pre-line;
+}
+
 .rounding-table .ap-display-card,
 .print-admission-brief .ap-display-card {
   background: transparent;
@@ -672,13 +676,13 @@
 }
 
 .rounding-table th:nth-child(1) { width: 4.5%; }
-.rounding-table th:nth-child(2) { width: 7%; }
-.rounding-table th:nth-child(3) { width: 14%; }
-.rounding-table th:nth-child(4) { width: 12%; }
-.rounding-table th:nth-child(5) { width: 18%; }
-.rounding-table th:nth-child(6) { width: 18%; }
-.rounding-table th:nth-child(7) { width: 12%; }
-.rounding-table th:nth-child(8) { width: 14.5%; }
+.rounding-table th:nth-child(2) { width: 8.5%; }
+.rounding-table th:nth-child(3) { width: 16%; }
+.rounding-table th:nth-child(4) { width: 14%; }
+.rounding-table th:nth-child(5) { width: 13%; }
+.rounding-table th:nth-child(6) { width: 17%; }
+.rounding-table th:nth-child(7) { width: 15%; }
+.rounding-table th:nth-child(8) { width: 12%; }
 
 @page {
   size: A4 landscape;
