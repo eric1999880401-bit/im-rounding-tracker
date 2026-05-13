@@ -7,7 +7,7 @@ admin.initializeApp();
 
 const OPENAI_API_KEY = defineSecret("OPENAI_API_KEY");
 const DEFAULT_MODEL = "gpt-5.4-mini";
-const MAX_RAW_TEXT_CHARS = 12000;
+const MAX_RAW_TEXT_CHARS = 18000;
 
 const sourceTypes = new Set([
   "mixed",
@@ -37,6 +37,8 @@ const aiSoapDraftSchema = {
   additionalProperties: false,
   required: [
     "oneLiner",
+    "admissionSummary",
+    "isbarHandoff",
     "subjective",
     "objective",
     "assessmentPlan",
@@ -48,6 +50,8 @@ const aiSoapDraftSchema = {
   ],
   properties: {
     oneLiner: stringSchema,
+    admissionSummary: stringSchema,
+    isbarHandoff: stringSchema,
     subjective: {
       type: "object",
       additionalProperties: false,
@@ -350,7 +354,7 @@ function extractRefusal(response: Record<string, unknown>) {
   return "";
 }
 
-function makePrompt(sourceType: SourceType, rawText: string, patientContext: ReturnType<typeof sanitizePatientContext>) {
+function makePrompt(sourceType: SourceType, rawText: string, patientContext: Record<string, unknown> | undefined) {
   const workflowIntent =
     sourceType === "dailyUpdate"
       ? [
@@ -363,12 +367,24 @@ function makePrompt(sourceType: SourceType, rawText: string, patientContext: Ret
           "",
         ].join("\n")
       : "";
+  const intakeTargets = [
+    "Messy chart extraction target:",
+    "- Treat pasted text as unordered chart fragments; remove duplicated, stale, administrative, and low-signal lines.",
+    "- Surface only information that changes rounding, orders, handoff safety, discharge planning, or attending-level understanding.",
+    "- Prioritize: why admitted, important PMH, active problems, major prior hospital course, today's meaningful updates, tasks/pending items/red flags, key labs/images/antibiotics/procedures/consults/disposition.",
+    "- Keep all output concise and scannable. Use common IM abbreviations when unambiguous.",
+    "- admissionSummary: 3-5 compact sentences for attending rounds. Include admission reason, PMH/context, major course, current active problems, today/pending/dispo. Leave empty only if the pasted text has no admission/course context.",
+    "- isbarHandoff: concise iSBAR with headings exactly Identify, Situation, Background, Assessment, Recommendation. Include red flags, pending tasks, contingency/call parameters, and disposition. Leave empty only if there is too little patient context.",
+    "- For vitals/lab/image-only source types, do not fabricate admissionSummary or isbarHandoff from isolated data; leave those fields empty unless the pasted text includes enough broader context.",
+    "",
+  ].join("\n");
 
   return [
     "Source type:",
     sourceType,
     "",
     workflowIntent,
+    intakeTargets,
     "Allowed patient context, if provided:",
     JSON.stringify(patientContext ?? {}, null, 2),
     "",
@@ -423,7 +439,8 @@ function compactPatientContext(data: FirebaseFirestore.DocumentData | undefined)
     activeProblems: patient.activeProblems ?? "",
     chiefComplaint: patient.chiefComplaint ?? patient.admissionChiefConcern ?? "",
     hpi: patient.presentIllnessOrHPI ?? patient.hpiOrAdmissionStory ?? "",
-    admissionSummary: patient.admissionBriefFreeText ?? "",
+    admissionSummary: patient.generatedAdmissionSummary ?? patient.admissionBriefFreeText ?? "",
+    isbarHandoff: patient.generatedSbarNote ?? "",
     admissionNote: patient.generatedAdmissionNote ?? patient.admissionBriefNotes ?? "",
     initialPhysicalExam: patient.initialPhysicalExam ?? "",
     initialLabs: patient.initialLabs ?? "",
@@ -442,6 +459,13 @@ function compactPatientContext(data: FirebaseFirestore.DocumentData | undefined)
     latestImages: patient.newImaging ?? "",
     latestAssessment: patient.assessment ?? "",
     latestPlan: patient.plan ?? "",
+    currentAssessmentPlan: Array.isArray(patient.assessmentPlanItems)
+      ? patient.assessmentPlanItems.slice(0, 12).map((item) => ({
+          problemTitle: asPlainObject(item).problemTitle ?? "",
+          assessmentSummary: asPlainObject(item).assessmentSummary ?? "",
+          planItems: asPlainObject(item).planItems ?? [],
+        }))
+      : [],
     currentTasks: Array.isArray(patient.tasks)
       ? patient.tasks
           .filter((task) => asPlainObject(task).done !== true)
@@ -504,8 +528,9 @@ function documentInstructions(documentType: DocumentType) {
       "Use conciseSummary as a one-sentence admission summary.",
     ],
     admissionSummary: [
-      "Create a short attending-rounds admission summary.",
-      "Emphasize why admitted, key positive/negative findings, active problems, initial treatment, and pending decisions.",
+      "Create a short attending-rounds admission summary in one compact paragraph.",
+      "Emphasize why admitted, important PMH/context, key positive/negative findings, active problems, major prior course, today's important changes, initial/current treatment, and pending/disposition decisions.",
+      "Exclude trivial daily stable updates unless they affect management, safety, discharge, or handoff.",
       "Use conciseSummary as the best one-paragraph presentation.",
     ],
     dischargeHospitalCourse: [
@@ -526,7 +551,7 @@ function documentInstructions(documentType: DocumentType) {
       "Create an iSBAR handoff note with headings: Identify, Situation, Background, Assessment, Recommendation.",
       "Review previous events from admission and SOAP history, not only today's note.",
       "If there were important prior events, red flags, complications, major image/lab findings, procedures, treatment changes, or pending discharge issues, include them in the most relevant iSBAR section.",
-      "Include contingency plans, red flags to watch, pending tasks, and when to call senior/attending.",
+      "Keep each section concise but action-focused, and include contingency plans, red flags to watch, pending tasks, disposition, and when to call senior/attending.",
     ],
   };
 
@@ -610,7 +635,10 @@ export const analyzeClinicalText = onCall(
     }
 
     const model = getModel();
-    const patientContext = sanitizePatientContext(data.patientContext);
+    const patientContext = {
+      ...compactPatientContext(patientSnapshot.data()),
+      ...(sanitizePatientContext(data.patientContext) ?? {}),
+    };
     const openAiResponse = await fetch("https://api.openai.com/v1/responses", {
       method: "POST",
       headers: {
@@ -628,10 +656,13 @@ export const analyzeClinicalText = onCall(
               "Do not invent missing data. Use empty strings or empty arrays when data is absent.",
               "Preserve dates, lab values, units, and abnormal findings exactly when available.",
               "Keep all SOAP-facing text concise and easy to scan for inpatient IM rounds.",
+              "Always also return admissionSummary and isbarHandoff for pasted admission, mixed, progress, consult, or nursing chart text when enough context exists.",
+              "admissionSummary must be attending-ready: why admitted, important PMH/context, major hospital course, current active problems, today/pending/disposition, in 3-5 compact sentences.",
+              "isbarHandoff must use headings Identify, Situation, Background, Assessment, Recommendation, with contingency plans, pending tasks, red flags, and call parameters when available.",
               "Assume the reviewer slept 3 hours and has seconds per patient: use telegraphic clinical fragments, not polished prose.",
               "Use the allowed patient context only to judge relevance and importance. Do not convert context-only facts into new SOAP draft items unless the pasted text explicitly supports them.",
               "For sourceType dailyUpdate, behave like a delta updater: compare pasted text against context and output only clinically meaningful new/changed items.",
-              "For sourceType vitals, return only objective.vitals/objective.bloodSugars plus truly urgent redFlags/tasks caused by those values; leave oneLiner, S, PE, labs, images, A/P, dischargeIssues, and thinkingPrompts empty unless the pasted vital data alone creates an immediate safety issue.",
+              "For sourceType vitals, return only objective.vitals/objective.bloodSugars plus truly urgent redFlags/tasks caused by those values; leave oneLiner, admissionSummary, isbarHandoff, S, PE, labs, images, A/P, dischargeIssues, and thinkingPrompts empty unless the pasted vital data alone creates an immediate safety issue.",
               "If the source text contains only stable V/S, lab, image, consult, or nursing updates, leave unrelated S, PE, and A/P arrays empty rather than restating prior SOAP context.",
               "Use common, unambiguous medical abbreviations when they save space, such as c/f, r/o, s/p, SOB, CP, N/V, Abd, CV, Resp, Neuro, HEENT, MSK, WBC, Hb, Plt, Cr, Na, K, AST, ALT, CRP, UA, U/C, B/C, CXR, CT, MRI, U/S, Abx, cont, hold, f/u, pending, DC, OPD.",
               "Avoid rare or ambiguous abbreviations, and do not abbreviate in a way that changes clinical meaning.",

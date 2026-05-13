@@ -39,6 +39,8 @@ export type AiDocumentType =
 
 export interface AiSoapDraft {
   oneLiner: string;
+  admissionSummary: string;
+  isbarHandoff: string;
   subjective: {
     chiefConcern: string;
     symptoms: string[];

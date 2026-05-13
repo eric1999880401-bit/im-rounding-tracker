@@ -15,6 +15,7 @@ import {
 } from "../utils";
 import PatientForm from "../components/PatientForm";
 import { ClinicalText } from "../components/ClinicalText";
+import { AiHighlightsPanel } from "../components/AiHighlightsPanel";
 import {
   IconArchive,
   IconBrief,
@@ -383,6 +384,7 @@ function PatientBoardPage({
         <div className="patient-board-grid">
           {activePatients.map((patient) => {
             const digest = boardDigest(patient);
+            const patientNotes = dailyNotesByPatient[patient.id] ?? [];
 
             return (
             <article className="patient-board-card" key={patient.id}>
@@ -420,6 +422,8 @@ function PatientBoardPage({
                   </div>
                   <div className="muted">Attending: {patient.attending || t("board.unassigned")}</div>
                 </section>
+
+                <AiHighlightsPanel patient={patient} notes={patientNotes} compact />
 
                 <section className="patient-board-section">
                   <span className="board-label">Sx</span>
