@@ -617,7 +617,6 @@ function PrintRoundingListPage({
           <tbody>
             {sectionPatients.map((patient) => {
               const images = imageLines(patient);
-              const admissionSummary = getAdmissionSummaryText(patient, { allowFallback: false });
               return (
                 <tr className="patient-print-row" key={patient.id}>
                   <td className="print-bed">{patient.bed || "-"}</td>
@@ -631,7 +630,6 @@ function PrintRoundingListPage({
                   <td>
                     {fieldLine("Dx", diagnosisSummary(patient))}
                     {fieldLine("Brief", presentationSummary(patient))}
-                    {fieldLine("Adm Summary", admissionSummary)}
                     {fieldLine("PMH", pmhSummary(patient) || riskSummary(patient))}
                   </td>
                   <td>
