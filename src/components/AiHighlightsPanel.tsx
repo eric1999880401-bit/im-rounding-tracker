@@ -1,5 +1,6 @@
 import type { DailyNote, Patient } from "../types";
 import { getRoundingDigest } from "../roundingDigest";
+import { getAdmissionSummaryText } from "../utils";
 import { ClinicalText } from "./ClinicalText";
 
 interface AiHighlightsPanelProps {
@@ -7,6 +8,7 @@ interface AiHighlightsPanelProps {
   notes?: DailyNote[];
   compact?: boolean;
   className?: string;
+  showSbar?: boolean;
 }
 
 function hasText(value: unknown) {
@@ -52,12 +54,13 @@ export function AiHighlightsPanel({
   notes = [],
   compact = false,
   className = "",
+  showSbar = true,
 }: AiHighlightsPanelProps) {
   const digest = getRoundingDigest(patient, notes, {
     mode: compact ? "board" : "rounds",
     hideCompletedTasks: true,
   });
-  const aiSummary = patient.generatedAdmissionSummary || patient.admissionBriefFreeText || "";
+  const aiSummary = getAdmissionSummaryText(patient, { allowFallback: false });
   const sbarHandoff = patient.generatedSbarNote || "";
   const hospitalCourse = patient.hospitalCourseHighlights || "";
   const sbarPreview = sectionPreview(sbarHandoff, compact ? 2 : 3);
@@ -83,7 +86,7 @@ export function AiHighlightsPanel({
         {aiSummary && (
           <div className="ai-highlight-block">
             <span className="board-label">Patient picture</span>
-            <ClinicalText value={aiSummary} maxLines={compact ? 2 : 4} maxCharsPerLine={compact ? 52 : 74} />
+            <ClinicalText value={aiSummary} />
           </div>
         )}
         {planText && (
@@ -92,7 +95,7 @@ export function AiHighlightsPanel({
             <ClinicalText value={planText} maxLines={compact ? 3 : 5} maxCharsPerLine={compact ? 48 : 70} />
           </div>
         )}
-        {sbarPreview && (
+        {showSbar && sbarPreview && (
           <div className="ai-highlight-block">
             <span className="board-label">iSBAR</span>
             <ClinicalText value={sbarPreview} maxLines={compact ? 2 : 4} maxCharsPerLine={compact ? 52 : 72} />

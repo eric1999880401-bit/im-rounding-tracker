@@ -154,6 +154,58 @@ export function plainClinicalText(value: string, fallback = "-") {
   return text || fallback;
 }
 
+function comparisonText(value: string) {
+  return plainClinicalText(value, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\u4e00-\u9fff]+/gi, "");
+}
+
+function isSameClinicalContent(candidate: string, source: string) {
+  const left = comparisonText(candidate);
+  const right = comparisonText(source);
+  if (!left || !right) return false;
+  if (left === right) return true;
+  const shorter = left.length <= right.length ? left : right;
+  const longer = left.length > right.length ? left : right;
+  return shorter.length >= 120 && longer.includes(shorter) && shorter.length / longer.length > 0.7;
+}
+
+function looksLikeFullAdmissionNote(value: string) {
+  const clean = value.trim();
+  if (!clean) return false;
+  const headingMatches = clean.match(/(^|\n)\s*(c\.?c|chief concern|p\.?i|hpi|physical exam|assessment|plan|lab|image)\s*[:：]/gi);
+  return clean.length > 1600 || clean.split(/\r?\n/).filter(Boolean).length > 14 || (headingMatches?.length ?? 0) >= 3;
+}
+
+export function getAdmissionSummaryText(patient: Patient, options: { allowFallback?: boolean } = {}) {
+  const allowFallback = options.allowFallback ?? true;
+  const admissionSources = [
+    patient.generatedAdmissionNote,
+    patient.admissionBriefNotes,
+    patient.presentIllnessOrHPI,
+    patient.hpiOrAdmissionStory,
+  ].filter(Boolean);
+  const candidates = [patient.generatedAdmissionSummary, patient.admissionBriefFreeText]
+    .map((value) => String(value ?? "").trim())
+    .filter(Boolean);
+
+  const summary = candidates.find(
+    (candidate) =>
+      !looksLikeFullAdmissionNote(candidate) &&
+      !admissionSources.some((source) => isSameClinicalContent(candidate, source)),
+  );
+
+  if (summary) return summary;
+  if (!allowFallback) return "";
+
+  return (
+    patient.oneLiner ||
+    [patient.chiefComplaint || patient.admissionChiefConcern, patient.presentIllnessOrHPI || patient.hpiOrAdmissionStory]
+      .filter(Boolean)
+      .join("\n")
+  );
+}
+
 export function emptyAssessmentPlanItem(order = 0): AssessmentPlanItem {
   return {
     id: createId("ap"),
@@ -506,7 +558,7 @@ export function getPatientDisplaySummary(
     },
     dischargePlan: displayPatient.dischargePlan,
     dischargeTargetDate: patient.dischargeTargetDate,
-    admissionSummary: patient.admissionBriefFreeText || patient.chiefComplaint || patient.presentIllnessOrHPI,
+    admissionSummary: getAdmissionSummaryText(patient),
     sourceLabels: {
       todayNoteIsEmpty: Boolean(!todayNote && getLatestNonEmptyDailyNote(notes)),
     },

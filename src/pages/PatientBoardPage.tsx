@@ -16,6 +16,7 @@ import {
 import PatientForm from "../components/PatientForm";
 import { ClinicalText } from "../components/ClinicalText";
 import { AiHighlightsPanel } from "../components/AiHighlightsPanel";
+import { BoardSignalPanel } from "../components/BoardSignalPanel";
 import {
   IconArchive,
   IconBrief,
@@ -401,7 +402,7 @@ function PatientBoardPage({
               </header>
 
               <div className="patient-board-card-body">
-                <section className="patient-board-section patient-board-overview">
+                <section className="patient-board-section patient-board-overview patient-board-priority">
                   {digest.redFlags && (
                     <div className="board-red-flags">
                       <span className="board-label">Red Flags</span>
@@ -423,36 +424,31 @@ function PatientBoardPage({
                   <div className="muted">Attending: {patient.attending || t("board.unassigned")}</div>
                 </section>
 
-                <AiHighlightsPanel patient={patient} notes={patientNotes} compact />
+                <AiHighlightsPanel patient={patient} notes={patientNotes} compact showSbar={false} />
 
-                <section className="patient-board-section">
-                  <span className="board-label">Sx</span>
+                <section className="patient-board-section patient-board-today">
+                  <span className="board-label">Today Signal</span>
                   <ClinicalText value={digest.subjective} fallback="-" maxLines={2} maxCharsPerLine={48} />
                   <div className="board-subsection">
                     <span className="board-label">V/S / PE</span>
-                    <ClinicalText value={digest.objective} fallback="-" maxLines={3} maxCharsPerLine={48} />
+                    <BoardSignalPanel value={digest.objective} fallback="-" kind="objective" maxItems={2} />
                   </div>
+                  <div className="board-subsection">
+                    <span className="board-label">Lab / Image</span>
+                    <BoardSignalPanel value={digest.lab} fallback="No lab signal" kind="lab" maxItems={2} />
+                  </div>
+                  <BoardSignalPanel value={digest.image} fallback="-" kind="image" maxItems={2} />
                 </section>
 
-                <section className="patient-board-section">
-                  <span className="board-label">Lab / Image</span>
-                  <ClinicalText value={digest.lab} fallback="No lab signal" maxLines={3} maxCharsPerLine={50} />
-                  <ClinicalText value={digest.image} fallback="-" maxLines={1} maxCharsPerLine={50} />
-                </section>
-
-                <section className="patient-board-section">
-                  <span className="board-label">A/P</span>
+                <section className="patient-board-section patient-board-plan">
+                  <span className="board-label">Plan / Tasks</span>
                   <ClinicalText value={digest.assessmentPlan} fallback="-" maxLines={3} maxCharsPerLine={50} />
-                </section>
-
-                <section className="patient-board-section patient-board-tasks">
-                  {taskSummary(patient, digest)}
-                </section>
-
-                <section className="patient-board-section patient-board-discharge">
-                  <span className="board-label">DC</span>
-                  <strong>{patient.dischargeTargetDate || "TBD"}</strong>
-                  {dischargeReminder(patient) && <div className="important-line">{dischargeReminder(patient)}</div>}
+                  <div className="board-subsection patient-board-tasks">{taskSummary(patient, digest)}</div>
+                  <div className="board-subsection patient-board-discharge">
+                    <span className="board-label">DC</span>
+                    <strong>{patient.dischargeTargetDate || "TBD"}</strong>
+                    {dischargeReminder(patient) && <div className="important-line">{dischargeReminder(patient)}</div>}
+                  </div>
                 </section>
               </div>
 

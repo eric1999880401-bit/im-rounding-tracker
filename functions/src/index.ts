@@ -656,7 +656,7 @@ export const analyzeClinicalText = onCall(
               "Do not invent missing data. Use empty strings or empty arrays when data is absent.",
               "Preserve dates, lab values, units, and abnormal findings exactly when available.",
               "Keep all SOAP-facing text concise and easy to scan for inpatient IM rounds.",
-              "Always also return admissionSummary and isbarHandoff for pasted admission, mixed, progress, consult, or nursing chart text when enough context exists.",
+              "Always also return admissionSummary and isbarHandoff for pasted admission, mixed, progress, consult, nursing, or daily-update chart text when enough context exists.",
               "admissionSummary must be attending-ready: why admitted, important PMH/context, major hospital course, current active problems, today/pending/disposition, in 3-5 compact sentences.",
               "isbarHandoff must use headings Identify, Situation, Background, Assessment, Recommendation, with contingency plans, pending tasks, red flags, and call parameters when available.",
               "Assume the reviewer slept 3 hours and has seconds per patient: use telegraphic clinical fragments, not polished prose.",

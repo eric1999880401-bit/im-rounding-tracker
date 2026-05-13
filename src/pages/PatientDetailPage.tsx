@@ -7,19 +7,17 @@ import DailyNoteForm from "../components/DailyNoteForm";
 import TaskList from "../components/TaskList";
 import AiIntakePanel from "../components/AiIntakePanel";
 import { AiHighlightsPanel } from "../components/AiHighlightsPanel";
+import { BoardSignalPanel } from "../components/BoardSignalPanel";
 import { ClinicalText } from "../components/ClinicalText";
 import LabHistoryPanel from "../components/LabHistoryPanel";
 import ActiveProblemEditor from "../components/ActiveProblemEditor";
 import {
-  IconAdmission,
   IconAiIntake,
   IconAssessment,
-  IconHistory,
   IconInfo,
   IconObjective,
   IconQuickUpdate,
   IconRounds,
-  IconSubjective,
   IconTasks,
 } from "../components/icons";
 import { useT } from "../i18n";
@@ -44,21 +42,18 @@ interface PageProps {
   onSaveDailyNote: (patientId: string, note: DailyNote) => Promise<void>;
 }
 
-type DetailTab = "rounds" | "subjective" | "quick" | "objective" | "assessmentPlan" | "tasksDischarge" | "aiIntake" | "admission" | "history" | "info";
+type DetailTab = "rounds" | "quick" | "objective" | "assessmentPlan" | "tasksDischarge" | "aiIntake" | "more";
 
 type DetailTabIcon = (props: React.SVGProps<SVGSVGElement>) => React.ReactElement;
 
 const detailTabs: Array<{ id: DetailTab; labelKey: string; shortKey: string; Icon: DetailTabIcon }> = [
   { id: "rounds", labelKey: "detail.tabs.rounds", shortKey: "detail.tabs.short.rounds", Icon: IconRounds },
   { id: "quick", labelKey: "detail.tabs.quick", shortKey: "detail.tabs.short.quick", Icon: IconQuickUpdate },
-  { id: "subjective", labelKey: "detail.tabs.subjective", shortKey: "detail.tabs.short.subjective", Icon: IconSubjective },
   { id: "objective", labelKey: "detail.tabs.objective", shortKey: "detail.tabs.short.objective", Icon: IconObjective },
   { id: "assessmentPlan", labelKey: "detail.tabs.assessmentPlan", shortKey: "detail.tabs.short.assessmentPlan", Icon: IconAssessment },
   { id: "tasksDischarge", labelKey: "detail.tabs.tasksDischarge", shortKey: "detail.tabs.short.tasksDischarge", Icon: IconTasks },
   { id: "aiIntake", labelKey: "detail.tabs.aiIntake", shortKey: "detail.tabs.short.aiIntake", Icon: IconAiIntake },
-  { id: "admission", labelKey: "detail.tabs.admission", shortKey: "detail.tabs.short.admission", Icon: IconAdmission },
-  { id: "history", labelKey: "detail.tabs.history", shortKey: "detail.tabs.short.history", Icon: IconHistory },
-  { id: "info", labelKey: "detail.tabs.info", shortKey: "detail.tabs.short.info", Icon: IconInfo },
+  { id: "more", labelKey: "detail.tabs.more", shortKey: "detail.tabs.short.more", Icon: IconInfo },
 ];
 
 function appendUniqueClinicalText(existing: string, additions: string[]) {
@@ -543,13 +538,13 @@ function PatientDetailPage({
 
           <section className="rounds-block">
             <span className="board-label">V/S / Sugar / PE</span>
-            <ClinicalText value={digest.objective} fallback="-" maxLines={4} maxCharsPerLine={64} />
+            <BoardSignalPanel value={digest.objective} fallback="-" kind="objective" maxItems={4} />
           </section>
 
           <section className="rounds-block">
             <span className="board-label">Lab / Image</span>
-            <ClinicalText value={digest.lab} fallback="No lab signal" maxLines={3} maxCharsPerLine={66} />
-            <ClinicalText value={digest.image} fallback="-" maxLines={2} maxCharsPerLine={66} />
+            <BoardSignalPanel value={digest.lab} fallback="No lab signal" kind="lab" maxItems={4} />
+            <BoardSignalPanel value={digest.image} fallback="-" kind="image" maxItems={2} />
           </section>
 
           <section className="rounds-block rounds-ap-block">
@@ -659,30 +654,29 @@ function PatientDetailPage({
 
       {activeTab === "rounds" && renderRoundsMode()}
 
-      {activeTab === "subjective" && (
-        <DailyNoteForm
-          patient={currentPatient}
-          onChange={updateDraft}
-          section="subjective"
-          displaySummary={displaySummary ?? undefined}
-          onImmediateCommit={() => void commitDraft()}
-          onFieldBlur={handleFieldBlur}
-          onCompositionStart={handleCompositionStart}
-          onCompositionEnd={handleCompositionEnd}
-        />
-      )}
-
       {activeTab === "quick" && (
-        <DailyNoteForm
-          patient={currentPatient}
-          onChange={updateDraft}
-          section="quick"
-          displaySummary={displaySummary ?? undefined}
-          onImmediateCommit={() => void commitDraft()}
-          onFieldBlur={handleFieldBlur}
-          onCompositionStart={handleCompositionStart}
-          onCompositionEnd={handleCompositionEnd}
-        />
+        <div className="detail-update-stack">
+          <DailyNoteForm
+            patient={currentPatient}
+            onChange={updateDraft}
+            section="subjective"
+            displaySummary={displaySummary ?? undefined}
+            onImmediateCommit={() => void commitDraft()}
+            onFieldBlur={handleFieldBlur}
+            onCompositionStart={handleCompositionStart}
+            onCompositionEnd={handleCompositionEnd}
+          />
+          <DailyNoteForm
+            patient={currentPatient}
+            onChange={updateDraft}
+            section="quick"
+            displaySummary={displaySummary ?? undefined}
+            onImmediateCommit={() => void commitDraft()}
+            onFieldBlur={handleFieldBlur}
+            onCompositionStart={handleCompositionStart}
+            onCompositionEnd={handleCompositionEnd}
+          />
+        </div>
       )}
 
       {activeTab === "objective" && (
@@ -786,29 +780,36 @@ function PatientDetailPage({
         />
       )}
 
-      {activeTab === "admission" && (
-        <AdmissionBriefForm
-          patient={currentPatient}
-          onChange={updateDraft}
-          onFieldBlur={handleFieldBlur}
-          onCompositionStart={handleCompositionStart}
-          onCompositionEnd={handleCompositionEnd}
-        />
-      )}
-
-      {activeTab === "history" && renderSoapHistory()}
-
-      {activeTab === "info" && (
-        <PatientForm
-          patient={currentPatient}
-          onChange={updateDraft}
-          onSubmit={() => commitDraft()}
-          submitLabel="Save Basic Info"
-          showClinicalSections={false}
-          onFieldBlur={handleFieldBlur}
-          onCompositionStart={handleCompositionStart}
-          onCompositionEnd={handleCompositionEnd}
-        />
+      {activeTab === "more" && (
+        <div className="detail-more-stack">
+          <details className="detail-more-section" open={currentPatient.isNewAdmission || currentPatient.showAdmissionBriefOnPrint}>
+            <summary>Admission Brief</summary>
+            <AdmissionBriefForm
+              patient={currentPatient}
+              onChange={updateDraft}
+              onFieldBlur={handleFieldBlur}
+              onCompositionStart={handleCompositionStart}
+              onCompositionEnd={handleCompositionEnd}
+            />
+          </details>
+          <details className="detail-more-section">
+            <summary>SOAP History</summary>
+            {renderSoapHistory()}
+          </details>
+          <details className="detail-more-section">
+            <summary>Patient Info</summary>
+            <PatientForm
+              patient={currentPatient}
+              onChange={updateDraft}
+              onSubmit={() => commitDraft()}
+              submitLabel="Save Basic Info"
+              showClinicalSections={false}
+              onFieldBlur={handleFieldBlur}
+              onCompositionStart={handleCompositionStart}
+              onCompositionEnd={handleCompositionEnd}
+            />
+          </details>
+        </div>
       )}
     </div>
   );

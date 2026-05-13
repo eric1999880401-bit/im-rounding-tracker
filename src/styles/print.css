@@ -611,8 +611,10 @@
   font-size: var(--print-chip-font-size);
   line-height: 1.05;
   margin: 1px;
+  max-width: 100%;
+  overflow-wrap: anywhere;
   padding: 1px 3px;
-  white-space: nowrap;
+  white-space: normal;
 }
 
 .print-lab-chip.important {

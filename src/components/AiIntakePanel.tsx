@@ -573,10 +573,7 @@ function initialReviewStatus(
 
   if (sourceType === "lab" && kind === "lab") return "accepted";
   if (sourceType === "image" && kind === "image") return "accepted";
-  if (
-    (kind === "admissionSummary" || kind === "isbarHandoff") &&
-    (sourceType === "admission" || sourceType === "mixed" || sourceType === "progress")
-  ) {
+  if ((kind === "admissionSummary" || kind === "isbarHandoff") && sourceType !== "lab" && sourceType !== "image") {
     return "accepted";
   }
 
@@ -617,8 +614,8 @@ function buildCards(draft: AiSoapDraft, sourceType: AiClinicalSourceType): Revie
   };
 
   addCard("One-liner", "One-liner", "oneLiner", draft.oneLiner, "string");
-  addCard("AI Summary", "Admission summary", "admissionSummary", draft.admissionSummary, "string");
-  addCard("AI Summary", "iSBAR handoff", "isbarHandoff", draft.isbarHandoff, "string");
+  addCard("Auto-generated Docs", "Auto admission summary", "admissionSummary", draft.admissionSummary, "string");
+  addCard("Auto-generated Docs", "Auto iSBAR handoff", "isbarHandoff", draft.isbarHandoff, "string");
   addCard("S", "Chief concern", "chiefConcern", draft.subjective.chiefConcern, "string");
   safeArray(draft.subjective.importantSymptoms).forEach((symptom, index) =>
     addCard("S", `Important symptom ${index + 1}`, "importantSymptom", symptom, "string"),
