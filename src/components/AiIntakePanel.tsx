@@ -160,6 +160,17 @@ function normalizeCompareKey(value: unknown) {
     .toLowerCase();
 }
 
+function normalizeClinicalMergeKey(value: unknown) {
+  return String(value ?? "")
+    .replace(/^!+/, "")
+    .replace(/^(?:neuro|heent|cv|resp|chest|abd|gi|gu|ext|skin|msk|general|gen|ob|gyn|pe)\s*:\s*/i, "")
+    .replace(/\bright\b|\brt\b/gi, "r")
+    .replace(/\bleft\b|\blt\b/gi, "l")
+    .replace(/\bbilateral\b|\bbilat\b|\bbil\b/gi, "bl")
+    .replace(/[^\p{L}\p{N}]+/gu, "")
+    .toLowerCase();
+}
+
 function appendUniqueStrings(existing: string[], additions: string[]) {
   const lines = [...existing];
   const seen = new Set(lines.map(normalizeCompareKey).filter(Boolean));
@@ -338,7 +349,7 @@ function mergeAssessmentPlanItems(existingItems: AssessmentPlanItem[], additions
 
 function mergePhysicalExamEntries(existing: PhysicalExamEntry[], additions: PhysicalExamEntry[]) {
   return uniqueBy([...existing, ...additions], (entry) =>
-    [entry.date, entry.system, entry.finding, entry.note].map(normalizeCompareKey).join("|"),
+    [normalizeDateKey(entry.date), normalizeClinicalMergeKey(`${entry.system} ${entry.finding || entry.note}`)].join("|"),
   );
 }
 
@@ -516,7 +527,56 @@ function getEffectiveSourceType(blocks: IntakeSourceBlock[]): AiClinicalSourceTy
   return nonEmptyBlocks.length === 1 ? nonEmptyBlocks[0].sourceType : "mixed";
 }
 
-function buildCards(draft: AiSoapDraft): ReviewCard[] {
+function cardSearchText(value: unknown) {
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value ?? "");
+  }
+}
+
+function objectFlag(value: unknown, key: string) {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value) && (value as Record<string, unknown>)[key]);
+}
+
+function hasActionableSignal(value: unknown) {
+  const text = cardSearchText(value);
+  return /!|urgent|critical|new|worse|drop|increase|decrease|pending|f\/u|follow|consult|repeat|monitor|hold|resume|adjust|titrate|abnormal|important|fever|tachy|brady|hypot|hypert|desat|hypox|shock|bleed|hb|aki|stroke|ais|tia|ich|sepsis|acs|arrhythm|cancer|tumou?r|mass|stenos|occlusion|dvt|pe\b|fracture|hematoma/i.test(text);
+}
+
+function sourceAllowsReviewCard(sourceType: AiClinicalSourceType, kind: ReviewCardKind, value: unknown) {
+  if (sourceType !== "vitals") return true;
+  if (kind === "vital" || kind === "bloodSugar") return true;
+  if ((kind === "redFlag" || kind === "task") && hasActionableSignal(value)) return true;
+  if (kind === "uncertainty" && /identifier|de-?ident|privacy|phi/i.test(cardSearchText(value))) return true;
+  return false;
+}
+
+function initialReviewStatus(
+  sourceType: AiClinicalSourceType,
+  kind: ReviewCardKind,
+  value: unknown,
+): Extract<ReviewStatus, "pending" | "accepted"> {
+  if (sourceType === "vitals") {
+    return kind === "vital" || kind === "bloodSugar" || kind === "redFlag" || kind === "task" ? "accepted" : "pending";
+  }
+
+  if (sourceType === "lab" && kind === "lab") return "accepted";
+  if (sourceType === "image" && kind === "image") return "accepted";
+
+  if (sourceType === "dailyUpdate" || sourceType === "mixed" || sourceType === "progress" || sourceType === "consult" || sourceType === "nursing") {
+    if (kind === "vital" || kind === "bloodSugar" || kind === "redFlag" || kind === "task") return "accepted";
+    if ((kind === "lab" || kind === "image" || kind === "physicalExam" || kind === "assessmentPlan") && (objectFlag(value, "isImportant") || objectFlag(value, "isAbnormal") || hasActionableSignal(value))) {
+      return "accepted";
+    }
+    if ((kind === "importantSymptom" || kind === "importantOvernightEvent") && hasActionableSignal(value)) return "accepted";
+  }
+
+  return "pending";
+}
+
+function buildCards(draft: AiSoapDraft, sourceType: AiClinicalSourceType): ReviewCard[] {
   const cards: ReviewCard[] = [];
   const addCard = (
     section: string,
@@ -527,6 +587,7 @@ function buildCards(draft: AiSoapDraft): ReviewCard[] {
   ) => {
     if (valueType === "string" && !hasText(value)) return;
     if (valueType === "json" && !hasText(JSON.stringify(value))) return;
+    if (!sourceAllowsReviewCard(sourceType, kind, value)) return;
     cards.push({
       id: createId("ai-card"),
       section,
@@ -535,7 +596,7 @@ function buildCards(draft: AiSoapDraft): ReviewCard[] {
       valueType,
       valueText: stringifyValue(value, valueType),
       originalValue: value,
-      status: "pending",
+      status: initialReviewStatus(sourceType, kind, value),
       isEditing: false,
     });
   };
@@ -681,8 +742,14 @@ function AiIntakePanel({ patient, selectedDate, onApplyPatient }: AiIntakePanelP
 
       setDraftId(result.draftId);
       setModel(result.model);
-      setReviewCards(buildCards(result.draft));
-      setStatusMessage(`AI draft created. Review before saving. Draft ID: ${result.draftId}`);
+      const nextCards = buildCards(result.draft, effectiveSourceType);
+      const preselectedCount = nextCards.filter((card) => card.status === "accepted").length;
+      setReviewCards(nextCards);
+      setStatusMessage(
+        preselectedCount > 0
+          ? `AI draft created. ${preselectedCount} likely relevant item(s) are pre-selected; review, edit if needed, then Apply. Draft ID: ${result.draftId}`
+          : `AI draft created. Review before saving. Draft ID: ${result.draftId}`,
+      );
     } catch (nextError) {
       setError(getErrorMessage(nextError));
     } finally {

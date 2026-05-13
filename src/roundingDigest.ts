@@ -125,6 +125,31 @@ function uniqueLines(lines: string[]) {
     });
 }
 
+function clinicalDedupeKey(value: string) {
+  return cleanDigestLine(value)
+    .replace(/^\d{1,2}\/\d{1,2}(?:\/\d{2,4})?\s*[:/-]?\s*/i, "")
+    .replace(/^(?:ct|cta|mri|mra|cxr|xray|x-ray|u\/s|us|sono|ultrasound|image|study)(?:\s+[^:]{0,28})?:\s*/i, "")
+    .replace(/^(?:neuro|heent|cv|resp|chest|abd|gi|gu|ext|skin|msk|general|gen|ob|gyn|pe)\s*:\s*/i, "")
+    .replace(/\bright\b|\brt\b/gi, "r")
+    .replace(/\bleft\b|\blt\b/gi, "l")
+    .replace(/\bbilateral\b|\bbilat\b|\bbil\b/gi, "bl")
+    .replace(/[^\p{L}\p{N}]+/gu, "")
+    .toLowerCase();
+}
+
+function uniqueClinicalLines(lines: string[]) {
+  const seen = new Set<string>();
+  return lines
+    .map(cleanDigestLine)
+    .filter(Boolean)
+    .filter((line) => {
+      const key = clinicalDedupeKey(line) || line.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+}
+
 function joinTags(tags: string[], maxItems: number) {
   return uniqueLines(tags).slice(0, maxItems).join(", ");
 }
@@ -454,7 +479,7 @@ function issueSummary(patient: Patient, maxItems: number, maxChars: number) {
 function importantObjectiveText(value: string, maxChars: number, maxItems: number) {
   const importantPattern =
     /abnormal|important|\bfever\b|\bfebrile\b|hypotherm|tachy|brady|hypot|hypert|shock|desat|hypox|spo2|oxygen|nasal|nc\b|o2\b|high|low|elevat|drop|worse|hypergly|hypogly|bleed|pain|unstable/i;
-  const normalOnlyPattern = /\bafebrile\b|\bnormal\b|\bstable\b|within normal/i;
+  const normalOnlyPattern = /\bafebrile\b|\bnormal\b|\bwnl\b|\bstable\b|within normal/i;
   const items = highlightedClinicalItems(value).filter((item) => {
     if (item.important) return true;
     if (normalOnlyPattern.test(item.text) && !/(abnormal|important|hypot|hypert|tachy|brady|desat|hypox|high|low|elevat|drop|worse|hypergly|hypogly|bleed|pain|unstable)/i.test(item.text)) {
@@ -548,7 +573,7 @@ function imageSummaryText(patient: Patient, maxItems: number, maxChars: number) 
     }))
     .filter((entry) => entry.score >= 7)
     .map((entry) => entry.text);
-  return uniqueLines([...structured, ...legacy])
+  return uniqueClinicalLines([...structured, ...legacy])
     .slice(0, maxItems)
     .join("\n");
 }
@@ -573,7 +598,11 @@ function peSummaryText(patient: Patient, maxItems: number, maxChars: number) {
     .filter((item) => item.text.trim() && item.score >= 7)
     .sort((a, b) => b.score - a.score || a.text.length - b.text.length)
     .map((item) => item.text);
-  return compactList(ranked, maxItems, maxChars);
+  return uniqueClinicalLines(ranked)
+    .slice(0, maxItems)
+    .map((item) => shortDigestText(item, maxChars))
+    .filter(Boolean)
+    .join("; ");
 }
 
 function objectiveSummaryText(patient: Patient, maxItems: number, maxChars: number) {
@@ -630,13 +659,69 @@ function assessmentPlanSummaryText(patient: Patient, maxItems: number, maxChars:
     return score;
   }
 
+  function assessmentDetailScore(value: string, source: "assessment" | "evidence" | "plan") {
+    const lower = value.toLowerCase();
+    let score = source === "plan" ? 3 : source === "assessment" ? 2 : 1;
+    if (/pending|f\/u|follow|consult|biopsy|pathology|culture|repeat|monitor|trend|hold|resume|adjust|titrate|start|stop|switch|abx|antiplatelet|anticoag|statin|rehab|swallow|ng|foley|oxygen|diuresis|dc|discharge/.test(lower)) score += 7;
+    if (/stroke|ais|tia|ich|sepsis|shock|resp failure|hypox|desat|bleed|hb|aki|hf|pna|uti|cancer|carcinoma|tumou?r|mass|stenos|occlusion|dvt|pe\b|fracture|hematoma/.test(lower)) score += 6;
+    if (/\d/.test(lower)) score += 2;
+    if (lowValueClause(value) || /\b(stable|no change|unchanged|continue same|cont same)\b/i.test(value)) score -= 4;
+    return score;
+  }
+
+  function bestAssessmentDetail(lines: string[]) {
+    return lines
+      .map((line, index) => ({
+        line: cleanDigestLine(line),
+        index,
+        score: assessmentDetailScore(line, index === 0 ? "assessment" : "evidence"),
+      }))
+      .filter((entry) => entry.line)
+      .sort((a, b) => b.score - a.score || a.index - b.index)[0]?.line ?? "";
+  }
+
+  function assessmentItemLine(item: Patient["assessmentPlanItems"][number]) {
+    const label = problemLabel(item.problemTitle || item.assessmentSummary, Math.min(24, maxChars));
+    const candidates = [
+      ...item.planItems.map((line) => ({
+        line,
+        score: assessmentDetailScore(line, "plan"),
+      })),
+      ...(item.assessmentSummary ? [{ line: item.assessmentSummary, score: assessmentDetailScore(item.assessmentSummary, "assessment") }] : []),
+      ...item.evidenceOrCourseItems.map((line) => ({
+        line,
+        score: assessmentDetailScore(line, "evidence"),
+      })),
+    ]
+      .filter((entry) => cleanDigestLine(entry.line))
+      .sort((a, b) => b.score - a.score || a.line.length - b.line.length);
+    const detail = candidates[0]?.line ?? "";
+    const detailKey = clinicalDedupeKey(detail);
+    const labelKey = clinicalDedupeKey(label);
+
+    if (!detail || detailKey === labelKey) return label;
+
+    const detailChars = Math.max(18, maxChars - label.length - 2);
+    const detailText = shortDigestText(detail, detailChars);
+    if (!detailText || clinicalDedupeKey(detailText) === labelKey) return label;
+    return shortDigestText(`${label}: ${detailText}`, Math.max(maxChars, label.length + detailText.length + 2));
+  }
+
+  function legacyAssessmentLine(value: string) {
+    const label = problemLabel(value, Math.min(24, maxChars));
+    const detail = bestAssessmentDetail(splitClinicalClauses(value));
+    if (!detail || clinicalDedupeKey(detail) === clinicalDedupeKey(label)) return label;
+    const detailText = shortDigestText(detail, Math.max(18, maxChars - label.length - 2));
+    return shortDigestText(`${label}: ${detailText}`, Math.max(maxChars, label.length + detailText.length + 2));
+  }
+
   if (patient.assessmentPlanItems.length === 0) {
     const legacyItems = [...clinicalItems(patient.assessment), ...clinicalItems(patient.plan)]
       .filter((item) => !isOperationalTaskLine(item))
       .map((item, index) => ({ item, index, score: assessmentImportanceScore(item) }))
       .filter((item) => item.score >= 8)
       .sort((a, b) => b.score - a.score || a.index - b.index)
-      .map((item) => problemLabel(item.item, maxChars));
+      .map((item) => legacyAssessmentLine(item.item));
 
     return uniqueLines(legacyItems)
       .slice(0, maxItems)
@@ -663,7 +748,7 @@ function assessmentPlanSummaryText(patient: Patient, maxItems: number, maxChars:
     .filter((entry) => entry.score >= 8)
     .sort((a, b) => b.score - a.score || a.item.order - b.item.order)
     .slice(0, maxItems)
-    .map(({ item }) => problemLabel(item.problemTitle || item.assessmentSummary, maxChars))
+    .map(({ item }) => assessmentItemLine(item))
     .filter(Boolean)
     .join("\n");
 }

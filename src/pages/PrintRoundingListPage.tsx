@@ -361,7 +361,7 @@ function PrintRoundingListPage({
 
   function importantObjectiveText(value: string, maxChars = printLimits().chars, maxItems = 1) {
     const importantPattern = /abnormal|important|\bfever\b|\bfebrile\b|hypotherm|tachy|brady|hypot|hypert|shock|desat|hypox|spo2|oxygen|nasal|nc\b|o2\b|high|low|elevat|drop|worse|hypergly|hypogly|bleed|pain|unstable/i;
-    const normalOnlyPattern = /\bafebrile\b|\bnormal\b|\bstable\b|within normal/i;
+    const normalOnlyPattern = /\bafebrile\b|\bnormal\b|\bwnl\b|\bstable\b|within normal/i;
     const items = clinicalItems(value).filter((item) => {
       if (normalOnlyPattern.test(item) && !/(abnormal|important|hypot|hypert|tachy|brady|desat|hypox|high|low|elevat|drop|worse|hypergly|hypogly|bleed|pain|unstable)/i.test(item)) {
         return false;
@@ -395,45 +395,22 @@ function PrintRoundingListPage({
   }
 
   function imageLines(patient: Patient) {
-    const limits = printLimits();
-    const structured = [...patient.imageStudyEntries]
-      .filter((entry) => entry.impression.trim() || entry.finding.trim() || entry.studyType.trim())
-      .sort((a, b) => shortDateSortValue(b.date).localeCompare(shortDateSortValue(a.date)))
-      .map((entry) =>
-        [
-          entry.date ? formatDateLabel(entry.date) : "",
-          shortStudyType(entry.studyType),
-          bestClinicalSignal(entry.impression || entry.finding || entry.note || entry.studyType, "image", limits.detailChars),
-        ]
-          .filter(Boolean)
-          .join(" "),
-      );
-    const legacy = clinicalItems(patient.newImaging).map((line) => bestClinicalSignal(line, "image", limits.detailChars));
-    return uniqueLines([...structured, ...legacy]).slice(0, limits.images);
+    return getRoundingDigest(patient, dailyNotesByPatient[patient.id] ?? [], {
+      mode: "board",
+      hideCompletedTasks,
+    }).image.split(/\n/).map(cleanPrintLine).filter(Boolean).slice(0, printLimits().images);
   }
 
   function peSummaryText(patient: Patient) {
-    const limits = printLimits();
-    const structured = [...patient.physicalExamEntries]
-      .filter((entry) => entry.finding.trim() || entry.system.trim())
-      .map((entry) => {
-        const raw = entry.finding || entry.note || entry.system;
-        const signal = bestClinicalSignal(raw, "pe", limits.detailChars);
-        const score = clinicalSignalScore(raw, "pe") + Number(entry.isImportant) * 3;
-        return {
-          score,
-          text: [entry.system, signal].filter(Boolean).join(": "),
-        };
-      });
-    const legacy = clinicalItems(patient.physicalExam).map((line) => ({
-      score: clinicalSignalScore(line, "pe"),
-      text: bestClinicalSignal(line, "pe", limits.detailChars),
-    }));
-    const ranked = [...structured, ...legacy]
-      .filter((item) => item.text.trim() && item.score > -1)
-      .sort((a, b) => b.score - a.score || a.text.length - b.text.length)
-      .map((item) => item.text);
-    return compactList(ranked, limits.pe, limits.detailChars);
+    const objective = getRoundingDigest(patient, dailyNotesByPatient[patient.id] ?? [], {
+      mode: "board",
+      hideCompletedTasks,
+    }).objective;
+    const peLine = objective
+      .split(/\n/)
+      .map((line) => line.trim())
+      .find((line) => /^PE:/i.test(line));
+    return peLine ? cleanPrintLine(peLine.replace(/^PE:\s*/i, "")) : "";
   }
 
   function taskSummaryText(patient: Patient) {
