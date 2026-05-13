@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { generateClinicalDocument } from "../firebase/aiService";
 import type { AiDocumentDraft, AiDocumentType, DailyNotesByPatient, Patient } from "../types";
-import { nowIso, todayKey } from "../utils";
+import { getAdmissionSummaryText, nowIso, todayKey } from "../utils";
 
 const OTHER_PATIENT_ID = "__other_patient__";
 
@@ -200,8 +200,14 @@ function AiDocumentsPage({ patients, dailyNotesByPatient = {}, onSavePatient }: 
     };
 
     if (documentType === "admissionNote") {
+      const existingAdmissionSummary = getAdmissionSummaryText(selectedPatient, { allowFallback: false });
       nextPatient.generatedAdmissionNote = editableText;
       nextPatient.admissionBriefNotes = editableText;
+      if (summary) {
+        nextPatient.generatedAdmissionSummary = summary;
+        nextPatient.admissionBriefFreeText = existingAdmissionSummary ? nextPatient.admissionBriefFreeText : summary;
+        nextPatient.oneLiner = appendIfBlank(nextPatient.oneLiner, summary);
+      }
       nextPatient.chiefComplaint = appendIfBlank(nextPatient.chiefComplaint, sectionContent(draft, ["c.c", "cc", "chief"]));
       nextPatient.admissionChiefConcern = appendIfBlank(nextPatient.admissionChiefConcern, nextPatient.chiefComplaint);
       nextPatient.presentIllnessOrHPI = appendIfBlank(nextPatient.presentIllnessOrHPI, sectionContent(draft, ["hpi", "pi", "present illness"]));

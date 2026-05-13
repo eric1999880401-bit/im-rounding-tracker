@@ -16,6 +16,7 @@ import {
 import PatientForm from "../components/PatientForm";
 import { ClinicalText } from "../components/ClinicalText";
 import { AiHighlightsPanel } from "../components/AiHighlightsPanel";
+import { BoardSignalPanel } from "../components/BoardSignalPanel";
 import {
   IconArchive,
   IconBrief,
@@ -430,14 +431,14 @@ function PatientBoardPage({
                   <ClinicalText value={digest.subjective} fallback="-" maxLines={2} maxCharsPerLine={48} />
                   <div className="board-subsection">
                     <span className="board-label">V/S / PE</span>
-                    <ClinicalText value={digest.objective} fallback="-" maxLines={3} maxCharsPerLine={48} />
+                    <BoardSignalPanel value={digest.objective} fallback="-" kind="objective" maxItems={3} />
                   </div>
                 </section>
 
                 <section className="patient-board-section">
                   <span className="board-label">Lab / Image</span>
-                  <ClinicalText value={digest.lab} fallback="No lab signal" maxLines={3} maxCharsPerLine={50} />
-                  <ClinicalText value={digest.image} fallback="-" maxLines={1} maxCharsPerLine={50} />
+                  <BoardSignalPanel value={digest.lab} fallback="No lab signal" kind="lab" maxItems={3} />
+                  <BoardSignalPanel value={digest.image} fallback="-" kind="image" maxItems={2} />
                 </section>
 
                 <section className="patient-board-section">

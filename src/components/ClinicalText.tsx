@@ -11,12 +11,14 @@ interface ClinicalTextProps {
 
 function shortenText(text: string, maxChars?: number) {
   if (!maxChars || text.length <= maxChars) return text;
-  const sliced = text.slice(0, maxChars).trimEnd();
+  const limit = Math.max(8, maxChars - 3);
+  const sliced = text.slice(0, limit).trimEnd();
   const lastSpace = sliced.lastIndexOf(" ");
+  const suffix = "...";
   if (lastSpace >= Math.min(16, maxChars - 1)) {
-    return sliced.slice(0, lastSpace).trimEnd();
+    return `${sliced.slice(0, lastSpace).trimEnd()}${suffix}`;
   }
-  return sliced;
+  return `${sliced}${suffix}`;
 }
 
 function groupLines(lines: HighlightLine[], maxCharsPerLine?: number) {

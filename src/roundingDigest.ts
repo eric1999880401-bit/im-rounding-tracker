@@ -2,6 +2,7 @@ import type { DailyNote, Patient } from "./types";
 import {
   formatDateLabel,
   getActiveProblemItems,
+  getAdmissionSummaryText,
   getLabFocusSummary,
   getUnderlyingDiseaseItems,
   pendingDischargePrep,
@@ -99,6 +100,8 @@ export function shortDigestText(value: string, maxChars = 52) {
 
   if (clean.length <= maxChars) return clean;
 
+  const suffix = "...";
+  const limit = Math.max(8, maxChars - suffix.length);
   const firstClause = clean.split(/[;\n]/)[0]?.trim() || clean;
   if (firstClause.length <= maxChars) return firstClause;
 
@@ -106,10 +109,11 @@ export function shortDigestText(value: string, maxChars = 52) {
   const kept: string[] = [];
   words.forEach((word) => {
     const next = [...kept, word].join(" ");
-    if (next.length <= maxChars) kept.push(word);
+    if (next.length <= limit) kept.push(word);
   });
 
-  return kept.join(" ") || firstClause.slice(0, maxChars).trim();
+  const shortened = kept.join(" ") || firstClause.slice(0, limit).trim();
+  return `${shortened}${suffix}`;
 }
 
 function uniqueLines(lines: string[]) {
@@ -821,7 +825,7 @@ export function getRoundingDigest(
   const subjectiveSignals = topSubjectiveSignals(patient, 1, limits.detailChars).map((line) => `S: ${line}`);
   const labSignals = lab.labFocus.critical.map((line) => `Lab: ${line}`);
   const assessmentLines = assessmentPlan.split(/\n|;/).map((line) => line.trim()).filter(Boolean).slice(0, 2);
-  const aiPatientPicture = shortDigestText(patient.generatedAdmissionSummary || patient.admissionBriefFreeText, limits.detailChars);
+  const aiPatientPicture = shortDigestText(getAdmissionSummaryText(patient, { allowFallback: false }), limits.detailChars);
   const urgentAssessmentLines = assessmentLines
     .filter((line) => /ais|acute stroke|stroke|tia|ich|sepsis|shock|acs|stemi|nstemi|resp failure|hypox|desat|bleed|hb drop|aki/i.test(line))
     .map((line) => `A/P: ${line}`);

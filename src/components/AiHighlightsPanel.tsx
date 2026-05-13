@@ -1,5 +1,6 @@
 import type { DailyNote, Patient } from "../types";
 import { getRoundingDigest } from "../roundingDigest";
+import { getAdmissionSummaryText } from "../utils";
 import { ClinicalText } from "./ClinicalText";
 
 interface AiHighlightsPanelProps {
@@ -57,7 +58,7 @@ export function AiHighlightsPanel({
     mode: compact ? "board" : "rounds",
     hideCompletedTasks: true,
   });
-  const aiSummary = patient.generatedAdmissionSummary || patient.admissionBriefFreeText || "";
+  const aiSummary = getAdmissionSummaryText(patient, { allowFallback: false });
   const sbarHandoff = patient.generatedSbarNote || "";
   const hospitalCourse = patient.hospitalCourseHighlights || "";
   const sbarPreview = sectionPreview(sbarHandoff, compact ? 2 : 3);
@@ -83,7 +84,7 @@ export function AiHighlightsPanel({
         {aiSummary && (
           <div className="ai-highlight-block">
             <span className="board-label">Patient picture</span>
-            <ClinicalText value={aiSummary} maxLines={compact ? 2 : 4} maxCharsPerLine={compact ? 52 : 74} />
+            <ClinicalText value={aiSummary} />
           </div>
         )}
         {planText && (

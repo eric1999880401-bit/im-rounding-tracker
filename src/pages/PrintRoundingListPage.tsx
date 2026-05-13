@@ -5,6 +5,7 @@ import {
   getActiveProblemItems,
   getActiveAttendingNames,
   getActivePatients,
+  getAdmissionSummaryText,
   getLabFocusSummary,
   getPatientDisplaySummary,
   getUnderlyingDiseaseItems,
@@ -38,7 +39,7 @@ function PrintRoundingListPage({
   const [admissionBriefPrintMode, setAdmissionBriefPrintMode] = useState("newAdmissions");
   const [selectedAttending, setSelectedAttending] = useState("");
   const [hideCompletedTasks, setHideCompletedTasks] = useState(true);
-  const [density, setDensity] = useState<PrintDensity>("ultra-compact");
+  const [density, setDensity] = useState<PrintDensity>("compact");
   const [sortMode, setSortMode] = useState<SortMode>("bed");
   const [team, setTeam] = useState("Team A");
   const [attending, setAttending] = useState("");
@@ -82,7 +83,9 @@ function PrintRoundingListPage({
     return Boolean(
       (patient.chiefComplaint || patient.admissionChiefConcern).trim() ||
         (patient.presentIllnessOrHPI || patient.hpiOrAdmissionStory).trim() ||
-        patient.admissionBriefFreeText.trim(),
+        getAdmissionSummaryText(patient, { allowFallback: false }).trim() ||
+        patient.generatedAdmissionNote.trim() ||
+        patient.admissionBriefNotes.trim(),
     );
   }
 
@@ -90,8 +93,8 @@ function PrintRoundingListPage({
     if (density === "ultra-compact") {
       return {
         generalItems: 6,
-        chars: 34,
-        detailChars: 42,
+        chars: 40,
+        detailChars: 52,
         redFlags: 2,
         pmh: 3,
         problems: 3,
@@ -101,32 +104,32 @@ function PrintRoundingListPage({
         labItems: 4,
         images: 1,
         tasks: 3,
-        dcChars: 34,
+        dcChars: 42,
       };
     }
 
     if (density === "compact") {
       return {
         generalItems: 8,
-        chars: 42,
-        detailChars: 54,
+        chars: 50,
+        detailChars: 66,
         redFlags: 2,
         pmh: 4,
         problems: 4,
-        subjective: 1,
+        subjective: 2,
         pe: 1,
         labReports: 1,
         labItems: 5,
         images: 1,
         tasks: 3,
-        dcChars: 44,
+        dcChars: 54,
       };
     }
 
     return {
       generalItems: 10,
-      chars: 54,
-      detailChars: 70,
+      chars: 62,
+      detailChars: 84,
       redFlags: 3,
       pmh: 5,
       problems: 5,
@@ -136,7 +139,7 @@ function PrintRoundingListPage({
       labItems: 7,
       images: 2,
       tasks: 5,
-      dcChars: 56,
+      dcChars: 68,
     };
   }
 
@@ -150,7 +153,8 @@ function PrintRoundingListPage({
 
   function shortText(value: string, maxChars = printLimits().detailChars) {
     const clean = cleanPrintLine(value);
-    const firstClause = clean.split(/[;\n。]/)[0]?.trim() || clean;
+    if (clean.length <= maxChars) return clean;
+    const firstClause = clean.split(/[;\n\u3002\uFF1B]/)[0]?.trim() || clean;
     return toShortWords(firstClause, maxChars);
   }
 
@@ -175,13 +179,16 @@ function PrintRoundingListPage({
       .trim();
     if (clean.length <= maxChars) return clean;
 
+    const suffix = "...";
+    const limit = Math.max(8, maxChars - suffix.length);
     const words = clean.split(" ");
     const kept: string[] = [];
     words.forEach((word) => {
       const next = [...kept, word].join(" ");
-      if (next.length <= maxChars) kept.push(word);
+      if (next.length <= limit) kept.push(word);
     });
-    return kept.join(" ") || clean.slice(0, maxChars).trim();
+    const shortened = kept.join(" ") || clean.slice(0, limit).trim();
+    return `${shortened}${suffix}`;
   }
 
   function splitClinicalClauses(value: string) {
@@ -352,7 +359,8 @@ function PrintRoundingListPage({
   function compactList(items: string[], maxItems: number, maxChars = printLimits().chars) {
     const cleanItems = items.map(cleanPrintLine).filter(Boolean);
     const visible = cleanItems.slice(0, maxItems).map((item) => shortText(item, maxChars));
-    return visible.filter(Boolean).join("; ");
+    const hiddenCount = Math.max(cleanItems.length - visible.length, 0);
+    return [...visible.filter(Boolean), hiddenCount > 0 ? `+${hiddenCount} more` : ""].filter(Boolean).join("; ");
   }
 
   function compactText(value: string, maxChars = printLimits().detailChars, maxItems = 2) {
@@ -365,9 +373,8 @@ function PrintRoundingListPage({
         patient.oneLiner,
         patient.chiefComplaint || patient.admissionChiefConcern,
         patient.presentIllnessOrHPI || patient.hpiOrAdmissionStory,
-        patient.admissionBriefFreeText,
       ],
-      2,
+      3,
       printLimits().detailChars,
     );
   }
@@ -430,6 +437,40 @@ function PrintRoundingListPage({
       maxAnchors: density === "ultra-compact" ? 2 : 3,
       separator: " | ",
     }).text.replace(/\s*\|\s*\+\d+\s+labs\b/g, "").replace(/\n\+\d+\s+labs\b/g, "").trim();
+  }
+
+  function renderPrintLabFocus(patient: Patient) {
+    const labFocus = getLabFocusSummary(patient, dailyNotesByPatient[patient.id] ?? [], {
+      maxCritical: 2,
+      maxTrend: density === "normal" ? 4 : 3,
+      maxAnchors: density === "ultra-compact" ? 2 : 3,
+      separator: "\n",
+    });
+    const groups = [
+      { label: "Critical", items: labFocus.critical, important: true },
+      { label: "Trend", items: labFocus.trend, important: false },
+      { label: "Anchor", items: labFocus.anchors, important: false },
+    ].filter((group) => group.items.length > 0);
+
+    if (groups.length === 0) return labFocusText(patient);
+
+    return (
+      <div className="print-lab-groups">
+        {groups.map((group) => (
+          <div className="print-lab-group" key={group.label}>
+            <span className="print-lab-date">{group.label}</span>
+            <span className="print-lab-chip-row">
+              {group.items.map((item) => (
+                <span className={`print-lab-chip ${group.important ? "important" : ""}`} key={`${group.label}-${item}`}>
+                  {shortText(item, printLimits().chars)}
+                </span>
+              ))}
+            </span>
+          </div>
+        ))}
+        {labFocus.hiddenCount > 0 && <span className="print-lab-chip">+{labFocus.hiddenCount} labs</span>}
+      </div>
+    );
   }
 
   function imageLines(patient: Patient) {
@@ -497,6 +538,7 @@ function PrintRoundingListPage({
   }
 
   function fieldLine(label: string, value: ReactNode) {
+    if (value === null || value === undefined || value === false) return null;
     if (typeof value === "string" && !value.trim()) return null;
     return (
       <div className="print-field-line">
@@ -575,6 +617,7 @@ function PrintRoundingListPage({
           <tbody>
             {sectionPatients.map((patient) => {
               const images = imageLines(patient);
+              const admissionSummary = getAdmissionSummaryText(patient, { allowFallback: false });
               return (
                 <tr className="patient-print-row" key={patient.id}>
                   <td className="print-bed">{patient.bed || "-"}</td>
@@ -588,6 +631,7 @@ function PrintRoundingListPage({
                   <td>
                     {fieldLine("Dx", diagnosisSummary(patient))}
                     {fieldLine("Brief", presentationSummary(patient))}
+                    {fieldLine("Adm Summary", admissionSummary)}
                     {fieldLine("PMH", pmhSummary(patient) || riskSummary(patient))}
                   </td>
                   <td>
@@ -603,7 +647,7 @@ function PrintRoundingListPage({
                     {fieldLine("PE", peSummaryText(patient))}
                   </td>
                   <td>
-                    {fieldLine("Lab", labFocusText(patient))}
+                    {fieldLine("Lab", renderPrintLabFocus(patient))}
                     {images.length > 0 && fieldLine("Img", images.join("; "))}
                     {fieldLine("Tx/Consult", careMilestoneText(patient))}
                   </td>
@@ -642,7 +686,7 @@ function PrintRoundingListPage({
   function renderAdmissionBrief(patient: Patient) {
     const chiefComplaint = patient.chiefComplaint || patient.admissionChiefConcern;
     const hpi = patient.presentIllnessOrHPI || patient.hpiOrAdmissionStory;
-    const summary = patient.admissionBriefFreeText.trim() || [chiefComplaint, hpi].filter(Boolean).join("\n");
+    const summary = getAdmissionSummaryText(patient, { allowFallback: false });
     const keyLabs = patient.rawLabText || patient.newLabs || patient.initialLabs;
     const keyImages = patient.newImaging || patient.initialImaging;
 
@@ -650,7 +694,7 @@ function PrintRoundingListPage({
       <section className="print-admission-brief" key={`brief-${patient.id}`}>
         <div className="brief-title">
           <h2>
-            Admission Note Summary: {patient.bed || "-"} / {patient.patientCode || "-"}
+            Admission Brief: {patient.bed || "-"} / {patient.patientCode || "-"}
           </h2>
           <p>
             {patient.age} / {patient.sex} | Attending: {patient.attending || "-"} | Team: {patient.teamOrService || "-"}
@@ -665,10 +709,12 @@ function PrintRoundingListPage({
             <strong>PI / HPI</strong>
             <ClinicalText value={hpi} />
           </div>
-          <div className="span-2">
-            <strong>Admission Note Summary</strong>
-            <ClinicalText value={summary} />
-          </div>
+          {summary && (
+            <div className="span-2">
+              <strong>Concise Admission Summary</strong>
+              <ClinicalText value={summary} />
+            </div>
+          )}
           <div>
             <strong>Key PMH</strong>
             <ClinicalText value={patient.admissionPMH || patient.underlyingDiseases} />
