@@ -83,6 +83,16 @@ interface AiIntakePanelProps {
   onApplyPatient: (patient: Patient, acceptedNotePatch?: Partial<DailyNote>) => Promise<void>;
 }
 
+const reviewSectionOrder = [
+  "Safety",
+  "Tasks / Discharge",
+  "Assessment / Plan",
+  "Objective Data",
+  "Subjective / Events",
+  "Generated Briefs",
+  "Clinician Review",
+];
+
 function hasText(value: unknown) {
   return String(value ?? "").trim().length > 0;
 }
@@ -613,38 +623,40 @@ function buildCards(draft: AiSoapDraft, sourceType: AiClinicalSourceType): Revie
     });
   };
 
-  addCard("One-liner", "One-liner", "oneLiner", draft.oneLiner, "string");
-  addCard("Auto-generated Docs", "Auto admission summary", "admissionSummary", draft.admissionSummary, "string");
-  addCard("Auto-generated Docs", "Auto iSBAR handoff", "isbarHandoff", draft.isbarHandoff, "string");
-  addCard("S", "Chief concern", "chiefConcern", draft.subjective.chiefConcern, "string");
-  safeArray(draft.subjective.importantSymptoms).forEach((symptom, index) =>
-    addCard("S", `Important symptom ${index + 1}`, "importantSymptom", symptom, "string"),
+  safeArray(draft.redFlags).forEach((item, index) => addCard("Safety", `Red flag ${index + 1}`, "redFlag", item));
+  safeArray(draft.tasks).forEach((task, index) => addCard("Tasks / Discharge", `Task ${index + 1}`, "task", task));
+  safeArray(draft.dischargeIssues).forEach((issue, index) =>
+    addCard("Tasks / Discharge", `Discharge issue ${index + 1}`, "dischargeIssue", issue, "string"),
   );
-  safeArray(draft.subjective.symptoms).forEach((symptom, index) => addCard("S", `Symptom ${index + 1}`, "symptom", symptom, "string"));
+  safeArray(draft.assessmentPlan).forEach((item, index) => addCard("Assessment / Plan", `Problem ${index + 1}`, "assessmentPlan", item));
+  safeArray(draft.objective.vitals).forEach((vital, index) => addCard("Objective Data", `Vital ${index + 1}`, "vital", vital));
+  safeArray(draft.objective.bloodSugars).forEach((bloodSugar, index) =>
+    addCard("Objective Data", `Blood sugar ${index + 1}`, "bloodSugar", bloodSugar),
+  );
+  safeArray(draft.objective.labs).forEach((lab, index) => addCard("Objective Data", `Lab ${index + 1}`, "lab", lab));
+  safeArray(draft.objective.images).forEach((image, index) => addCard("Objective Data", `Image ${index + 1}`, "image", image));
+  safeArray(draft.objective.physicalExam).forEach((exam, index) => addCard("Objective Data", `PE ${index + 1}`, "physicalExam", exam));
+  safeArray(draft.subjective.importantSymptoms).forEach((symptom, index) =>
+    addCard("Subjective / Events", `Important symptom ${index + 1}`, "importantSymptom", symptom, "string"),
+  );
   safeArray(draft.subjective.importantOvernightEvents).forEach((event, index) =>
-    addCard("S", `Important overnight ${index + 1}`, "importantOvernightEvent", event, "string"),
+    addCard("Subjective / Events", `Important overnight ${index + 1}`, "importantOvernightEvent", event, "string"),
+  );
+  addCard("Subjective / Events", "Chief concern", "chiefConcern", draft.subjective.chiefConcern, "string");
+  safeArray(draft.subjective.symptoms).forEach((symptom, index) =>
+    addCard("Subjective / Events", `Symptom ${index + 1}`, "symptom", symptom, "string"),
   );
   safeArray(draft.subjective.overnightEvents).forEach((event, index) =>
-    addCard("S", `Overnight event ${index + 1}`, "overnightEvent", event, "string"),
+    addCard("Subjective / Events", `Overnight event ${index + 1}`, "overnightEvent", event, "string"),
   );
-  safeArray(draft.objective.vitals).forEach((vital, index) => addCard("O - Vitals", `Vital ${index + 1}`, "vital", vital));
-  safeArray(draft.objective.bloodSugars).forEach((bloodSugar, index) =>
-    addCard("O - Blood Sugar", `Blood sugar ${index + 1}`, "bloodSugar", bloodSugar),
-  );
-  safeArray(draft.objective.physicalExam).forEach((exam, index) => addCard("O - PE", `PE ${index + 1}`, "physicalExam", exam));
-  safeArray(draft.objective.labs).forEach((lab, index) => addCard("O - Labs", `Lab ${index + 1}`, "lab", lab));
-  safeArray(draft.objective.images).forEach((image, index) => addCard("O - Images", `Image ${index + 1}`, "image", image));
-  safeArray(draft.assessmentPlan).forEach((item, index) => addCard("A/P", `Problem ${index + 1}`, "assessmentPlan", item));
-  safeArray(draft.redFlags).forEach((item, index) => addCard("Red Flags", `Red flag ${index + 1}`, "redFlag", item));
-  safeArray(draft.tasks).forEach((task, index) => addCard("Tasks", `Task ${index + 1}`, "task", task));
-  safeArray(draft.dischargeIssues).forEach((issue, index) =>
-    addCard("Discharge Issues", `Discharge issue ${index + 1}`, "dischargeIssue", issue, "string"),
-  );
+  addCard("Generated Briefs", "One-liner", "oneLiner", draft.oneLiner, "string");
+  addCard("Generated Briefs", "Admission brief summary", "admissionSummary", draft.admissionSummary, "string");
+  addCard("Generated Briefs", "iSBAR handoff", "isbarHandoff", draft.isbarHandoff, "string");
   safeArray(draft.thinkingPrompts).forEach((prompt, index) =>
-    addCard("Thinking Prompts", `Thinking prompt ${index + 1}`, "thinkingPrompt", prompt),
+    addCard("Clinician Review", `Thinking prompt ${index + 1}`, "thinkingPrompt", prompt),
   );
   safeArray(draft.uncertainty).forEach((uncertainty, index) =>
-    addCard("Uncertainty", `Uncertainty ${index + 1}`, "uncertainty", uncertainty, "string"),
+    addCard("Clinician Review", `Uncertainty ${index + 1}`, "uncertainty", uncertainty, "string"),
   );
 
   return cards;
@@ -682,6 +694,67 @@ function getCardJsonError(card: ReviewCard) {
   }
 }
 
+function currentCardValue(card: ReviewCard) {
+  if (card.valueType === "string") return card.valueText.trim();
+  try {
+    return mergeWithOriginalValue(card.originalValue, JSON.parse(card.valueText) as unknown);
+  } catch {
+    return card.valueText;
+  }
+}
+
+function joinPreviewParts(parts: unknown[], separator = " - ") {
+  return parts.map((part) => String(part ?? "").trim()).filter(Boolean).join(separator);
+}
+
+function reviewCardPreview(card: ReviewCard) {
+  const value = currentCardValue(card);
+  if (typeof value === "string") return value.trim();
+
+  if (!value || typeof value !== "object") return String(value ?? "").trim();
+
+  if (card.kind === "vital") return vitalLine(value as AiSoapDraft["objective"]["vitals"][number]);
+  if (card.kind === "bloodSugar") return bloodSugarLine(value as AiSoapDraft["objective"]["bloodSugars"][number]);
+  if (card.kind === "lab") return labLine(value as AiSoapDraft["objective"]["labs"][number]);
+  if (card.kind === "image") return imageLine(value as AiSoapDraft["objective"]["images"][number]);
+
+  if (card.kind === "physicalExam") {
+    const exam = value as AiSoapDraft["objective"]["physicalExam"][number];
+    return joinPreviewParts([exam.system, exam.finding], ": ");
+  }
+
+  if (card.kind === "assessmentPlan") {
+    const item = value as AiSoapDraft["assessmentPlan"][number];
+    return [
+      joinPreviewParts([item.problemTitle, item.assessmentSummary], ": "),
+      safeArray(item.evidenceOrCourseItems).length > 0 ? `Evidence: ${safeArray(item.evidenceOrCourseItems).join("; ")}` : "",
+      safeArray(item.planItems).length > 0 ? `Plan: ${safeArray(item.planItems).join("; ")}` : "",
+    ].filter(Boolean).join("\n");
+  }
+
+  if (card.kind === "redFlag") {
+    const item = value as AiSoapDraft["redFlags"][number];
+    return joinPreviewParts([item.text, item.reason ? `Reason: ${item.reason}` : ""]);
+  }
+
+  if (card.kind === "task") {
+    const task = value as AiSoapDraft["tasks"][number];
+    return joinPreviewParts([
+      String(task.priority || "normal").toUpperCase(),
+      task.text,
+      task.category && task.category !== "other" ? task.category : "",
+      task.dueDate ? `Due ${task.dueDate}` : "",
+    ]);
+  }
+
+  if (card.kind === "thinkingPrompt") {
+    const item = value as AiSoapDraft["thinkingPrompts"][number];
+    return joinPreviewParts([item.prompt, item.reason ? `Why: ${item.reason}` : ""]);
+  }
+
+  return stringifyValue(value, "json");
+}
+
 function getErrorMessage(error: unknown) {
   if (error instanceof Error) return error.message;
   return String(error ?? "Unknown error");
@@ -704,12 +777,19 @@ function AiIntakePanel({ patient, selectedDate, onApplyPatient }: AiIntakePanelP
   const estimatedTokens = Math.ceil(rawText.length / 4);
   const acceptedCount = reviewCards.filter((card) => card.status === "accepted").length;
   const reviewableCount = reviewCards.filter((card) => card.status !== "saved").length;
+  const pendingCount = reviewCards.filter((card) => card.status === "pending").length;
+  const ignoredCount = reviewCards.filter((card) => card.status === "ignored").length;
+  const savedCount = reviewCards.filter((card) => card.status === "saved").length;
   const groupedCards = useMemo(() => {
     const groups = new Map<string, ReviewCard[]>();
     reviewCards.forEach((card) => {
       groups.set(card.section, [...(groups.get(card.section) ?? []), card]);
     });
-    return Array.from(groups.entries());
+    return Array.from(groups.entries()).sort(([left], [right]) => {
+      const leftIndex = reviewSectionOrder.indexOf(left);
+      const rightIndex = reviewSectionOrder.indexOf(right);
+      return (leftIndex === -1 ? 999 : leftIndex) - (rightIndex === -1 ? 999 : rightIndex);
+    });
   }, [reviewCards]);
 
   function updateSourceBlock(blockId: string, updater: (block: IntakeSourceBlock) => IntakeSourceBlock) {
@@ -1229,7 +1309,12 @@ function AiIntakePanel({ patient, selectedDate, onApplyPatient }: AiIntakePanelP
       {reviewCards.length > 0 && (
         <div className="ai-draft-review">
           <div className="section-heading">
-            <h3>AI Draft Review</h3>
+            <div>
+              <h3>Clinical Review Queue</h3>
+              <p className="muted ai-review-summary">
+                {acceptedCount} selected / {pendingCount} needs review / {ignoredCount} ignored / {savedCount} saved.
+              </p>
+            </div>
             <div className="form-actions ai-review-toolbar">
               <button type="button" className="secondary" disabled={reviewableCount === 0} onClick={() => setCardsStatus("accepted")}>
                 Accept all
@@ -1280,13 +1365,18 @@ function AiIntakePanel({ patient, selectedDate, onApplyPatient }: AiIntakePanelP
                         <strong>{card.title}</strong>
                         <span className="badge normal">{hasJsonError ? "needs fix" : card.status}</span>
                       </div>
-                      <textarea
-                        className={hasJsonError ? "invalid-json-textarea" : ""}
-                        value={card.valueText}
-                        readOnly={!card.isEditing || card.status === "saved" || card.status === "ignored"}
-                        onChange={(event) => updateCard(card.id, (item) => ({ ...item, valueText: event.target.value }))}
-                      />
-                      {card.valueType === "json" && (
+                      {card.isEditing && card.status !== "saved" && card.status !== "ignored" ? (
+                        <textarea
+                          className={hasJsonError ? "invalid-json-textarea" : ""}
+                          value={card.valueText}
+                          onChange={(event) => updateCard(card.id, (item) => ({ ...item, valueText: event.target.value }))}
+                        />
+                      ) : (
+                        <div className={hasJsonError ? "ai-review-preview ai-review-preview-invalid" : "ai-review-preview"}>
+                          {reviewCardPreview(card) || "-"}
+                        </div>
+                      )}
+                      {card.valueType === "json" && (card.isEditing || hasJsonError) && (
                         <p className={`json-edit-hint${hasJsonError ? " json-edit-error" : ""}`}>
                           {hasJsonError
                             ? `JSON problem in this card: ${jsonError}`

@@ -46,6 +46,8 @@ function AdmissionBriefForm({
     onCompositionEnd?.();
   }
 
+  const hasGeneratedAdmissionDraft = patient.generatedAdmissionNote.trim() || patient.generatedAdmissionSummary.trim();
+
   return (
     <section className="panel">
       <h2>Admission Brief / Initial Presentation</h2>
@@ -164,7 +166,7 @@ function AdmissionBriefForm({
         <label className="span-2">
           Admission Note Summary
           <ColorMarkupTextarea
-            value={patient.admissionBriefFreeText}
+            value={patient.admissionBriefFreeText || patient.generatedAdmissionSummary}
             onChange={(value) => updateField("admissionBriefFreeText", value)}
             onBlur={commitOnBlur}
             onCompositionStart={onCompositionStart}
@@ -173,30 +175,35 @@ function AdmissionBriefForm({
           />
         </label>
 
-        {patient.generatedAdmissionNote.trim() && (
-          <label className="span-2">
-            AI Admission Note Draft
-            <textarea
-              value={patient.generatedAdmissionNote}
-              onChange={(event) => updateField("generatedAdmissionNote", event.target.value)}
-              onBlur={commitOnBlur}
-              onCompositionStart={onCompositionStart}
-              onCompositionEnd={handleCompositionEnd}
-            />
-          </label>
-        )}
+        {hasGeneratedAdmissionDraft && (
+          <details className="admission-generated-drafts span-2">
+            <summary>AI-generated source drafts</summary>
+            {patient.generatedAdmissionNote.trim() && (
+              <label>
+                AI Admission Note Draft
+                <textarea
+                  value={patient.generatedAdmissionNote}
+                  onChange={(event) => updateField("generatedAdmissionNote", event.target.value)}
+                  onBlur={commitOnBlur}
+                  onCompositionStart={onCompositionStart}
+                  onCompositionEnd={handleCompositionEnd}
+                />
+              </label>
+            )}
 
-        {patient.generatedAdmissionSummary.trim() && (
-          <label className="span-2">
-            AI Admission Summary Draft
-            <textarea
-              value={patient.generatedAdmissionSummary}
-              onChange={(event) => updateField("generatedAdmissionSummary", event.target.value)}
-              onBlur={commitOnBlur}
-              onCompositionStart={onCompositionStart}
-              onCompositionEnd={handleCompositionEnd}
-            />
-          </label>
+            {patient.generatedAdmissionSummary.trim() && (
+              <label>
+                AI Admission Summary Draft
+                <textarea
+                  value={patient.generatedAdmissionSummary}
+                  onChange={(event) => updateField("generatedAdmissionSummary", event.target.value)}
+                  onBlur={commitOnBlur}
+                  onCompositionStart={onCompositionStart}
+                  onCompositionEnd={handleCompositionEnd}
+                />
+              </label>
+            )}
+          </details>
         )}
       </div>
     </section>

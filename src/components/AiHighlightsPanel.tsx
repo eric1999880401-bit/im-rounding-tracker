@@ -70,11 +70,17 @@ export function AiHighlightsPanel({
 
   const seeFirst = digest.urgentLines.map((line) => `!${line}`).join("\n");
   const planText = buildPlanText(digest.assessmentPlan, digest.tasks, digest.discharge);
+  const showPlan = !compact && hasText(planText);
+  const showCourse = !compact && hasText(hospitalCourse);
+  const showSbarPreview = showSbar && hasText(sbarPreview);
+  const hasVisibleContent = [seeFirst, aiSummary, showPlan ? planText : "", showCourse ? hospitalCourse : "", showSbarPreview ? sbarPreview : ""].some(hasText);
+
+  if (!hasVisibleContent) return null;
 
   return (
     <section className={["ai-highlights", compact ? "ai-highlights-compact" : "", className].filter(Boolean).join(" ")}>
       <div className="ai-highlights-heading">
-        <span>AI Organized Highlights</span>
+        <span>{compact ? "Admission Brief" : "AI Clinical Brief"}</span>
       </div>
       <div className="ai-highlights-grid">
         {seeFirst && (
@@ -86,16 +92,22 @@ export function AiHighlightsPanel({
         {aiSummary && (
           <div className="ai-highlight-block">
             <span className="board-label">Patient picture</span>
-            <ClinicalText value={aiSummary} />
+            <ClinicalText value={aiSummary} maxLines={compact ? 2 : undefined} maxCharsPerLine={compact ? 72 : undefined} />
           </div>
         )}
-        {planText && (
+        {showPlan && (
           <div className="ai-highlight-block">
             <span className="board-label">Active plan</span>
             <ClinicalText value={planText} maxLines={compact ? 3 : 5} maxCharsPerLine={compact ? 48 : 70} />
           </div>
         )}
-        {showSbar && sbarPreview && (
+        {showCourse && (
+          <div className="ai-highlight-block">
+            <span className="board-label">Course</span>
+            <ClinicalText value={hospitalCourse} maxLines={4} maxCharsPerLine={76} />
+          </div>
+        )}
+        {showSbarPreview && (
           <div className="ai-highlight-block">
             <span className="board-label">iSBAR</span>
             <ClinicalText value={sbarPreview} maxLines={compact ? 2 : 4} maxCharsPerLine={compact ? 52 : 72} />

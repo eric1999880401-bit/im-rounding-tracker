@@ -932,6 +932,26 @@ input[type="checkbox"] {
   padding: 6px 2px;
 }
 
+.admission-generated-drafts {
+  border-top: 1px solid var(--border);
+  display: grid;
+  gap: 10px;
+  padding-top: 8px;
+}
+
+.admission-generated-drafts > summary {
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.admission-generated-drafts label {
+  margin-top: 10px;
+}
+
 .auto-summary-panel {
   background: var(--surface-muted);
   border: 1px solid var(--border);
@@ -1207,9 +1227,30 @@ input[type="checkbox"] {
 
 .ai-review-card textarea {
   font-family: var(--font-sans);
-  min-height: 116px;
+  min-height: 92px;
   resize: vertical;
   white-space: pre-wrap;
+}
+
+.ai-review-preview {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.42;
+  min-height: 44px;
+  padding: 8px 9px;
+  white-space: pre-wrap;
+}
+
+.ai-review-preview-invalid {
+  border-color: var(--danger-border);
+  color: var(--danger-text);
+}
+
+.ai-review-summary {
+  margin: 2px 0 0;
 }
 
 .ai-review-card textarea.invalid-json-textarea {
@@ -2469,12 +2510,23 @@ tbody tr:last-child td {
 }
 
 .patient-board-card .ai-highlights {
+  background: transparent;
+  border-bottom: 0;
+  border-right: 0;
+  border-top: 0;
   border-left-width: 2px;
   margin-top: 0;
+  padding: 4px 0 4px 8px;
 }
 
 .patient-board-card .ai-highlights-heading span {
   font-size: 10px;
+}
+
+.patient-board-card .ai-highlight-block {
+  background: transparent;
+  border: 0;
+  padding: 0;
 }
 
 .rounds-mode-panel .clinical-card {

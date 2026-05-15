@@ -255,3 +255,72 @@ Objective: make Morning Cockpit a practical priority tool that shows who needs t
 - Intentionally excluded local file: `vite-dev.log`.
 - Main pre-push verification: `main` was fast-forwarded with the Morning Cockpit commit and repository-root `npm run build` passed on `main`.
 - Final expected branch/status immediately before `git push origin main`: `main...origin/main [ahead 2]`, with only local `vite-dev.log` modified and intentionally uncommitted.
+
+## 2026-05-15 AI Clinical Classification and Layout Simplification
+
+Objective: reduce crowded AI/admission-brief surfaces and make AI intake classification closer to practical internal medicine hand-written judgment.
+
+### Changed Files
+
+- `functions/src/index.ts`
+  - Added explicit clinical routing rules for AI Intake so subjective, objective, A/P, tasks, red flags, discharge issues, and uncertainty are separated by clinical purpose.
+  - Tightened source-specific behavior for consult, nursing, lab-only, image-only, vitals-only, and daily-update inputs.
+  - Made red flags/action tasks more specific and discouraged broad SOAP rewrites from stable routine data.
+  - Tightened admission-summary generation toward a 3-4 sentence senior-resident admission brief.
+- `src/components/AiIntakePanel.tsx`
+  - Reordered AI review cards into a clinical queue: Safety, Tasks/Discharge, A/P, Objective Data, Subjective/Events, Generated Briefs, and Clinician Review.
+  - Added compact human-readable previews for JSON cards so review is scannable without opening raw JSON unless editing.
+  - Kept the existing explicit accept/apply workflow; nothing is saved until accepted items are applied.
+- `src/components/AiHighlightsPanel.tsx`
+  - Renamed the surface to `Admission Brief` on compact board cards and `AI Clinical Brief` on detail pages.
+  - Limited compact board admission summary display to high-yield preview lines to reduce crowding.
+  - Kept fuller summary/course/iSBAR display for the detail page.
+- `src/components/AdmissionBriefForm.tsx`
+  - Shows generated admission summary as the main Admission Note Summary fallback when the clinician-reviewed field is blank.
+  - Collapsed duplicate generated admission note/summary draft fields under `AI-generated source drafts`.
+- `src/styles/global.css`
+  - Added compact AI review preview styling.
+  - Reduced nested card styling for board Admission Brief display.
+  - Added styling for collapsed admission generated drafts.
+
+### Build Result
+
+- `npm run build` passed in the repository root after the AI/layout changes.
+- `npm run build` passed in `functions/` after the AI prompt changes.
+- `npm run lint` was attempted but no `lint` script exists in `package.json`.
+- `npm test` was attempted but no `test` script exists in `package.json`.
+- `git diff --check` passed with line-ending warnings only.
+- Build warning remains: Vite reports one bundle chunk larger than 500 kB. This is non-blocking and already deferred.
+
+### Smoke Test Checklist
+
+- AI Intake still requires de-identification confirmation before analysis: PASS by source inspection.
+- AI Intake still saves only after clinician accepts cards and clicks Apply accepted items: PASS by source inspection.
+- Accepted AI output still writes through existing patient/daily-note fields and does not create passive autosave behavior: PASS by source inspection.
+- AI review queue now prioritizes red flags, tasks, A/P, objective data, then generated briefs: PASS by source inspection.
+- JSON review cards have compact previews and can still enter edit mode before accepting: PASS by source inspection.
+- Board Admission Brief no longer renders duplicate active plan blocks in compact mode: PASS by source inspection.
+- Board Admission Brief limits summary preview to reduce card crowding while detail view keeps fuller AI clinical brief content: PASS by source inspection.
+- Admission Brief form surfaces generated admission summary through the main summary field when the reviewed summary is blank: PASS by source inspection.
+
+### Known Limitations
+
+- This verification did not call the OpenAI API; final classification quality depends on the deployed model following the stricter prompt.
+- Browser plugin automation was unavailable in this session because the required Node REPL browser tool was not exposed; rendered verification used build plus source inspection.
+- No real Firebase login or real patient data was used during verification.
+- Very long generated admission summaries still require clinician editing before saving/printing.
+- `vite-dev.log` remains a local modified log file and is intentionally excluded from commits.
+
+### Firebase Schema Safety
+
+- No Firestore collection path, field name, rules file, Firebase schema, or patient persistence service was destructively changed.
+- The change updates prompts and rendering only, while preserving existing fields such as `generatedAdmissionSummary`, `admissionBriefFreeText`, `generatedSbarNote`, `assessmentPlanItems`, `tasks`, and daily-note fields.
+- AI draft storage remains in the existing `aiDrafts` flow.
+
+### Git Branch / Status Before Push
+
+- Working branch: `overnight-product-polish`.
+- Intended commit files for this AI classification/layout update: `OVERNIGHT_LOG.md`, `functions/src/index.ts`, `src/components/AiIntakePanel.tsx`, `src/components/AiHighlightsPanel.tsx`, `src/components/AdmissionBriefForm.tsx`, `src/styles/global.css`.
+- Intentionally excluded local file: `vite-dev.log`.
+- Main pre-push verification: pending merge to `main` and final `npm run build` on `main`.
+- Final expected branch/status immediately before `git push origin main`: pending.
