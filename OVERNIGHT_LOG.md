@@ -253,3 +253,5 @@ Objective: make Morning Cockpit a practical priority tool that shows who needs t
 - Working branch: `overnight-product-polish`.
 - Intended commit files for this Morning Cockpit update: `OVERNIGHT_LOG.md`, `src/pages/PatientBoardPage.tsx`, `src/styles/global.css`.
 - Intentionally excluded local file: `vite-dev.log`.
+- Main pre-push verification: `main` was fast-forwarded with the Morning Cockpit commit and repository-root `npm run build` passed on `main`.
+- Final expected branch/status immediately before `git push origin main`: `main...origin/main [ahead 2]`, with only local `vite-dev.log` modified and intentionally uncommitted.
