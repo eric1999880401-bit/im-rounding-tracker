@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { generateClinicalDocument } from "../firebase/aiService";
 import type { AiDocumentDraft, AiDocumentType, DailyNotesByPatient, Patient } from "../types";
 import { getAdmissionSummaryText, nowIso, todayKey } from "../utils";
+import { formatClinicalDocumentDraft, getClinicalDocumentSection } from "../clinicalDocumentFormat";
 
 const OTHER_PATIENT_ID = "__other_patient__";
 
@@ -23,9 +24,14 @@ const documentOptions: Array<{ value: AiDocumentType; label: string; helper: str
     helper: "Draft hospital course from admission data and SOAP history.",
   },
   {
+    value: "weeklySummary",
+    label: "Weekly summary",
+    helper: "One-click progress summary using the selected SOAP date range.",
+  },
+  {
     value: "isbar",
-    label: "iSBAR handoff",
-    helper: "Concise handoff with key prior course, today's status, red flags, pending tasks, and disposition.",
+    label: "SBAR handoff",
+    helper: "Situation, Background, Assessment, Recommendation handoff for clinically important updates.",
   },
 ];
 
@@ -35,11 +41,7 @@ function getErrorMessage(error: unknown) {
 }
 
 function sectionContent(draft: AiDocumentDraft | null, headings: string[]) {
-  if (!draft) return "";
-  const normalizedHeadings = headings.map((heading) => heading.toLowerCase());
-  return draft.sections.find((section) =>
-    normalizedHeadings.some((heading) => section.heading.toLowerCase().includes(heading)),
-  )?.content.trim() ?? "";
+  return getClinicalDocumentSection(draft, headings);
 }
 
 function normalizeParagraph(value: string) {
@@ -58,7 +60,7 @@ function ensureWeeklyOpening(value: string) {
     : `During this week, ${paragraph.charAt(0).toLowerCase()}${paragraph.slice(1)}`;
 }
 
-const isbarHeadings = ["Identify", "Situation", "Background", "Assessment", "Recommendation"] as const;
+const isbarHeadings = ["Situation", "Background", "Assessment", "Recommendation"] as const;
 
 function compactIsbarContent(value: string) {
   return value
@@ -192,7 +194,7 @@ function AiDocumentsPage({ patients, dailyNotesByPatient = {}, onSavePatient }: 
         deidentifiedConfirmed,
         storeRawText,
       });
-      const formatted = formatDocumentDraft(result.draft);
+      const formatted = formatClinicalDocumentDraft(result.draft);
       setDraft(result.draft);
       setDraftId(result.draftId);
       setModel(result.model);
@@ -234,9 +236,9 @@ function AiDocumentsPage({ patients, dailyNotesByPatient = {}, onSavePatient }: 
         nextPatient.admissionBriefFreeText = existingAdmissionSummary ? nextPatient.admissionBriefFreeText : summary;
         nextPatient.oneLiner = appendIfBlank(nextPatient.oneLiner, summary);
       }
-      nextPatient.chiefComplaint = appendIfBlank(nextPatient.chiefComplaint, sectionContent(draft, ["c.c", "cc", "chief"]));
+      nextPatient.chiefComplaint = appendIfBlank(nextPatient.chiefComplaint, getClinicalDocumentSection(draft, ["c.c", "cc", "chief"]));
       nextPatient.admissionChiefConcern = appendIfBlank(nextPatient.admissionChiefConcern, nextPatient.chiefComplaint);
-      nextPatient.presentIllnessOrHPI = appendIfBlank(nextPatient.presentIllnessOrHPI, sectionContent(draft, ["hpi", "pi", "present illness"]));
+      nextPatient.presentIllnessOrHPI = appendIfBlank(nextPatient.presentIllnessOrHPI, getClinicalDocumentSection(draft, ["hpi", "pi", "present illness"]));
       nextPatient.hpiOrAdmissionStory = appendIfBlank(nextPatient.hpiOrAdmissionStory, nextPatient.presentIllnessOrHPI);
     }
 

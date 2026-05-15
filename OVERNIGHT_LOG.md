@@ -324,3 +324,87 @@ Objective: reduce crowded AI/admission-brief surfaces and make AI intake classif
 - Intentionally excluded local file: `vite-dev.log`.
 - Main pre-push verification: `main` was fast-forwarded with the AI classification/layout commit and both repository-root `npm run build` and `functions/ npm run build` passed on `main`.
 - Final expected branch/status immediately before `git push origin main`: `main...origin/main [ahead 2]`, with only local `vite-dev.log` modified and intentionally uncommitted.
+
+## 2026-05-15 Detail Page Document Workflow Cleanup
+
+Objective: reduce clutter inside Patient Detail, generate an admission summary when a de-identified admission note is pasted, and add detail-page one-click Weekly Summary and SBAR generation using standard clinical formats.
+
+### Template References Used
+
+- AHRQ TeamSTEPPS SBAR: SBAR is structured as Situation, Background, Assessment, and Recommendation/Request.
+- IHI SBAR Tool: SBAR focuses on concise situation, pertinent background, assessment, and recommended/requested action.
+- SOAP/progress-note structure: weekly summaries follow clinically important subjective/objective changes, assessment, plan, pending items, and disposition rather than trivial daily repetition.
+
+### Changed Files
+
+- `src/components/AdmissionBriefForm.tsx`
+  - Added a de-identified admission-note paste box.
+  - When the checkbox is confirmed, pasting admission note text triggers admission-summary generation automatically.
+  - Added a manual `Generate summary` button for text pasted before confirmation.
+  - Keeps generated summary in the reviewed Admission Summary field; no raw pasted note is stored by default.
+  - Collapsed less frequently used initial H&P fields under `Structured H&P fields`.
+- `src/components/ClinicalDocumentQuickActions.tsx`
+  - Added detail-page one-click document actions for Weekly Summary and SBAR.
+  - Weekly Summary defaults to the last 7 days through the selected SOAP date.
+  - SBAR writes reviewed output to the existing `generatedSbarNote` field.
+- `src/clinicalDocumentFormat.ts`
+  - Centralized AI document formatting.
+  - SBAR output now uses four standard sections: Situation, Background, Assessment, Recommendation.
+  - Weekly Summary output now includes `Weekly Summary`, `Problem-Based A/P`, and `Pending / Disposition`.
+- `src/pages/PatientDetailPage.tsx`
+  - Added Clinical Documents above AI Intake in the detail `AI / Docs` tab.
+  - Preserved explicit review/save behavior before generated documents are persisted.
+- `src/pages/AiDocumentsPage.tsx`
+  - Restored Weekly Summary as an available AI document type.
+  - Renamed iSBAR wording to SBAR and routes formatting through the shared formatter.
+- `functions/src/index.ts`
+  - Updated backend document-generation instructions to match standard SBAR sections.
+  - Updated weekly-summary instructions to avoid daily-note noise and produce progress-summary style output.
+- `src/i18n.tsx`
+  - Renamed the detail AI tab to `AI / Docs` and the `More` tab to `Chart`.
+- `src/styles/global.css`
+  - Added compact layout for admission-note paste, collapsed H&P fields, and clinical document quick actions.
+
+### Build Result
+
+- `npm run build` passed in the repository root after the detail/document workflow changes.
+- `npm run build` passed in `functions/` after prompt changes.
+- `npm run lint` was attempted but no `lint` script exists in `package.json`.
+- `npm test` was attempted but no `test` script exists in `package.json`.
+- `git diff --check` passed with line-ending warnings only.
+- Build warning remains: Vite reports one bundle chunk larger than 500 kB. This is non-blocking and already deferred.
+
+### Smoke Test Checklist
+
+- Detail Admission Brief top-level UI is reduced to paste admission note, Admission Summary, CC, and HPI: PASS by source inspection.
+- Initial PMH, baseline, PE, labs, imaging, assessment, plan, and early course are still present but collapsed under `Structured H&P fields`: PASS by source inspection.
+- Pasting an admission note triggers generation only after de-identification is confirmed: PASS by source inspection.
+- Raw pasted admission note is kept in component state and is not written to patient data by default: PASS by source inspection.
+- Generated admission summary writes to existing `generatedAdmissionSummary` and reviewed `admissionBriefFreeText` draft fields only: PASS by source inspection.
+- Detail `AI / Docs` tab contains one-click Weekly Summary and SBAR generation: PASS by source inspection.
+- Weekly Summary uses existing daily notes over a 7-day selected-date range: PASS by source inspection.
+- SBAR format is Situation / Background / Assessment / Recommendation, consistent with AHRQ/IHI SBAR: PASS by source inspection and source reference.
+- Generated Weekly Summary and SBAR still require review and explicit Save before patient data is persisted: PASS by source inspection.
+- AI Documents page also exposes Weekly Summary and SBAR with shared formatting: PASS by source inspection.
+
+### Known Limitations
+
+- This verification did not call the OpenAI API; final generation quality depends on the deployed model following the stricter prompt.
+- Browser plugin automation was unavailable because the Node REPL browser tool was not exposed in this session; rendered verification used build plus source inspection.
+- No real Firebase login or real patient data was used during verification.
+- Weekly Summary uses a default 7-day range in Patient Detail; custom date range remains available on the AI Documents page.
+- `vite-dev.log` remains a local modified log file and is intentionally excluded from commits.
+
+### Firebase Schema Safety
+
+- No Firestore collection path, field name, rules file, Firebase schema, or patient persistence service was destructively changed.
+- New document actions write only existing fields: `generatedAdmissionSummary`, `admissionBriefFreeText`, `generatedWeeklySummary`, and `generatedSbarNote`.
+- AI draft storage remains in the existing `aiDrafts` flow.
+
+### Git Branch / Status Before Push
+
+- Working branch: `overnight-product-polish`.
+- Intended commit files for this detail/document workflow update: `OVERNIGHT_LOG.md`, `functions/src/index.ts`, `src/clinicalDocumentFormat.ts`, `src/components/AdmissionBriefForm.tsx`, `src/components/ClinicalDocumentQuickActions.tsx`, `src/i18n.tsx`, `src/pages/AiDocumentsPage.tsx`, `src/pages/PatientDetailPage.tsx`, `src/styles/global.css`.
+- Intentionally excluded local file: `vite-dev.log`.
+- Main pre-push verification: pending merge to `main` and final `npm run build` on `main`.
+- Final expected branch/status immediately before `git push origin main`: pending.

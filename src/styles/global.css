@@ -952,6 +952,55 @@ input[type="checkbox"] {
   margin-top: 10px;
 }
 
+.admission-auto-summary {
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+}
+
+.admission-note-paste {
+  min-height: 150px;
+}
+
+.admission-structured-details {
+  border-top: 1px solid var(--border);
+  display: grid;
+  gap: 10px;
+  padding-top: 8px;
+}
+
+.admission-structured-details > summary {
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.compact-form-grid {
+  margin-top: 10px;
+}
+
+.clinical-doc-quick-actions {
+  display: grid;
+  gap: 12px;
+}
+
+.clinical-doc-action-grid {
+  align-items: center;
+  display: grid;
+  gap: 10px 14px;
+  grid-template-columns: minmax(190px, max-content) minmax(0, 1fr);
+}
+
+.clinical-doc-editor {
+  min-height: 220px;
+}
+
 .auto-summary-panel {
   background: var(--surface-muted);
   border: 1px solid var(--border);
@@ -3089,6 +3138,7 @@ tbody tr:last-child td {
   }
 
   .form-grid,
+  .clinical-doc-action-grid,
   .patient-board-card-body,
   .rounds-detail-grid,
   .rounds-quick-order,

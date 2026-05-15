@@ -389,7 +389,7 @@ function makePrompt(sourceType: SourceType, rawText: string, patientContext: Rec
     "- Prioritize: why admitted, important PMH, active problems, major prior hospital course, today's meaningful updates, tasks/pending items/red flags, key labs/images/antibiotics/procedures/consults/disposition.",
     "- Keep all output concise and scannable. Use common IM abbreviations when unambiguous.",
     "- admissionSummary: 3-4 compact attending-rounds sentences. Include admission reason, PMH/context, major course, current active problems, today/pending/dispo. Leave empty only if the pasted text has no admission/course context.",
-    "- isbarHandoff: concise iSBAR with headings exactly Identify, Situation, Background, Assessment, Recommendation. Include red flags, pending tasks, contingency/call parameters, and disposition. Leave empty only if there is too little patient context.",
+    "- isbarHandoff: concise SBAR with headings exactly Situation, Background, Assessment, Recommendation. Include red flags, pending tasks, contingency/call parameters, and disposition. Leave empty only if there is too little patient context.",
     "- For vitals/lab/image-only source types, do not fabricate admissionSummary or isbarHandoff from isolated data; leave those fields empty unless the pasted text includes enough broader context.",
     "",
   ].join("\n");
@@ -520,7 +520,7 @@ function documentTypeLabel(documentType: DocumentType) {
     admissionSummary: "Admission summary for quick attending rounds",
     dischargeHospitalCourse: "Discharge hospital course",
     weeklySummary: "Weekly progress summary",
-    isbar: "iSBAR handoff note",
+    isbar: "SBAR handoff note",
   };
   return labels[documentType];
 }
@@ -531,7 +531,7 @@ function documentInstructions(documentType: DocumentType) {
     "Do not invent missing data; mark absent or unclear details in uncertainty.",
     "Preserve dates, lab values, units, medication names, image findings, and pending items exactly when available.",
     "Use de-identified content only; do not repeat names, full MRNs, IDs, birthday, phone, address, or identifiable image details.",
-    "Do not use bullet lists unless the requested document type is iSBAR.",
+    "Do not use bullet lists unless the requested document type is SBAR or weekly summary A/P.",
   ];
 
   const byType: Record<DocumentType, string[]> = {
@@ -560,22 +560,24 @@ function documentInstructions(documentType: DocumentType) {
       "Keep followUpItems empty unless an item is critical to mention separately.",
     ],
     weeklySummary: [
-      "Return exactly one section with heading Weekly Summary.",
-      "The content must start exactly with: During this week,",
-      "Write one paragraph only, not bullet points.",
-      "Summarize the selected SOAP notes chronologically with key changes, response to treatment, pending issues, and current plan.",
-      "Keep followUpItems empty unless an item is critical to mention separately.",
+      "Return exactly three sections in this order: Weekly Summary, Problem-Based A/P, Pending / Disposition.",
+      "Weekly Summary content must start exactly with: During this week,",
+      "Weekly Summary is one compact paragraph summarizing the selected SOAP notes chronologically with key changes and response to treatment.",
+      "Problem-Based A/P should follow progress-note/SOAP logic: active problems only, short assessment plus concrete plan; omit stable inactive problems.",
+      "Pending / Disposition should include pending labs/images/consults, discharge barriers, target disposition, and follow-up needs.",
+      "Exclude trivial normal daily updates and copied full lab panels unless they changed management.",
+      "Use followUpItems only for critical pending items not already captured in Pending / Disposition.",
     ],
     isbar: [
-      "Return exactly five sections in this exact order: Identify, Situation, Background, Assessment, Recommendation.",
+      "Return exactly four sections in this exact order: Situation, Background, Assessment, Recommendation.",
+      "Follow the standard SBAR pattern: current situation, pertinent background, clinical assessment, and requested/recommended action.",
       "Target total length: 8-12 short clinical lines, under 180 words when possible.",
-      "Identify: one line with bed/code if available, age/sex, attending/service if relevant, primary Dx/current working Dx; never use name, full MRN, birthday, phone, address, or ID.",
-      "Situation: one or two lines describing why the patient needs handoff now and the current clinical status.",
+      "Situation: include bed/code if available, age/sex, attending/service if relevant, current working Dx, why handoff is needed now, and current status; never use name, full MRN, birthday, phone, address, or ID.",
       "Background: include only high-yield PMH, important prior hospital events, key procedures, antibiotics, consults, and major image/lab findings that matter for handoff.",
       "Assessment: include active problems, severity, red flags, and key abnormal objective data requiring attention.",
       "Recommendation: include overnight/today tasks, pending labs/images/consults, contingency plans, call thresholds, discharge/disposition plan, and what not to miss.",
       "Do not include routine normal data, duplicated diagnosis paragraphs, generic legal disclaimers, empty sections, long admission-note prose, copied full lab panels, or low-signal stable daily updates.",
-      "Put pending tasks and uncertainty inside Recommendation when possible; use followUpItems or uncertainty only if a critical item does not fit in the five sections.",
+      "Put pending tasks and uncertainty inside Recommendation when possible; use followUpItems or uncertainty only if a critical item does not fit in the four sections.",
     ],
   };
 
@@ -682,7 +684,7 @@ export const analyzeClinicalText = onCall(
               "Keep all SOAP-facing text concise and easy to scan for inpatient IM rounds.",
               "Always also return admissionSummary and isbarHandoff for pasted admission, mixed, progress, consult, nursing, or daily-update chart text when enough context exists.",
               "admissionSummary must be attending-ready: why admitted, important PMH/context, major hospital course, current active problems, today/pending/disposition, in 3-5 compact sentences.",
-              "isbarHandoff must use headings Identify, Situation, Background, Assessment, Recommendation, with contingency plans, pending tasks, red flags, and call parameters when available.",
+              "isbarHandoff must use headings Situation, Background, Assessment, Recommendation, with contingency plans, pending tasks, red flags, and call parameters when available.",
               "Assume the reviewer slept 3 hours and has seconds per patient: use telegraphic clinical fragments, not polished prose.",
               "Use the allowed patient context only to judge relevance and importance. Do not convert context-only facts into new SOAP draft items unless the pasted text explicitly supports them.",
               "For sourceType dailyUpdate, behave like a delta updater: compare pasted text against context and output only clinically meaningful new/changed items.",

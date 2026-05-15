@@ -8,6 +8,7 @@ import TaskList from "../components/TaskList";
 import AiIntakePanel from "../components/AiIntakePanel";
 import { AiHighlightsPanel } from "../components/AiHighlightsPanel";
 import { BoardSignalPanel } from "../components/BoardSignalPanel";
+import ClinicalDocumentQuickActions from "../components/ClinicalDocumentQuickActions";
 import { ClinicalText } from "../components/ClinicalText";
 import LabHistoryPanel from "../components/LabHistoryPanel";
 import ActiveProblemEditor from "../components/ActiveProblemEditor";
@@ -773,11 +774,23 @@ function PatientDetailPage({
       )}
 
       {activeTab === "aiIntake" && (
-        <AiIntakePanel
-          patient={currentPatient}
-          selectedDate={selectedDate}
-          onApplyPatient={applyAiIntakePatient}
-        />
+        <div className="detail-update-stack">
+          <ClinicalDocumentQuickActions
+            patient={currentPatient}
+            notes={patientNotes}
+            selectedDate={selectedDate}
+            onSavePatient={async (nextPatient) => {
+              draftRef.current = nextPatient;
+              setDraftPatient(nextPatient);
+              await commitDraft(nextPatient);
+            }}
+          />
+          <AiIntakePanel
+            patient={currentPatient}
+            selectedDate={selectedDate}
+            onApplyPatient={applyAiIntakePatient}
+          />
+        </div>
       )}
 
       {activeTab === "more" && (
