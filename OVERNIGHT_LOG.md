@@ -100,3 +100,54 @@ Objective: simplify the printed rounding list by removing unnecessary crowded co
 - Intentionally excluded local file: `vite-dev.log`.
 - Main pre-push verification: `main` was fast-forwarded with the print-list commit and `npm run build` passed on `main`.
 - Final expected branch/status immediately before `git push origin main`: `main...origin/main [ahead 2]`, with only local `vite-dev.log` modified and intentionally uncommitted.
+
+## 2026-05-15 AI Document Format Simplification
+
+Objective: reduce unnecessary AI-generated document choices and make the iSBAR handoff concise, high-yield, and complete for internal medicine handover.
+
+### Changed Files
+
+- `src/pages/AiDocumentsPage.tsx`
+  - Removed lower-priority `Admission note` and `Weekly summary` options from the AI Documents selector so the UI focuses on high-yield document outputs.
+  - Changed the default AI document type to `iSBAR handoff`.
+  - Added a dedicated iSBAR formatter that outputs only `Identify`, `Situation`, `Background`, `Assessment`, and `Recommendation`.
+  - Normalizes iSBAR content into compact semicolon-separated handoff lines and folds pending/verify items into `Recommendation` instead of adding extra noisy sections.
+- `functions/src/index.ts`
+  - Tightened the iSBAR generation instructions to require the five iSBAR sections in order.
+  - Added target length guidance and section-specific content rules.
+  - Explicitly excludes routine normal data, duplicated diagnosis paragraphs, generic disclaimers, copied full labs, long admission-note prose, and low-signal stable updates.
+  - Requires key prior course, red flags, major lab/image findings, antibiotics/procedures/consults, pending tasks, call thresholds, and disposition when available.
+
+### Build Result
+
+- `npm run build` passed in the repository root after the AI document changes.
+- `npm run build` passed in `functions/` after the AI document prompt changes.
+- Build warning remains: Vite reports one bundle chunk larger than 500 kB. This is non-blocking and already deferred.
+
+### Smoke Test Checklist
+
+- AI Documents selector now shows the focused high-yield choices: admission summary, discharge hospital course, and iSBAR handoff: PASS by source inspection.
+- Default selected AI document is now iSBAR handoff: PASS by source inspection.
+- iSBAR formatter no longer prints generic title/summary/follow-up boilerplate: PASS by source inspection.
+- iSBAR output is constrained to the five expected handoff headings: PASS by source inspection.
+- Pending tasks and verification items are preserved by folding them into Recommendation: PASS by source inspection.
+- Backend prompt instructs the model to include prior important hospital events, red flags, major tests/treatments/consults, today's status, pending tasks, contingency plans, and disposition: PASS by source inspection.
+- Backend prompt instructs the model to omit routine normal data, copied full labs, duplicated diagnosis prose, and generic disclaimers: PASS by source inspection.
+
+### Known Limitations
+
+- This change does not call the OpenAI API during verification; output quality depends on the deployed model following the stricter prompt.
+- Hidden document types are still supported in TypeScript and backend code for compatibility, but no longer appear in the AI Documents UI.
+- iSBAR may still need clinician editing before saving; the UI continues to present an editable draft before writing to the patient record.
+
+### Firebase Schema Safety
+
+- No Firestore collection path, field name, rules file, Firebase schema, or patient persistence service was destructively changed.
+- The save behavior still writes reviewed iSBAR text to the existing `generatedSbarNote` field only.
+- Backend draft storage remains in the existing `aiDrafts` flow.
+
+### Git Branch / Status Before Push
+
+- Working branch: `overnight-product-polish`.
+- Intended commit files for this AI Documents update: `OVERNIGHT_LOG.md`, `src/pages/AiDocumentsPage.tsx`, `functions/src/index.ts`.
+- Intentionally excluded local file: `vite-dev.log`.

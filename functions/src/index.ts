@@ -548,10 +548,15 @@ function documentInstructions(documentType: DocumentType) {
       "Keep followUpItems empty unless an item is critical to mention separately.",
     ],
     isbar: [
-      "Create an iSBAR handoff note with headings: Identify, Situation, Background, Assessment, Recommendation.",
-      "Review previous events from admission and SOAP history, not only today's note.",
-      "If there were important prior events, red flags, complications, major image/lab findings, procedures, treatment changes, or pending discharge issues, include them in the most relevant iSBAR section.",
-      "Keep each section concise but action-focused, and include contingency plans, red flags to watch, pending tasks, disposition, and when to call senior/attending.",
+      "Return exactly five sections in this exact order: Identify, Situation, Background, Assessment, Recommendation.",
+      "Target total length: 8-12 short clinical lines, under 180 words when possible.",
+      "Identify: one line with bed/code if available, age/sex, attending/service if relevant, primary Dx/current working Dx; never use name, full MRN, birthday, phone, address, or ID.",
+      "Situation: one or two lines describing why the patient needs handoff now and the current clinical status.",
+      "Background: include only high-yield PMH, important prior hospital events, key procedures, antibiotics, consults, and major image/lab findings that matter for handoff.",
+      "Assessment: include active problems, severity, red flags, and key abnormal objective data requiring attention.",
+      "Recommendation: include overnight/today tasks, pending labs/images/consults, contingency plans, call thresholds, discharge/disposition plan, and what not to miss.",
+      "Do not include routine normal data, duplicated diagnosis paragraphs, generic legal disclaimers, empty sections, long admission-note prose, copied full lab panels, or low-signal stable daily updates.",
+      "Put pending tasks and uncertainty inside Recommendation when possible; use followUpItems or uncertainty only if a critical item does not fit in the five sections.",
     ],
   };
 

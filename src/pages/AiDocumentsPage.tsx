@@ -13,11 +13,6 @@ interface AiDocumentsPageProps {
 
 const documentOptions: Array<{ value: AiDocumentType; label: string; helper: string }> = [
   {
-    value: "admissionNote",
-    label: "Admission note",
-    helper: "Paste ED/OPD note, V/S, lab, imaging, consult, and nursing notes.",
-  },
-  {
     value: "admissionSummary",
     label: "Admission summary",
     helper: "Short attending-rounds presentation from admission data.",
@@ -28,14 +23,9 @@ const documentOptions: Array<{ value: AiDocumentType; label: string; helper: str
     helper: "Draft hospital course from admission data and SOAP history.",
   },
   {
-    value: "weeklySummary",
-    label: "Weekly summary",
-    helper: "Select a SOAP date range and summarize progress.",
-  },
-  {
     value: "isbar",
     label: "iSBAR handoff",
-    helper: "Generate Identify, Situation, Background, Assessment, Recommendation.",
+    helper: "Concise handoff with key prior course, today's status, red flags, pending tasks, and disposition.",
   },
 ];
 
@@ -68,6 +58,38 @@ function ensureWeeklyOpening(value: string) {
     : `During this week, ${paragraph.charAt(0).toLowerCase()}${paragraph.slice(1)}`;
 }
 
+const isbarHeadings = ["Identify", "Situation", "Background", "Assessment", "Recommendation"] as const;
+
+function compactIsbarContent(value: string) {
+  return value
+    .split(/\r?\n/)
+    .map((line) => line.replace(/^[-*•]\s*/, "").trim())
+    .filter(Boolean)
+    .join("; ")
+    .replace(/\s+/g, " ")
+    .replace(/\s*;\s*;\s*/g, "; ")
+    .trim();
+}
+
+function formatIsbarDraft(draft: AiDocumentDraft) {
+  const pending = draft.followUpItems.map(compactIsbarContent).filter(Boolean).join("; ");
+  const verify = draft.uncertainty.map(compactIsbarContent).filter(Boolean).join("; ");
+
+  return isbarHeadings
+    .map((heading) => {
+      const content = compactIsbarContent(sectionContent(draft, [heading]));
+      const recommendationExtras =
+        heading === "Recommendation"
+          ? [pending ? `Pending: ${pending}` : "", verify ? `Verify: ${verify}` : ""].filter(Boolean).join("; ")
+          : "";
+      const finalContent = [content, recommendationExtras].filter(Boolean).join("; ");
+      return finalContent ? `${heading}: ${finalContent}` : "";
+    })
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+}
+
 function formatDocumentDraft(draft: AiDocumentDraft) {
   if (draft.documentType === "admissionNote") {
     const cc = normalizeParagraph(sectionContent(draft, ["c.c", "cc", "chief"]));
@@ -91,6 +113,10 @@ function formatDocumentDraft(draft: AiDocumentDraft) {
 
   if (draft.documentType === "admissionSummary") {
     return normalizeParagraph(draft.conciseSummary || draft.sections.map((section) => section.content).join(" "));
+  }
+
+  if (draft.documentType === "isbar") {
+    return formatIsbarDraft(draft);
   }
 
   const lines = [
@@ -124,7 +150,7 @@ function selectedDocumentLabel(documentType: AiDocumentType) {
 function AiDocumentsPage({ patients, dailyNotesByPatient = {}, onSavePatient }: AiDocumentsPageProps) {
   const activePatients = patients.filter((patient) => patient.status === "active");
   const [patientId, setPatientId] = useState("");
-  const [documentType, setDocumentType] = useState<AiDocumentType>("admissionNote");
+  const [documentType, setDocumentType] = useState<AiDocumentType>("isbar");
   const [rawText, setRawText] = useState("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState(todayKey());
