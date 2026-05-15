@@ -98,3 +98,5 @@ Objective: simplify the printed rounding list by removing unnecessary crowded co
 - Working branch: `overnight-product-polish`.
 - Intended commit files for this print-list update: `OVERNIGHT_LOG.md`, `src/pages/PrintRoundingListPage.tsx`, `src/styles/print.css`.
 - Intentionally excluded local file: `vite-dev.log`.
+- Main pre-push verification: `main` was fast-forwarded with the print-list commit and `npm run build` passed on `main`.
+- Final expected branch/status immediately before `git push origin main`: `main...origin/main [ahead 2]`, with only local `vite-dev.log` modified and intentionally uncommitted.
