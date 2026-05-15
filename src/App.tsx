@@ -11,7 +11,7 @@ import SettingsPage from "./pages/SettingsPage";
 import UtilitiesPage from "./pages/UtilitiesPage";
 import AiDocumentsPage from "./pages/AiDocumentsPage";
 import AuthPage from "./pages/AuthPage";
-import { getUserName, useAuthUser } from "./firebase/auth";
+import { getUserName, signOutCurrentUser, useAuthUser } from "./firebase/auth";
 import { createPatient, deletePatient, saveDailyNote, subscribeToDailyNotes, subscribeToPatients, updatePatient } from "./firebase/patientService";
 import {
   deleteMiscTask,
@@ -257,7 +257,17 @@ function App() {
             />
           }
         />
-        <Route path="/settings" element={<SettingsPage preferences={preferences} onChange={setPreferences} />} />
+        <Route
+          path="/settings"
+          element={
+            <SettingsPage
+              preferences={preferences}
+              userName={getUserName(user)}
+              onChange={setPreferences}
+              onSwitchUser={signOutCurrentUser}
+            />
+          }
+        />
         <Route
           path="/utilities"
           element={

@@ -153,3 +153,52 @@ Objective: reduce unnecessary AI-generated document choices and make the iSBAR h
 - Intentionally excluded local file: `vite-dev.log`.
 - Main pre-push verification: `main` was fast-forwarded with the AI Documents commit and both repository-root `npm run build` and `functions/ npm run build` passed on `main`.
 - Final expected branch/status immediately before `git push origin main`: `main...origin/main [ahead 2]`, with only local `vite-dev.log` modified and intentionally uncommitted.
+
+## 2026-05-15 Product System Details
+
+Objective: add product-grade system details with better bilingual UI copy and clearer user switching/account handling.
+
+### Changed Files
+
+- `src/i18n.tsx`
+  - Added bilingual keys for current user, privacy note, sidebar expand/collapse, switch user, and Settings account labels.
+  - Improved Traditional Chinese navigation copy for AI Documents as `AI 文件`.
+- `src/components/AppLayout.tsx`
+  - Replaced the sidebar footer action label from generic sign-out wording to explicit `Switch user` / `切換使用者`.
+  - Localized sidebar expand/collapse tooltips and the privacy note.
+  - Changed the account label from a greeting to current-user terminology.
+- `src/pages/SettingsPage.tsx`
+  - Added an Account section showing the signed-in user and a `Switch user` button.
+  - Kept theme/language settings under a clearer Preferences heading.
+- `src/App.tsx`
+  - Passed current user display text and the existing safe sign-out action into Settings.
+
+### Build Result
+
+- `npm run build` passed on `overnight-product-polish` after the system-detail changes.
+- Build warning remains: Vite reports one bundle chunk larger than 500 kB. This is non-blocking and already deferred.
+
+### Smoke Test Checklist
+
+- Sidebar account label uses localized current-user wording instead of a casual greeting: PASS by source inspection.
+- Sidebar switch-user action uses localized `Switch user` / `切換使用者` copy and still calls the existing Firebase sign-out helper: PASS by source inspection.
+- Settings page shows an Account section with signed-in user and switch-user button: PASS by source inspection.
+- Settings page still preserves existing theme and language controls: PASS by source inspection.
+- No patient data save path or Firestore schema was changed: PASS by diff inspection.
+
+### Known Limitations
+
+- This change does not implement multi-account session storage; switching user signs out and returns to the login flow.
+- Browser smoke was not run with real Firebase login; verification used TypeScript/build plus source inspection.
+- `vite-dev.log` remains a local modified log file and is intentionally excluded from commits.
+
+### Firebase Schema Safety
+
+- No Firestore collection path, field name, rules file, Firebase schema, Firebase Functions file, or patient persistence service was changed.
+- User switching uses the existing `signOutCurrentUser` helper only.
+
+### Git Branch / Status Before Push
+
+- Working branch: `overnight-product-polish`.
+- Intended commit files for this system-detail update: `OVERNIGHT_LOG.md`, `src/App.tsx`, `src/components/AppLayout.tsx`, `src/i18n.tsx`, `src/pages/SettingsPage.tsx`.
+- Intentionally excluded local file: `vite-dev.log`.

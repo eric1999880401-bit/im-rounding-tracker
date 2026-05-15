@@ -152,8 +152,8 @@ function AppLayout({ userName, syncError }: AppLayoutProps) {
             type="button"
             className="sidebar-toggle"
             onClick={() => setCollapsed((value) => !value)}
-            aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-            title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+            aria-label={collapsed ? t("nav.expandSidebar") : t("nav.collapseSidebar")}
+            title={collapsed ? t("nav.expandSidebar") : t("nav.collapseSidebar")}
           >
             <IconChevron collapsed={collapsed} />
           </button>
@@ -162,7 +162,7 @@ function AppLayout({ userName, syncError }: AppLayoutProps) {
         <div className="sidebar-user" title={userName}>
           <span className="sidebar-user-avatar">{userName ? userName.slice(0, 1).toUpperCase() : "?"}</span>
           <span className="sidebar-user-text">
-            <span className="sidebar-user-greet">{t("app.greeting")}</span>
+            <span className="sidebar-user-greet">{t("app.currentUser")}</span>
             <span className="sidebar-user-name">{userName}</span>
           </span>
         </div>
@@ -183,14 +183,14 @@ function AppLayout({ userName, syncError }: AppLayoutProps) {
             type="button"
             className="secondary sign-out-button"
             onClick={signOutCurrentUser}
-            title={t("action.signOut")}
+            title={t("action.switchUser")}
           >
             <span className="nav-icon">
               <IconSignOut />
             </span>
-            <span className="nav-label">{t("action.signOut")}</span>
+            <span className="nav-label">{t("action.switchUser")}</span>
           </button>
-          <p className="sidebar-privacy">De-identified data only.</p>
+          <p className="sidebar-privacy">{t("app.privacyShort")}</p>
         </div>
       </aside>
 
