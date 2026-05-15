@@ -375,6 +375,7 @@ function PrintRoundingListPage({
     return compactList(
       [
         patient.oneLiner,
+        getAdmissionSummaryText(patient, { allowFallback: false }),
         patient.chiefComplaint || patient.admissionChiefConcern,
         patient.presentIllnessOrHPI || patient.hpiOrAdmissionStory,
       ],
@@ -544,12 +545,23 @@ function PrintRoundingListPage({
     }).assessmentPlan.replace(/\n/g, "; ");
   }
 
-  function fieldLine(label: string, value: ReactNode) {
+  function blockField(label: string, value: ReactNode) {
     if (value === null || value === undefined || value === false) return null;
     if (typeof value === "string" && !value.trim()) return null;
     return (
-      <div className="print-field-line">
+      <div className="print-block-field" key={label}>
         <strong>{label}:</strong> {value}
+      </div>
+    );
+  }
+
+  function sectionBox(title: string, items: ReactNode[]) {
+    const visibleItems = items.filter(Boolean);
+    if (visibleItems.length === 0) return null;
+    return (
+      <div className="print-section-box">
+        <div className="print-section-title">{title}</div>
+        {visibleItems}
       </div>
     );
   }
@@ -608,82 +620,77 @@ function PrintRoundingListPage({
           )}
         </div>
 
-        <table className="rounding-table">
-          <thead>
-            <tr>
-              <th>Bed</th>
-              <th>Pt / Team</th>
-              <th>Presentation / PMH</th>
-              <th>Course / Problems</th>
-              <th>Today S/O</th>
-              <th>Labs / Img / Tx</th>
-              <th>A/P / Tasks</th>
-              <th>DC / Safety</th>
-            </tr>
-          </thead>
-          <tbody>
-            {sectionPatients.map((patient) => {
-              const images = imageLines(patient);
-              return (
-                <tr className="patient-print-row" key={patient.id}>
-                  <td className="print-bed">{patient.bed || "-"}</td>
-                  <td>
-                    <strong>{patient.patientCode || "-"}</strong>
-                    <br />
-                    {patient.age || "-"}/{patient.sex || "-"}
-                    {patient.attending && <div>Att: {patient.attending}</div>}
-                    {patient.teamOrService && <div>Svc: {patient.teamOrService}</div>}
-                  </td>
-                  <td>
-                    {fieldLine("Dx", diagnosisSummary(patient))}
-                    {fieldLine("Brief", presentationSummary(patient))}
-                    {fieldLine("PMH", pmhSummary(patient) || riskSummary(patient))}
-                  </td>
-                  <td>
-                    {fieldLine("Course", courseSummary(patient))}
-                    {fieldLine("Active", activeProblemSummary(patient))}
-                    {fieldLine("Issues", issueSummary(patient))}
-                  </td>
-                  <td>
-                    {fieldLine("ON", compactText(patient.overnightEvent, printLimits().detailChars, 1))}
-                    {fieldLine("VS", importantObjectiveText(patient.vitalSigns, printLimits().chars, 1))}
-                    {fieldLine("BS", importantObjectiveText(patient.bloodSugar, printLimits().chars, 1))}
-                    {fieldLine("S", compactText(patient.subjectiveOrChiefConcern, printLimits().detailChars, printLimits().subjective))}
-                    {fieldLine("PE", peSummaryText(patient))}
-                  </td>
-                  <td>
-                    {fieldLine("Lab", renderPrintLabFocus(patient))}
-                    {images.length > 0 && fieldLine("Img", images.join("; "))}
-                    {fieldLine("Tx/Consult", careMilestoneText(patient))}
-                  </td>
-                  <td className="print-ap-cell">
-                    {fieldLine("A/P", assessmentPlanSummaryText(patient))}
-                    {fieldLine("Tasks", taskSummaryText(patient))}
-                  </td>
-                  <td>
-                    {patient.importantRedFlags.trim() && (
-                      <div className="print-red-flags">
-                        <strong>Red Flags:</strong> {allClinicalText(patient.importantRedFlags, printLimits().detailChars)}
-                      </div>
-                    )}
-                    {fieldLine("DC", patient.dischargeTargetDate)}
-                    {fieldLine("Plan", compactText(patient.dischargePlan, printLimits().dcChars, 1))}
-                    {fieldLine("Barrier", shortText(patient.dischargeBarriers, printLimits().dcChars))}
-                    <div className="print-field-line">
-                      <strong>DC prep:</strong> {dischargePrepText(patient)}
-                    </div>
-                    {fieldLine("VS order", compactText(patient.vsOrder, printLimits().dcChars, 1))}
-                  </td>
-                </tr>
-              );
-            })}
-            {sectionPatients.length === 0 && (
-              <tr>
-                <td colSpan={8}>No active patients selected for this print view.</td>
-              </tr>
-            )}
-          </tbody>
-        </table>
+        <div className="print-patient-list">
+          {sectionPatients.map((patient) => {
+            const images = imageLines(patient);
+            const redFlags = allClinicalText(patient.importantRedFlags, printLimits().detailChars);
+            const todayUpdate = compactList(
+              [patient.overnightEvent, patient.subjectiveOrChiefConcern].flatMap(clinicalItems),
+              printLimits().subjective,
+              printLimits().detailChars,
+            );
+            const objectiveSignals = [
+              importantObjectiveText(patient.vitalSigns, printLimits().chars, 1),
+              importantObjectiveText(patient.bloodSugar, printLimits().chars, 1),
+            ]
+              .filter(Boolean)
+              .join("; ");
+            const dischargeSummary = [
+              patient.dischargeTargetDate ? `Target ${patient.dischargeTargetDate}` : "",
+              compactText(patient.dischargePlan, printLimits().dcChars, 1),
+              patient.dischargeBarriers ? `Barrier: ${shortText(patient.dischargeBarriers, printLimits().dcChars)}` : "",
+            ]
+              .filter(Boolean)
+              .join("; ");
+
+            return (
+              <article className="print-patient-block" key={patient.id}>
+                <div className="print-patient-header">
+                  <span className="print-bed">{patient.bed || "-"}</span>
+                  <span>
+                    <strong>{patient.patientCode || "-"}</strong> {patient.age || "-"}/{patient.sex || "-"}
+                  </span>
+                  {patient.attending && <span>Att: {patient.attending}</span>}
+                  {patient.teamOrService && <span>Svc: {patient.teamOrService}</span>}
+                </div>
+
+                {redFlags && (
+                  <div className="print-red-flags">
+                    <strong>Red Flags:</strong> {redFlags}
+                  </div>
+                )}
+
+                <div className="print-summary-grid">
+                  {sectionBox("Clinical Picture", [
+                    blockField("Dx", diagnosisSummary(patient)),
+                    blockField("Brief", presentationSummary(patient)),
+                    blockField("PMH", pmhSummary(patient) || riskSummary(patient)),
+                    blockField("Active", activeProblemSummary(patient) || issueSummary(patient)),
+                    blockField("Course", courseSummary(patient)),
+                  ])}
+                  {sectionBox("Today / Results", [
+                    blockField("Today", todayUpdate),
+                    blockField("VS/BS", objectiveSignals),
+                    blockField("PE", peSummaryText(patient)),
+                    blockField("Lab", renderPrintLabFocus(patient)),
+                    images.length > 0 ? blockField("Img", images.join("; ")) : null,
+                    blockField("Tx/Consult", careMilestoneText(patient)),
+                  ])}
+                  {sectionBox("Plan / Tasks / DC", [
+                    blockField("A/P", assessmentPlanSummaryText(patient)),
+                    blockField("Tasks", taskSummaryText(patient)),
+                    blockField("Orders", compactText(patient.vsOrder, printLimits().dcChars, 1)),
+                    blockField("DC", dischargeSummary),
+                    blockField("Prep", dischargeSummary ? dischargePrepText(patient) : ""),
+                  ])}
+                </div>
+              </article>
+            );
+          })}
+          {sectionPatients.length === 0 && (
+            <div className="print-patient-empty">No active patients selected for this print view.</div>
+          )}
+        </div>
       </section>
     );
   }

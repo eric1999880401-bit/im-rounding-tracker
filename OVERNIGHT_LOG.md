@@ -45,3 +45,56 @@ Run target: stable production-ready MVP for IM Rounding Tracker before 2026-05-1
 - Intended commit files: `AGENTS.md`, `OVERNIGHT_LOG.md`, `src/i18n.tsx`, `src/styles/print.css`.
 - Intentionally excluded local file: `vite-dev.log`.
 - No Firebase schema files, patient data exports, `.env` files, or destructive data migrations are part of this change.
+
+## 2026-05-15 Print List Simplification
+
+Objective: simplify the printed rounding list by removing unnecessary crowded columns while preserving clinically important content, including prior important hospital events, investigations/treatment signals, today's updates, tasks, and miscellaneous print items.
+
+### Changed Files
+
+- `src/pages/PrintRoundingListPage.tsx`
+  - Replaced the 8-column print table with one compact patient block per patient.
+  - Grouped content into three clinical sections: `Clinical Picture`, `Today / Results`, and `Plan / Tasks / DC`.
+  - Kept bed, patient code, age/sex, attending, and service in the patient block header.
+  - Added the generated admission summary into the main print-list `Brief` source, not only the separate Admission Brief section.
+  - Preserved prior course, PMH, active problems, red flags, today updates, key vitals/sugar/PE, labs, imaging, treatment/consult cues, A/P, tasks, orders, discharge plan, and discharge preparation when discharge context exists.
+  - Removed default discharge-prep noise for patients without discharge date, discharge plan, or discharge barrier.
+- `src/styles/print.css`
+  - Updated the print patient block grid to three compact sections.
+  - Tightened print block spacing and added an empty-state style for no selected patients.
+
+### Build Result
+
+- `npm run build` passed on `overnight-product-polish` after the print-list changes.
+- Build warning remains: Vite reports one bundle chunk larger than 500 kB. This is already documented as a deferred code-splitting item and does not fail the build.
+
+### Smoke Test Checklist
+
+- Printed list uses compact patient blocks instead of the old crowded 8-column table: PASS.
+- Old table headers such as `Today S/O` and `DC / Safety` are not rendered: PASS.
+- Patient identifiers render: bed, patient code, age/sex, attending, service: PASS.
+- Admission brief summary appears in the main print list: PASS.
+- Important prior hospital course remains visible: PASS.
+- Today's update and objective signals remain visible: PASS.
+- Key labs, imaging, and treatment/consult signals remain visible: PASS.
+- Patient tasks, general miscellaneous print tasks, and discharge plan remain visible: PASS.
+- Red flags remain visible and emphasized: PASS.
+- No `+N more` overflow marker appears in the print smoke fixture: PASS.
+
+### Known Limitations
+
+- The smoke test used synthetic data and did not log into Firebase or touch real patient data.
+- Very long censuses or unusually long free-text notes can still continue beyond one printed page.
+- Structured medication/antibiotic, procedure, and consult fields remain deferred to avoid a risky Firebase schema change before MVP shipping.
+- The Vite bundle-size warning remains non-blocking.
+
+### Firebase Schema Safety
+
+- No Firebase schema, Firestore collection path, Firestore rules, Firebase Functions, or persistence service file was destructively changed.
+- This print-list change reads existing patient fields only and does not rename or migrate stored patient data.
+
+### Git Branch / Status Before Push
+
+- Working branch: `overnight-product-polish`.
+- Intended commit files for this print-list update: `OVERNIGHT_LOG.md`, `src/pages/PrintRoundingListPage.tsx`, `src/styles/print.css`.
+- Intentionally excluded local file: `vite-dev.log`.

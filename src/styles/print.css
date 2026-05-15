@@ -510,7 +510,7 @@
   break-inside: auto;
   color: black;
   display: grid;
-  gap: 3px;
+  gap: 2px;
   line-height: var(--print-line-height);
   padding: var(--print-cell-padding);
   page-break-inside: auto;
@@ -532,8 +532,8 @@
 
 .print-summary-grid {
   display: grid;
-  gap: 3px;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr);
+  gap: 2px;
+  grid-template-columns: minmax(0, 1.05fr) minmax(0, 1.1fr) minmax(0, 1fr);
 }
 
 .print-section-box {
@@ -569,6 +569,11 @@
 .print-block-field strong {
   font-size: var(--print-small-font-size);
   font-weight: 900;
+}
+
+.print-patient-empty {
+  font-size: var(--print-font-size);
+  padding: var(--print-cell-padding);
 }
 
 .print-red-flags-inline {
