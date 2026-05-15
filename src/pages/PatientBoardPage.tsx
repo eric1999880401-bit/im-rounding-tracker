@@ -70,6 +70,12 @@ function PatientBoardPage({
   const dischargeSoonPatients = activePatients
     .filter(hasDischargeSoonSignal)
     .slice(0, 6);
+  const morningPriorities = activePatients
+    .map((patient) => morningPriority(patient))
+    .sort((a, b) => b.score - a.score || a.patient.bed.localeCompare(b.patient.bed));
+  const morningQueue = morningPriorities.slice(0, 10);
+  const criticalCount = morningPriorities.filter((item) => item.level === "critical").length;
+  const todayCount = morningPriorities.filter((item) => item.level === "today").length;
 
   async function addPatient() {
     const now = nowIso();
@@ -222,6 +228,66 @@ function PatientBoardPage({
     return `DC prep pending: ${pending.join(" / ")}`;
   }
 
+  function uniqueMorningLines(lines: string[]) {
+    const seen = new Set<string>();
+    return lines
+      .map((line) => shortCockpitText(line, 82))
+      .filter(Boolean)
+      .filter((line) => {
+        const key = line.toLowerCase();
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+  }
+
+  function morningPriority(patient: Patient) {
+    const digest = boardDigest(patient);
+    const pending = pendingTasks(patient);
+    const urgentTasks = pending.filter((task) => task.priority === "urgent" || task.text.trim().startsWith("!"));
+    const urgentReasons = digest.urgentLines.slice(0, 3);
+    const newAdmission = patient.isNewAdmission || patient.showAdmissionBriefOnPrint;
+    const dischargeSoon = hasDischargeSoonSignal(patient);
+    const pendingDischarge = pendingDischargePrep(patient);
+    const hasObjectiveSignal = Boolean(digest.objective || digest.lab || digest.image);
+    const hasTodaySignal = Boolean(digest.subjective || hasObjectiveSignal);
+    const score =
+      urgentReasons.length * 35 +
+      urgentTasks.length * 24 +
+      Number(newAdmission) * 16 +
+      Number(dischargeSoon) * 14 +
+      Math.min(pending.length, 4) * 3 +
+      Number(hasObjectiveSignal) * 4 +
+      Number(hasTodaySignal) * 2;
+    const level = score >= 55 ? "critical" : score >= 24 ? "today" : "routine";
+    const reasons = uniqueMorningLines([
+      ...urgentReasons,
+      urgentTasks.length > 0 ? `${urgentTasks.length} urgent task${urgentTasks.length > 1 ? "s" : ""}` : "",
+      newAdmission ? "new admission / admission brief" : "",
+      dischargeSoon ? dischargeCockpitLine(patient) : "",
+      digest.lab ? `Lab: ${digest.lab.split(/\n/)[0]}` : "",
+      digest.image ? `Image: ${digest.image.split(/\n/)[0]}` : "",
+    ]).slice(0, 4);
+    const nextAction =
+      urgentTasks[0]?.text.replace(/^!+/, "").trim() ||
+      urgentReasons[0] ||
+      (dischargeSoon ? dischargeCockpitLine(patient) : "") ||
+      (newAdmission ? "review admission brief and active orders" : "") ||
+      pending[0]?.text.replace(/^!+/, "").trim() ||
+      "routine rounds";
+
+    return {
+      patient,
+      digest,
+      level,
+      score,
+      reasons,
+      nextAction: shortCockpitText(nextAction, 96),
+      pendingCount: pending.length,
+      urgentTaskCount: urgentTasks.length,
+    };
+  }
+
   async function updateDischargePrep(
     patient: Patient,
     field: "dischargeMedsStatus" | "opdAppointmentStatus" | "diagnosisCertificateStatus",
@@ -282,8 +348,60 @@ function PatientBoardPage({
 
       <section className="panel morning-cockpit">
         <div className="section-heading">
-          <h3>Morning Cockpit</h3>
+          <div>
+            <h3>Morning Cockpit</h3>
+            <p className="muted">Prioritize who needs eyes first, why, and the next action.</p>
+          </div>
           <span className="muted">{activePatients.length} active</span>
+        </div>
+        <div className="cockpit-summary-grid" aria-label="Morning priority summary">
+          <div className="cockpit-stat cockpit-stat-critical">
+            <strong>{criticalCount}</strong>
+            <span>See first</span>
+          </div>
+          <div className="cockpit-stat cockpit-stat-today">
+            <strong>{todayCount}</strong>
+            <span>Active today</span>
+          </div>
+          <div className="cockpit-stat">
+            <strong>{dischargeSoonPatients.length}</strong>
+            <span>DC prep</span>
+          </div>
+          <div className="cockpit-stat">
+            <strong>{activePatients.length}</strong>
+            <span>Total census</span>
+          </div>
+        </div>
+        <div className="morning-queue">
+          <div className="morning-queue-header">
+            <span>Priority Queue</span>
+            <span>Reason / next action</span>
+          </div>
+          {morningQueue.map((item) => (
+            <Link
+              className={`morning-queue-item priority-${item.level}`}
+              to={`/patients/${item.patient.id}`}
+              key={`morning-${item.patient.id}`}
+            >
+              <span className="cockpit-bed">{item.patient.bed || "-"}</span>
+              <span className="morning-queue-main">
+                <span className={`priority-pill priority-pill-${item.level}`}>
+                  {item.level === "critical" ? "See first" : item.level === "today" ? "Today" : "Routine"}
+                </span>
+                <strong>{item.digest.diagnosis || item.patient.primaryDiagnosis || item.patient.oneLiner || item.patient.patientCode || "-"}</strong>
+                <span className="morning-queue-meta">
+                  {item.patient.patientCode || "-"} / {item.patient.attending || t("board.unassigned")}
+                  {item.urgentTaskCount > 0 && ` / ${item.urgentTaskCount} urgent`}
+                  {item.pendingCount > 0 && ` / ${item.pendingCount} pending`}
+                </span>
+              </span>
+              <span className="morning-queue-reason">
+                {item.reasons.length > 0 ? item.reasons.join("; ") : "No high-risk signal"}
+                <strong>Next: {item.nextAction}</strong>
+              </span>
+            </Link>
+          ))}
+          {morningQueue.length === 0 && <span className="muted">No active patients selected.</span>}
         </div>
         <div className="cockpit-grid">
           {renderCockpitColumn("See First", mustSeePatients, "No red flags", "urgent")}

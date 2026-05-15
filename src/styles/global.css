@@ -1358,6 +1358,168 @@ tbody tr:last-child td {
   gap: 12px;
 }
 
+.cockpit-summary-grid {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.cockpit-stat {
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  display: grid;
+  gap: 2px;
+  padding: 10px 12px;
+}
+
+.cockpit-stat strong {
+  color: var(--text);
+  font-family: var(--font-serif);
+  font-size: 22px;
+  line-height: 1;
+}
+
+.cockpit-stat span {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.cockpit-stat-critical {
+  background: var(--danger-bg);
+  border-color: var(--danger-border);
+}
+
+.cockpit-stat-critical strong,
+.cockpit-stat-critical span {
+  color: var(--danger-text);
+}
+
+.cockpit-stat-today {
+  background: var(--alert-bg);
+  border-color: var(--alert-border);
+}
+
+.cockpit-stat-today strong,
+.cockpit-stat-today span {
+  color: var(--warning-text);
+}
+
+.morning-queue {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  display: grid;
+  overflow: hidden;
+}
+
+.morning-queue-header,
+.morning-queue-item {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(64px, auto) minmax(190px, 0.9fr) minmax(260px, 1.2fr);
+}
+
+.morning-queue-header {
+  background: var(--table-header-bg);
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  padding: 8px 10px;
+  text-transform: uppercase;
+}
+
+.morning-queue-header span:last-child {
+  grid-column: span 2;
+}
+
+.morning-queue-item {
+  align-items: start;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  color: var(--text);
+  padding: 9px 10px;
+  text-decoration: none;
+}
+
+.morning-queue-item:hover {
+  background: var(--surface-hover);
+}
+
+.morning-queue-item.priority-critical {
+  border-left: 4px solid var(--danger-text);
+}
+
+.morning-queue-item.priority-today {
+  border-left: 4px solid var(--warning-text);
+}
+
+.morning-queue-item.priority-routine {
+  border-left: 4px solid var(--border-strong);
+}
+
+.morning-queue-main,
+.morning-queue-reason {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.morning-queue-main strong,
+.morning-queue-reason {
+  overflow-wrap: anywhere;
+}
+
+.morning-queue-meta {
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.25;
+}
+
+.morning-queue-reason {
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.3;
+}
+
+.morning-queue-reason strong {
+  color: var(--accent);
+  font-size: 12px;
+}
+
+.priority-pill {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  display: inline-flex;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  line-height: 1;
+  padding: 4px 7px;
+  text-transform: uppercase;
+  width: fit-content;
+}
+
+.priority-pill-critical {
+  background: var(--danger-bg);
+  border-color: var(--danger-border);
+  color: var(--danger-text);
+}
+
+.priority-pill-today {
+  background: var(--alert-bg);
+  border-color: var(--alert-border);
+  color: var(--warning-text);
+}
+
+.priority-pill-routine {
+  background: var(--surface-muted);
+  color: var(--text-muted);
+}
+
 .cockpit-grid {
   display: grid;
   gap: 10px;
@@ -2806,6 +2968,10 @@ tbody tr:last-child td {
    ============================================================ */
 
 @media (max-width: 1180px) {
+  .cockpit-summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .patient-board-card-body {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -2858,6 +3024,16 @@ tbody tr:last-child td {
 
   .sidebar-toggle {
     display: none;
+  }
+
+  .cockpit-summary-grid,
+  .morning-queue-header,
+  .morning-queue-item {
+    grid-template-columns: 1fr;
+  }
+
+  .morning-queue-header span:last-child {
+    grid-column: auto;
   }
 
   .form-grid,

@@ -204,3 +204,52 @@ Objective: add product-grade system details with better bilingual UI copy and cl
 - Intentionally excluded local file: `vite-dev.log`.
 - Main pre-push verification: `main` was fast-forwarded with the system-detail commit and repository-root `npm run build` passed on `main`.
 - Final expected branch/status immediately before `git push origin main`: `main...origin/main [ahead 2]`, with only local `vite-dev.log` modified and intentionally uncommitted.
+
+## 2026-05-15 Morning Cockpit Priority Upgrade
+
+Objective: make Morning Cockpit a practical priority tool that shows who needs to be seen first, why, and what action is next.
+
+### Changed Files
+
+- `src/pages/PatientBoardPage.tsx`
+  - Added a computed Morning Priority Queue using the existing shared display-summary/read path.
+  - Scores patients by red flags, urgent tasks, new admission status, discharge readiness, pending tasks, and objective/lab/image signals.
+  - Shows each queued patient with severity (`See first`, `Today`, `Routine`), diagnosis, patient code, attending, urgent/pending counts, reason, and next action.
+  - Preserved the existing `See First`, `New Admits`, and `DC Soon` cockpit columns.
+- `src/styles/global.css`
+  - Added compact priority summary stat cards.
+  - Added queue layout, severity left rails, and severity pills.
+  - Added responsive behavior for tablet/mobile widths.
+
+### Build Result
+
+- `npm run build` passed on `overnight-product-polish` after the Morning Cockpit changes.
+- Build warning remains: Vite reports one bundle chunk larger than 500 kB. This is non-blocking and already deferred.
+
+### Smoke Test Checklist
+
+- Morning Cockpit renders a `Priority Queue` with reason and next-action columns: PASS.
+- Summary stats render for see-first, active-today, DC prep, and total census: PASS.
+- Critical red-flag patient is prioritized with `priority-critical`, visible red-flag reason, and urgent task next action: PASS.
+- New admission appears in the queue with admission-brief reason and review-admission next action: PASS.
+- Discharge-prep patient appears with discharge task/prep context: PASS.
+- Existing `See First`, `New Admits`, and `DC Soon` columns still render: PASS.
+- `git diff --check` passed with line-ending warnings only.
+
+### Known Limitations
+
+- Morning priority scoring is deterministic and heuristic-based; it may need tuning after real ward use.
+- Browser smoke with a live signed-in Firebase session was not run; verification used synthetic SSR rendering plus build.
+- The queue displays up to 10 active patients to keep the cockpit scan-friendly.
+- `vite-dev.log` remains a local modified log file and is intentionally excluded from commits.
+
+### Firebase Schema Safety
+
+- No Firestore collection path, field name, rules file, Firebase schema, Firebase Functions file, or patient persistence service was changed.
+- The cockpit reads existing patient/daily-note display summaries only and does not write patient data.
+
+### Git Branch / Status Before Push
+
+- Working branch: `overnight-product-polish`.
+- Intended commit files for this Morning Cockpit update: `OVERNIGHT_LOG.md`, `src/pages/PatientBoardPage.tsx`, `src/styles/global.css`.
+- Intentionally excluded local file: `vite-dev.log`.
