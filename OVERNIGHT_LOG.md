@@ -406,5 +406,5 @@ Objective: reduce clutter inside Patient Detail, generate an admission summary w
 - Working branch: `overnight-product-polish`.
 - Intended commit files for this detail/document workflow update: `OVERNIGHT_LOG.md`, `functions/src/index.ts`, `src/clinicalDocumentFormat.ts`, `src/components/AdmissionBriefForm.tsx`, `src/components/ClinicalDocumentQuickActions.tsx`, `src/i18n.tsx`, `src/pages/AiDocumentsPage.tsx`, `src/pages/PatientDetailPage.tsx`, `src/styles/global.css`.
 - Intentionally excluded local file: `vite-dev.log`.
-- Main pre-push verification: pending merge to `main` and final `npm run build` on `main`.
-- Final expected branch/status immediately before `git push origin main`: pending.
+- Main pre-push verification: `main` was fast-forwarded with the detail/document workflow commit and both repository-root `npm run build` and `functions/ npm run build` passed on `main`.
+- Final expected branch/status immediately before `git push origin main`: `main...origin/main [ahead 2]`, with only local `vite-dev.log` modified and intentionally uncommitted.
