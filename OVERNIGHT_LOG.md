@@ -202,3 +202,5 @@ Objective: add product-grade system details with better bilingual UI copy and cl
 - Working branch: `overnight-product-polish`.
 - Intended commit files for this system-detail update: `OVERNIGHT_LOG.md`, `src/App.tsx`, `src/components/AppLayout.tsx`, `src/i18n.tsx`, `src/pages/SettingsPage.tsx`.
 - Intentionally excluded local file: `vite-dev.log`.
+- Main pre-push verification: `main` was fast-forwarded with the system-detail commit and repository-root `npm run build` passed on `main`.
+- Final expected branch/status immediately before `git push origin main`: `main...origin/main [ahead 2]`, with only local `vite-dev.log` modified and intentionally uncommitted.
