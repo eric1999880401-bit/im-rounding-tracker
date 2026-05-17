@@ -616,6 +616,79 @@ try {
 }
 
 try {
+  const rawCancerTransfer = [
+    "Known right hypopharyngeal SCC cT4bN2bM0 s/p induction TPF, mid-lower esophageal SCC/obstructive dysphagia with J-tube.",
+    "Admitted after syncope/LOC with standing shock physiology; BP 54/29 improved after fluid challenge, felt hypovolemic.",
+    "Current 5/15 off-service note: weak, no fever. V/S T 37.0, BP 100/69, P 99, RR 16, SpO2 100%.",
+    "B/C peripheral MRSA then S. haemolyticus; Port-A B/C Enterococcus faecalis. Teicoplanin from 5/13.",
+    "Lab 5/15 WBC 12.7, Neu 88.9, Hb 9.4, Hct 27.7, Plt 259, Cr 0.46, eGFR 125.85.",
+    "Brain CT: diffuse atrophy; no ICH, edema, hydrocephalus or major infarct.",
+    "CT neck/chest 5/13: persistent mid-lower esophageal wall thickening, metastatic-appearing LAD, tiny lung nodules; no pleural effusion.",
+    "PE cachectic/weak, alert/clear, BS clear, Abd soft, J-tube feeding tolerated, no edema. DNR/all refused documented.",
+  ].join("\n");
+  const draft = {
+    id: "draft-cancer-transfer-messy",
+    status: "updateCandidate",
+    matchPatientId: "demo-cancer-transfer",
+    sourceIndex: 0,
+    bed: "H5-113",
+    patientCode: "DEMO-SCC",
+    age: "51",
+    sex: "M",
+    attending: "Dr Demo",
+    teamOrService: "Onc/INF",
+    primaryDiagnosis: "esophageal cancer",
+    oneLiner: "Esophageal SCC w/ shock syncope\nMRSA + Enterococcus bacteremia\nmalnutrition/J-tube\nanemia\nprior neuro change r/o ICH",
+    chiefComplaint: "syncope, bacteremia",
+    todayUpdates: "weak, no fever; DNR/all refused documented",
+    vitalSigns: "5/15 T 37.0, BP 100/69, P 99, RR 16, SpO2 100%",
+    physicalExam: "Cachectic, weak; alert/clear; BS clear; abd soft, NT, J-tube feeding tolerated; no edema",
+    labText: "5/15 WBC 12.7, Neu 88.9, Hb 9.4, Hct 27.7, Plt 259, Cr 0.46, eGFR 125.85",
+    imageText: "Brain CT no ICH/edema/major infarct. CT neck/chest persistent esophageal wall thickening, metastatic LAD, tiny lung nodules.",
+    admissionSummary:
+      "Known hypopharyngeal/esophageal SCC with J-tube, admitted after syncope/LOC with initial shock that improved after fluids. Current issues are MRSA/Enterococcus bacteremia on teicoplanin, anemia, nutrition via J-tube, and metastatic LAD follow-up.",
+    underlyingDiseases: "right hypopharyngeal SCC; mid-lower esophageal SCC; s/p induction TPF; J-tube",
+    activeProblems:
+      "Bacteremia / infection Heme/Onc safety Stroke / neuro deficit UGIB / anemia Cardio / HF / rhythm Hypovolemia/shock syncope Malnutrition/PO intolerance with J-tube feeding\nBacteremia / infection\nHeme/Onc safety\nStroke / neuro deficit\nUGIB / anemia\nCardio / HF / rhythm",
+    hospitalCourseHighlights: "ED shock responded to IV fluids. Teicoplanin 5/13-. Feeding jejunostomy. CT neck/chest follow-up.",
+    importantRedFlags:
+      "Recurrent hypotension/syncope, fever, rising WBC, worsening mental status, or inability to obtain repeat Cx. DNR/all refused documented.\n!Possible sepsis/shock physiology - Reason: Infection trigger with shock, hypotension, vasopressor or high lactate signal.\n!High-risk cardiac signal - Reason: ACS/troponin, RVR, shock or pulmonary edema signal requires explicit handoff.\n!Active bleeding or severe anemia signal - Reason: Bleeding/Hb signal requires handoff of hemodynamics, transfusion and scope plan.\n!Febrile neutropenia safety signal - Reason: Cancer/immunosuppression with fever/neutropenia requires urgent culture/Abx/isolation review.",
+    tasks: [
+      { text: "f/u pending blood cultures from 5/15", priority: "urgent", dueDate: "", category: "lab" },
+      { text: "Continue teicoplanin for MRSA bacteremia / Enterococcus infection", priority: "normal", dueDate: "", category: "order" },
+      { text: "f/u neuro change, swallow screen, antithrombotic/statin and brain/vascular imaging plan", priority: "normal", dueDate: "", category: "order" },
+      { text: "track volume/O2 status, I/O/diuresis response, ECG/troponin or rate-control plan if present", priority: "normal", dueDate: "", category: "order" },
+      { text: "trend Hb/V/S; confirm PPI, EGD timing, transfusion/T&S and antithrombotic hold-resume", priority: "normal", dueDate: "", category: "lab" },
+      { text: "f/u CBC diff/ANC, fever curve, Cx/Abx, isolation need", priority: "normal", dueDate: "", category: "consult" },
+      { text: "f/u pathology/staging; review VTE/bleed risk", priority: "normal", dueDate: "", category: "other" },
+    ],
+    antibioticsProceduresConsults: ["Teicoplanin 5/13-", "J-tube", "CT neck/chest"],
+    dischargePlan: "Inpatient ward; discharge once bacteremia/infection and hemodynamics stabilized.",
+    disposition: "Inpatient ward",
+    uncertainty: [],
+    sourceExcerpt: rawCancerTransfer,
+  };
+  const reviewed = applyClinicalKnowledgeToPatientImportDraft(draft, { targetUpdate: true });
+  const noisyText = `${reviewed.activeProblems}\n${reviewed.importantRedFlags}\n${reviewed.tasks.map((task) => task.text).join("\n")}`;
+  if (/Stroke \/ neuro deficit|UGIB \/ anemia|Cardio \/ HF \/ rhythm|Hypovolemia\/shock|Heme\/Onc safety|Possible sepsis\/shock|High-risk cardiac|Active bleeding|Febrile neutropenia|transfusion\/T&S|antithrombotic\/statin/i.test(noisyText)) {
+    throw new Error(`messy rule labels leaked into reviewed import draft:\n${noisyText}`);
+  }
+  assertDocumentIncludes(reviewed.activeProblems, /MRSA\/Enterococcus bacteremia/i, "reviewed import should keep bacteremia as active problem");
+  assertDocumentIncludes(reviewed.activeProblems, /SCC|J-tube|anemia/i, "reviewed import should keep cancer nutrition/anemia issues");
+  if (reviewed.activeProblems.split(/\r?\n/).filter(Boolean).length > 4) {
+    throw new Error(`active problems still too crowded:\n${reviewed.activeProblems}`);
+  }
+  if (reviewed.tasks.length > 8) {
+    throw new Error(`reviewed import kept too many tasks: ${reviewed.tasks.length}`);
+  }
+  console.log("PASS Cancer transfer import suppresses stale shock/no-ICH false rule clutter");
+  supplementalPasses += 1;
+} catch (error) {
+  failures.push({ name: "Cancer transfer import suppresses stale shock/no-ICH false rule clutter", error: error instanceof Error ? error.message : String(error) });
+  console.error(`FAIL Cancer transfer import suppresses stale shock/no-ICH false rule clutter: ${failures[failures.length - 1].error}`);
+}
+
+try {
   const rawTransferText = [
     "51M with hypopharyngeal/esophageal SCC, admitted after syncope and conscious disturbance.",
     "ED course: vital signs revealed shock with BP 54/29 mmHg. After fluid challenge, BP recovered and hypovolemia was impressed.",

@@ -298,6 +298,17 @@ function latestBloodPressure(text: string) {
   return { sbp: Number(last[1]), dbp: Number(last[2]) };
 }
 
+function hasCurrentStableBloodPressure(text: string) {
+  const stable = (sbp: number, dbp: number) => sbp >= 90 && dbp >= 50;
+  for (const match of text.matchAll(/\b(?:current|today|latest|now|v\/s|vs|vital signs?|off service note|on arrival|transfer)\b[\s\S]{0,160}\bbp\s*:?\s*(\d{2,3})\s*\/\s*(\d{2,3})\b/gi)) {
+    if (stable(Number(match[1]), Number(match[2]))) return true;
+  }
+  for (const match of text.matchAll(/\bbp\s*:?\s*(\d{2,3})\s*\/\s*(\d{2,3})\b[\s\S]{0,100}\b(?:stable|recovered|improved|off pressor|no hypotension)\b/gi)) {
+    if (stable(Number(match[1]), Number(match[2]))) return true;
+  }
+  return false;
+}
+
 function maxNumberAfter(pattern: RegExp, text: string) {
   let max: number | null = null;
   for (const match of text.matchAll(pattern)) {
@@ -330,7 +341,9 @@ function hasResolvedHemodynamicShock(text: string) {
   const currentBpStable = Boolean(latestBp && latestBp.sbp >= 90 && latestBp.dbp >= 50);
   const recoveryPhrase =
     /(after\s+fluid\s+challenge[\s\S]{0,180}(?:bp|blood pressure)\s+(?:recovered|improved)|(?:bp|blood pressure)\s+(?:recovered|improved)|shock\s+(?:resolved|improved)|(?:resolved|improved)[^.]{0,50}\bshock|off\s+(?:pressor|norepi)|pressor\s+off|norepi\s+(?:stopped|off)|fluid[- ]responsive|hypovolemia\s+(?:was\s+)?impressed|no\s+hypotension)/i.test(text);
-  return currentBpStable && recoveryPhrase;
+  const resolvedCoursePhrase =
+    /\b(?:initial|ed|prior|previous|past|5\/7|2026-\d{2}-\d{2})\b[\s\S]{0,80}\b(?:shock|hypotension)|shock\s+after\s+syncope|syncope\/loc[\s\S]{0,80}\bshock|responded\s+to\s+iv\s+fluids?/i.test(text);
+  return (currentBpStable || hasCurrentStableBloodPressure(text)) && (recoveryPhrase || resolvedCoursePhrase);
 }
 
 function hasUnresolvedShockSignal(text: string) {
@@ -530,14 +543,24 @@ function applyNeuroRules(plan: GeneratedClinicalPlan, text: string) {
   const { maxSbp, maxDbp } = maxBloodPressure(text);
   const hasIchSignal =
     /\b(ich|intracranial hemorrhage|hemorrhagic)\b/i.test(text) &&
-    !/\b(?:no|without|w\/o)\s+(?:ich|intracranial hemorrhage|hemorrhage)\b/i.test(text);
+    !/\b(?:no|without|w\/o|negative for|r\/o|rule out)\s+(?:ich|intracranial hemorrhage|hemorrhage)\b/i.test(text);
   const hasReperfusionOrIch = /\b(tpa|tnk|alteplase|thrombolysis|thrombectomy|evt)\b/i.test(text) || hasIchSignal;
 
   const hasAcuteNeuroWorsening =
     /\b(?:decreased consciousness|coma|seizure|new weakness|aphasia|new focal|acute neuro)\b/i.test(text) ||
     /\b(?:worse|worsening|progress|declin)[^.]{0,40}\b(?:weakness|aphasia|dysarthria|consciousness|focal|nihss|stroke|seizure)\b/i.test(text);
+  const hasStrokeLikeContext =
+    /\b(?:ais|acute ischemic stroke|subacute stroke|recent stroke|new stroke|tia|nihss|thrombectomy|evt|alteplase|tnk|thrombolysis|aphasia|hemiplegia|facial droop|new focal|neuro deficit|stroke protocol|stroke survey|brain infarct)\b/i.test(text);
+  const hasObstructiveGiDysphagia =
+    /\b(?:esophageal|oesophageal|hypopharyngeal|pharyngeal|obstructive|tumou?r|scc|j-?tube|feeding jejunostomy)\b[\s\S]{0,80}\bdysphagia\b|\bdysphagia\b[\s\S]{0,80}\b(?:esophageal|oesophageal|hypopharyngeal|pharyngeal|obstructive|tumou?r|scc|j-?tube|feeding jejunostomy)\b/i.test(text);
+  const hasNeuroSwallowSignal =
+    /\b(?:dysphagia|swallow screen|aspiration risk)\b/i.test(text) &&
+    !hasObstructiveGiDysphagia &&
+    /\b(?:ais|acute ischemic stroke|recent stroke|new stroke|tia|brain infarct|aphasia|dysarthria|facial droop|hemip|new focal|swallow screen)\b/i.test(text) &&
+    !/\b(?:old|prior|remote)\s+(?:cva|stroke|lacunar infarct|brain infarct)\b/i.test(text);
   const hasActiveStrokeOrNeuroCare =
-    /\b(?:ais|acute ischemic stroke|subacute stroke|recent stroke|new stroke|tia|nihss|thrombectomy|evt|alteplase|tnk|thrombolysis|dysphagia|aphasia|hemiplegia|facial droop|new weakness|new focal|neuro deficit|stroke protocol|stroke survey|brain infarct)\b/i.test(text) ||
+    hasStrokeLikeContext ||
+    hasNeuroSwallowSignal ||
     hasReperfusionOrIch ||
     hasAcuteNeuroWorsening;
   if (!hasActiveStrokeOrNeuroCare) return;
@@ -630,7 +653,10 @@ function applyCardioRules(plan: GeneratedClinicalPlan, text: string) {
       ? "review HFrEF GDMT readiness/contraindications before DC; defer or adjust ACEi/ARB/ARNI, BB, SGLT2i, MRA if hypotension, AKI, hyperK or shock"
       : "review HFrEF GDMT before DC: ACEi/ARB/ARNI, evidence BB, SGLT2i, MRA as tolerated"
     : "";
-  if (/chest pain|stemi|nstemi|acs|troponin.*(rise|up|elevat)|rvr|pulmonary edema|respiratory failure/i.test(text) || unresolvedShockSignal) {
+  const highRiskCardioSignal = /chest pain|stemi|nstemi|acs|troponin.*(rise|up|elevat)|rvr|pulmonary edema|respiratory failure/i.test(text) || unresolvedShockSignal;
+  const activeCardioSignal = highRiskCardioSignal || hasHfrEf || /\b(?:afib|atrial fibrillation|af\s+with\s+rvr|rapid ventricular)\b/i.test(text);
+  if (!activeCardioSignal && !gdmtPlan) return;
+  if (highRiskCardioSignal) {
     appendRedFlag(plan, "High-risk cardiac signal", "ACS/troponin, RVR, shock or pulmonary edema signal requires explicit handoff.", "urgent", refs);
   }
   appendTask(plan, "track volume/O2 status, I/O/diuresis response, ECG/troponin or rate-control plan if present", "order", "Cardio/HF handoff must keep volume, renal/electrolyte and rhythm/ischemia tasks visible.", refs);
@@ -700,7 +726,7 @@ function applyPulmRules(plan: GeneratedClinicalPlan, text: string) {
   const refs = clinicalKnowledgePacks.find((pack) => pack.id === "pulm-o2-pna-copd-pe")?.sourceRefs ?? [sourceRefs.localInpatient];
   const minSpo2 = minNumberAfter(/\b(?:spo2|sat)\s*[:=]?\s*(\d{2,3})/gi, text);
   const pco2 = maxNumberAfter(/\b(?:pco2|co2)\s*[:=]?\s*(\d{2,3})/gi, text);
-  const peConcern = /\b(?:pe|pulmonary embol|ctpa|v\/q|d-dimer|ddimer|rv strain)\b/i.test(text) && !/\b(?:no|without|negative for|r\/o negative)\s+(?:pe|pulmonary embol)/i.test(text);
+  const peConcern = /\b(?:pulmonary embol|ctpa|v\/q|d-dimer|ddimer|rv strain|pe concern)\b/i.test(text) && !/\b(?:no|without|negative for|r\/o negative)\s+(?:pe|pulmonary embol)/i.test(text);
   const obstructiveSignal = /\b(copd|asthma|wheeze|bronchodilator|steroid|methylpred|hypercap|pco2|co2 retention|bipap|niv)\b/i.test(text);
   const pneumoniaSignal = /\b(pna|pneumonia|aspirat|sputum|infiltrate|consolidation)\b/i.test(text);
   const aspirationSignal = /\b(aspirat|dysphag|swallow|ng feeding|choking)\b/i.test(text);
@@ -847,6 +873,7 @@ function applyHemeOncRules(plan: GeneratedClinicalPlan, text: string) {
   const creatinine = maxNumberAfter(/\b(?:cr|creatinine)\s*[:=]?\s*(\d+(?:\.\d+)?)/gi, text);
   const uricAcid = maxNumberAfter(/\buric acid\s*[:=]?\s*(\d+(?:\.\d+)?)/gi, text);
   const phosphorus = maxNumberAfter(/\b(?:phos|phosphate|p)\s*[:=]?\s*(\d+(?:\.\d+)?)/gi, text);
+  const feedingAccessSignal = /\b(j-?tube|jejunostomy|feeding tube|tube feeding|malnutrition|po intolerance|dysphagia)\b/i.test(text);
   const tlsSignal =
     /\b(tls|tumor lysis|rasburicase|allopurinol)\b/i.test(text) ||
     (/\b(lymphoma|leukemia|chemo|chemotherapy|bulky tumor)\b/i.test(text) &&
@@ -858,7 +885,7 @@ function applyHemeOncRules(plan: GeneratedClinicalPlan, text: string) {
     : hasNeutropenicFeverContext
     ? "Neutropenic fever / leukopenia"
     : hasCancerWorkup
-      ? "Heme/Onc safety"
+      ? "Cancer / staging-nutrition"
       : "Immunosuppression / leukopenia";
   if (!currentlyAfebrile(text) && /\b(febrile neutropen|neutropenic fever|fever|febrile)\b/i.test(text) && (/neutropen|chemo|anc/i.test(text) || hasLowAnc)) {
     appendRedFlag(plan, "Febrile neutropenia safety signal", "Cancer/immunosuppression with fever/neutropenia requires urgent culture/Abx/isolation review.", "urgent", refs);
@@ -883,7 +910,11 @@ function applyHemeOncRules(plan: GeneratedClinicalPlan, text: string) {
       ? "trend TLS labs: K/Phos/Ca/uric acid/Cr; verify hydration/rasburicase-allopurinol and heme plan"
       : thrombocytopeniaSignal
         ? "trend Plt/Hb; review bleeding, procedure and anticoag/antiplatelet plan"
-        : "f/u CBC diff/ANC, fever curve, Cx/Abx, isolation need",
+        : hasNeutropenicFeverContext || hasLowWbc || hasLowAnc
+          ? "f/u CBC diff/ANC, fever curve, Cx/Abx, isolation need"
+          : feedingAccessSignal
+            ? "f/u staging/Onc plan and J-tube nutrition tolerance"
+            : "f/u pathology/staging and Onc plan",
     tlsSignal || hasCancerWorkup ? "consult" : "lab",
     tlsSignal
       ? "Oncology handoff must keep TLS metabolic/renal risk visible."
@@ -904,7 +935,7 @@ function applyHemeOncRules(plan: GeneratedClinicalPlan, text: string) {
       : thrombocytopeniaSignal
         ? `Thrombocytopenia${plateletMin ? `, Plt ${plateletMin}` : ""}; verify bleeding/procedure/anticoag tradeoff and platelet trend.`
         : hasCancerWorkup
-      ? "Cancer/infx risk; staging/path pending; review ANC/fever and VTE/bleed."
+      ? `Cancer/staging${feedingAccessSignal ? " with J-tube/nutrition issue" : ""}; keep Onc plan, pathology/imaging and VTE/bleed risk visible.`
       : `Immunosuppressed or leukopenic host${wbcText ? `, WBC ${wbcText}` : ""}${anc ? `, ANC ${anc}` : ""}; verify fever status, ANC/WBC recovery, infection source and Abx/isolation threshold.`,
     [...plan.facts.immunocompromisedSignals, ...plan.facts.pendingItems],
     tlsSignal
@@ -912,7 +943,7 @@ function applyHemeOncRules(plan: GeneratedClinicalPlan, text: string) {
       : thrombocytopeniaSignal
         ? ["trend Plt/Hb", "check bleeding/procedure plan", "review anticoag/antiplatelet hold-resume", "clarify transfusion threshold if needed"]
         : hasCancerWorkup
-      ? ["f/u pathology/staging", "review ANC/fever if immunosupp", "review VTE/bleed risk"]
+      ? [feedingAccessSignal ? "f/u J-tube/nutrition tolerance" : "f/u pathology/staging", "Onc follow-up", "review VTE/bleed risk"]
       : ["f/u ANC/WBC + fever curve", "clarify infection source/Cx", "review Abx/isolation threshold"],
     refs,
   );
@@ -1163,50 +1194,129 @@ export function applyClinicalKnowledgeToAiSoapDraft(draft: AiSoapDraft, rawText:
   };
 }
 
-export function applyClinicalKnowledgeToPatientImportDraft(
-  draft: PatientImportDraft,
-  options: { targetUpdate?: boolean } = {},
-): PatientImportDraft {
-  const sourceText = options.targetUpdate
-    ? [
-        draft.sourceExcerpt,
-        draft.todayUpdates,
-        draft.vitalSigns,
-        draft.physicalExam,
-        draft.labText,
-        draft.imageText,
-        draft.importantRedFlags,
-        draft.tasks.map((task) => task.text).join("\n"),
-        draft.dischargePlan,
-        draft.disposition,
-      ].join("\n")
-    : [
-        draft.sourceExcerpt,
-        draft.primaryDiagnosis,
-        draft.oneLiner,
-        draft.admissionSummary,
-        draft.underlyingDiseases,
-        draft.activeProblems,
-        draft.hospitalCourseHighlights,
-        draft.importantRedFlags,
-        draft.tasks.map((task) => task.text).join("\n"),
-        draft.dischargePlan,
-        draft.disposition,
-      ].join("\n");
-  const plan = applyClinicalKnowledgeToText(sourceText);
-  return {
-    ...draft,
-    activeProblems: dedupe([draft.activeProblems, ...plan.problemBasedAP.map((item) => item.problemTitle)]).join("\n"),
-    importantRedFlags: dedupe([draft.importantRedFlags, ...plan.redFlags.map((flag) => `!${flag.text} - Reason: ${flag.reason}`)]).join("\n"),
-    tasks: dedupeRuleObjects([
-      ...draft.tasks,
-      ...plan.todayTasks.map((task) => ({
+function importProblemPieces(value: string) {
+  return value
+    .replace(/\b(Bacteremia \/ infection|Infection \/ sepsis|Cancer \/ staging-nutrition|Heme\/Onc safety|Stroke \/ neuro deficit|UGIB \/ anemia|Bleeding \/ anemia|Cardio \/ HF \/ rhythm|Hypovolemia\/shock syncope|Malnutrition\/PO intolerance with J-tube feeding)\b/gi, "\n$1\n")
+    .split(/\r?\n|;/)
+    .map((line) => cleanText(line))
+    .filter(Boolean);
+}
+
+function hasActiveImportNeuroSignal(text: string) {
+  if (/\b(?:no|without|w\/o|negative for|r\/o|rule out)\s+(?:ich|intracranial hemorrhage|hemorrhage)\b/i.test(text)) return false;
+  return /\b(?:ais|acute ischemic stroke|recent stroke|new stroke|tia|nihss|aphasia|hemiplegia|facial droop|new focal|acute neuro|neuro worsening|brain infarct)\b/i.test(text);
+}
+
+function hasActionableImportBleedingSignal(text: string) {
+  const hb = minNumberAfter(/\b(?:hb|hgb)\s*[:=]?\s*(\d+(?:\.\d+)?)/gi, text);
+  return /\b(active bleed|gi bleed|melena|hematemesis|hematochezia|transfusion|endoscopy|egd|colonoscopy|brbpr|rectal bleeding)\b/i.test(text) || (hb !== null && hb < 8);
+}
+
+function hasActiveImportCardioSignal(text: string) {
+  return hasUnresolvedShockSignal(text) || /\b(chest pain|stemi|nstemi|acs|troponin.*(?:rise|up|elevat)|rvr|pulmonary edema|respiratory failure|hfref|heart failure|afib|atrial fibrillation)\b/i.test(text);
+}
+
+function normalizeImportProblemLine(line: string, sourceText: string) {
+  const lower = line.toLowerCase();
+  const hasBacteremia = /\b(bacteremia|blood culture|b\/c|bcx|mrsa|enterococcus|s\.?\s*haemolyticus)\b/i.test(sourceText);
+  const hasCancer = /\b(scc|cancer|carcinoma|tumou?r|malign|metasta|oncology|chemo)\b/i.test(sourceText);
+  const hasTubeNutrition = /\b(j-?tube|jejunostomy|tube feeding|malnutrition|po intolerance|dysphagia)\b/i.test(sourceText);
+  const hb = minNumberAfter(/\b(?:hb|hgb)\s*[:=]?\s*(\d+(?:\.\d+)?)/gi, sourceText);
+
+  if (/infection|bacteremia|sepsis/.test(lower)) {
+    if (hasBacteremia && /mrsa/i.test(sourceText) && /enterococcus/i.test(sourceText)) return "MRSA/Enterococcus bacteremia";
+    if (hasBacteremia) return "Bacteremia / infection";
+    return "Infection";
+  }
+  if (/heme\/onc|cancer|staging|onc safety/.test(lower)) {
+    if (!hasCancer) return "";
+    return hasTubeNutrition ? "SCC with J-tube nutrition/malnutrition" : "Cancer staging / Onc plan";
+  }
+  if (/stroke|neuro deficit/.test(lower)) return hasActiveImportNeuroSignal(sourceText) ? "Stroke / neuro deficit" : "";
+  if (/ugib|bleeding|anemia/.test(lower)) {
+    if (hasActionableImportBleedingSignal(sourceText)) return "Bleeding / anemia";
+    return hb !== null && hb < 11 ? "Anemia" : "";
+  }
+  if (/cardio|hf|rhythm/.test(lower)) return hasActiveImportCardioSignal(sourceText) ? "Cardio / HF / rhythm" : "";
+  if (/hypovolemia|shock|syncope/.test(lower)) return hasUnresolvedShockSignal(sourceText) ? "Shock / hypotension" : "";
+  if (/malnutrition|po intolerance|j-?tube|feeding/.test(lower)) return "J-tube nutrition / malnutrition";
+  return compactSnippet(line, 90);
+}
+
+function compactImportActiveProblems(draft: PatientImportDraft, plan: GeneratedClinicalPlan, sourceText: string) {
+  return compactList(
+    [
+      ...importProblemPieces(draft.activeProblems),
+      ...plan.problemBasedAP.map((item) => item.problemTitle),
+    ]
+      .map((line) => normalizeImportProblemLine(line, sourceText))
+      .filter(Boolean),
+    5,
+    90,
+  ).join("\n");
+}
+
+function suppressImportRuleLine(line: string, sourceText: string) {
+  const lower = line.toLowerCase();
+  const { hasLowWbc, hasLowAnc } = leukopeniaContext(sourceText);
+  if (/possible sepsis|shock physiology|hypotension/.test(lower) && hasResolvedHemodynamicShock(sourceText)) return true;
+  if (/high-risk cardiac|acs|troponin|rvr|pulmonary edema/.test(lower) && !hasActiveImportCardioSignal(sourceText)) return true;
+  if (/active bleeding|severe anemia|transfusion|scope/.test(lower) && !hasActionableImportBleedingSignal(sourceText)) return true;
+  if (/febrile neutropenia|anc|isolation/.test(lower) && !(hasLowWbc || hasLowAnc)) return true;
+  if (/neuro|stroke|swallow|antithrombotic|statin/.test(lower) && !hasActiveImportNeuroSignal(sourceText)) return true;
+  return false;
+}
+
+function compactImportRedFlags(draft: PatientImportDraft, plan: GeneratedClinicalPlan, sourceText: string) {
+  const draftLines = draft.importantRedFlags
+    .split(/\r?\n|;/)
+    .map((line) => cleanText(line).replace(/^!+/, "").replace(/\s+-\s*Reason:\s*.*$/i, ""))
+    .filter((line) => line && !suppressImportRuleLine(line, sourceText));
+  const ruleLines = plan.redFlags
+    .map((flag) => flag.text)
+    .filter((line) => line && !suppressImportRuleLine(line, sourceText));
+  return compactList([...draftLines, ...ruleLines], 3, 180).join("\n");
+}
+
+function compactImportTasks(draft: PatientImportDraft, plan: GeneratedClinicalPlan, sourceText: string) {
+  return dedupeRuleObjects([
+    ...draft.tasks.filter((task) => !suppressImportRuleLine(task.text, sourceText)),
+    ...plan.todayTasks
+      .filter((task) => !suppressImportRuleLine(task.text, sourceText))
+      .map((task) => ({
         text: task.text,
         priority: task.priority,
         dueDate: "",
         category: task.category,
       })),
-    ], "text"),
+  ], "text").slice(0, 8);
+}
+
+export function applyClinicalKnowledgeToPatientImportDraft(
+  draft: PatientImportDraft,
+  options: { targetUpdate?: boolean } = {},
+): PatientImportDraft {
+  const sourceText = [
+    draft.sourceExcerpt,
+    draft.primaryDiagnosis,
+    draft.oneLiner,
+    draft.admissionSummary,
+    draft.underlyingDiseases,
+    draft.todayUpdates,
+    draft.vitalSigns,
+    draft.physicalExam,
+    draft.labText,
+    draft.imageText,
+    draft.hospitalCourseHighlights,
+    draft.dischargePlan,
+    draft.disposition,
+  ].join("\n");
+  const plan = applyClinicalKnowledgeToText(sourceText);
+  return {
+    ...draft,
+    activeProblems: compactImportActiveProblems(draft, plan, sourceText),
+    importantRedFlags: compactImportRedFlags(draft, plan, sourceText),
+    tasks: compactImportTasks(draft, plan, sourceText),
     admissionSummary: options.targetUpdate ? draft.admissionSummary : draft.admissionSummary || formatRuleBasedAdmissionSummary(plan),
     uncertainty: dedupe([
       ...draft.uncertainty,
