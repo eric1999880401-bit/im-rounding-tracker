@@ -510,10 +510,11 @@ function PrintRoundingListPage({
       maxAnchors: 3,
       separator: " | ",
     });
+    const stripSeverityLabel = (value: string) => displayPrintLine(value).replace(/^(?:Crit|Abn|Trend|Anchor)\s+/i, "");
     return [
-      { label: "*", title: "Important labs", items: labFocus.critical.map((item) => displayPrintLine(item)), className: "print-lab-row-critical" },
-      { label: "\u0394", title: "Abnormal / trend labs", items: labFocus.trend.map((item) => displayPrintLine(item)), className: "print-lab-row-trend" },
-      { label: "Ref", title: "Reference labs", items: labFocus.anchors.map((item) => displayPrintLine(item)), className: "print-lab-row-ref" },
+      { label: "*", title: "Critical labs", items: labFocus.critical.map(stripSeverityLabel), className: "print-lab-row-critical" },
+      { label: "Abn", title: "Abnormal / trend labs", items: labFocus.trend.map(stripSeverityLabel), className: "print-lab-row-trend" },
+      { label: "Ref", title: "Reference labs", items: labFocus.anchors.map(stripSeverityLabel), className: "print-lab-row-ref" },
     ].filter((group) => group.items.length > 0);
   }
 
@@ -546,7 +547,7 @@ function PrintRoundingListPage({
     });
     const groups = [
       { label: "Critical", items: labFocus.critical, important: true },
-      { label: "Trend", items: labFocus.trend, important: false },
+      { label: "Abn/Trend", items: labFocus.trend, important: false },
       { label: "Anchor", items: labFocus.anchors, important: false },
     ].filter((group) => group.items.length > 0);
 
@@ -638,10 +639,14 @@ function PrintRoundingListPage({
   }
 
   function patientContextText(patient: Patient) {
+    const snapshot = getRoundingDigest(patient, dailyNotesByPatient[patient.id] ?? [], {
+      mode: "board",
+      hideCompletedTasks,
+    }).snapshot;
     return removePrintEllipsis([
-      diagnosisSummary(patient) ? `Dx ${diagnosisSummary(patient)}` : "",
-      riskSummary(patient) ? `PMH ${riskSummary(patient)}` : "",
-      issueSummary(patient) ? `Issues ${issueSummary(patient)}` : "",
+      snapshot.dxCore ? `Dx ${snapshot.dxCore}` : "",
+      snapshot.risks.length > 0 ? `PMH ${snapshot.risks.join(", ")}` : "",
+      snapshot.activeIssues.length > 0 ? `Issues ${snapshot.activeIssues.join(", ")}` : "",
     ].filter(Boolean).join(" | "));
   }
 

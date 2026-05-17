@@ -980,8 +980,11 @@ try {
   if (/TLS\s*\/\s*onc safety|Heme\/Onc safety|review VTE\/bleed risk|UGIB|transfusion|EGD/i.test(digest.assessmentPlan)) {
     throw new Error(`board/detail A/P kept generic or false plans: ${digest.assessmentPlan}`);
   }
-  if (!/Infx:.*WBC.*Neu/i.test(digest.lab) || !/Anemia\/bleed:.*Hb/i.test(digest.lab) || !/Renal\/electrolyte:.*K/i.test(digest.lab)) {
-    throw new Error(`lab focus was not clinically grouped: ${digest.lab}`);
+  if (!/Abn Infx:.*WBC.*Neu/i.test(digest.lab) || !/Abn Anemia:.*Hb/i.test(digest.lab) || !/Abn Lyte\/Renal:.*K/i.test(digest.lab)) {
+    throw new Error(`lab focus was not severity/category grouped: ${digest.lab}`);
+  }
+  if (/TLS/i.test(digest.lab)) {
+    throw new Error(`lab focus created false TLS label from generic task/context: ${digest.lab}`);
   }
   if (/Continue teicoplanin|review VTE\/bleed risk|TLS labs/i.test(digest.tasks) || !/blood culture/i.test(digest.tasks)) {
     throw new Error(`tasks were not deduped/action-focused: ${digest.tasks}`);
@@ -989,11 +992,16 @@ try {
   if (/Possible sepsis\/shock|Active bleeding|Febrile neutropenia/i.test(digest.redFlags)) {
     throw new Error(`rule-label red flags leaked into board/detail digest: ${digest.redFlags}`);
   }
-  console.log("PASS Board/detail digest is print-like, lab grouped, and task-deduped");
+  const dxIssueText = [digest.snapshot.dxCore, ...digest.snapshot.activeIssues].join("\n");
+  const bacteremiaMentions = dxIssueText.match(/bacteremia/gi)?.length ?? 0;
+  if (bacteremiaMentions > 1) {
+    throw new Error(`Dx/issues repeated bacteremia: ${dxIssueText}`);
+  }
+  console.log("PASS Board/detail digest is print-like, lab severity-grouped, dx-deduped, and task-deduped");
   supplementalPasses += 1;
 } catch (error) {
-  failures.push({ name: "Board/detail digest is print-like, lab grouped, and task-deduped", error: error instanceof Error ? error.message : String(error) });
-  console.error(`FAIL Board/detail digest is print-like, lab grouped, and task-deduped: ${failures[failures.length - 1].error}`);
+  failures.push({ name: "Board/detail digest is print-like, lab severity-grouped, dx-deduped, and task-deduped", error: error instanceof Error ? error.message : String(error) });
+  console.error(`FAIL Board/detail digest is print-like, lab severity-grouped, dx-deduped, and task-deduped: ${failures[failures.length - 1].error}`);
 }
 
 await server.close();

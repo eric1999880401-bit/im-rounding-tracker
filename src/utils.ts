@@ -897,12 +897,24 @@ interface LabFocusEntry {
   anchor: boolean;
   critical: boolean;
   trend: boolean;
+  severity: LabFocusSeverity;
+}
+
+export type LabFocusSeverity = "critical" | "abnormal" | "trend" | "anchor";
+
+export interface LabFocusSignal {
+  severity: LabFocusSeverity;
+  category: string;
+  text: string;
+  display: string;
+  important: boolean;
 }
 
 export interface LabFocusSummary {
   critical: string[];
   trend: string[];
   anchors: string[];
+  signals: LabFocusSignal[];
   hiddenCount: number;
   text: string;
 }
@@ -1169,23 +1181,33 @@ function patientLabContext(patient: Patient) {
     .toLowerCase();
 }
 
+function hasSpecificTlsLabContext(context: string) {
+  const clean = context
+    .replace(/\btrend\s+tls\s+labs?\b/gi, " ")
+    .replace(/\btls\s*\/\s*onc safety\b/gi, " ")
+    .replace(/\bheme\/onc safety\b/gi, " ");
+  const explicitTls = /\b(?:tumou?r lysis|tls concern|tls risk|rasburicase|allopurinol)\b/i.test(clean);
+  const tlsSpecificLab = /\b(?:uric acid|phos|phosphate|ldh)\b(?:\s*[:=]?\s*[<>]?\d|\s+(?:high|low|elevated|up|down))/i.test(clean);
+  return tlsSpecificLab || (explicitTls && /\b(?:uric acid|phos|phosphate|ldh|rasburicase|allopurinol)\b/i.test(clean));
+}
+
 function labFocusCategory(key: string, patient: Patient) {
   const context = patientLabContext(patient);
   const hasInfection = /\b(infection|bacteremia|sepsis|septic|fever|febrile|culture|b\/c|bcx|pna|pneumonia|uti|abscess|lactate|abx|antibiotic)\b/.test(context);
-  const hasRenalOrElectrolyte = /\b(aki|ckd|renal|dialysis|crrt|oliguria|hyperk|hypok|electrolyte|dehydrat|tumou?r lysis|tls)\b/.test(context);
+  const hasRenalOrElectrolyte = /\b(aki|ckd|renal|dialysis|crrt|oliguria|hyperk|hypok|electrolyte|dehydrat)\b/.test(context);
   const hasAnemiaOrBleeding = /\b(anemia|bleed|bleeding|melena|hematemesis|hematochezia|hematuria|transfusion|anticoag|antiplatelet|thrombocytopenia)\b/.test(context);
   const hasCancerOrNutrition = /\b(cancer|tumou?r|malign|carcinoma|scc|chemo|onc|j-?tube|jejunostomy|nutrition|malnutrition|poor intake|dysphag|tube feeding)\b/.test(context);
-  const hasTls = /\b(tls|tumou?r lysis|uric acid|rasburicase|allopurinol)\b/.test(context);
+  const hasTls = hasSpecificTlsLabContext(context);
   const hasCardiac = /\b(hf|heart failure|acs|mi|troponin|arrhythm|af\b|pulmonary edema)\b/.test(context);
 
   if (hasInfection && ["WBC", "Neu", "Lactate", "CRP", "PCT", "Blood culture", "Sputum culture", "Urine culture"].includes(key)) {
     return "Infx";
   }
-  if (hasAnemiaOrBleeding && ["Hb", "Plt", "PT", "INR", "aPTT", "Fibrinogen"].includes(key)) return "Anemia/bleed";
+  if (hasAnemiaOrBleeding && ["Hb", "Plt", "PT", "INR", "aPTT", "Fibrinogen"].includes(key)) return "Anemia";
   if ((hasRenalOrElectrolyte || hasTls) && ["BUN", "Cr", "eGFR", "Na", "K", "Ca", "Mg", "P", "Uric acid", "LDH"].includes(key)) {
-    return hasTls && ["K", "Ca", "P", "Uric acid", "Cr", "LDH"].includes(key) ? "TLS" : "Renal/electrolyte";
+    return hasTls && ["K", "Ca", "P", "Uric acid", "Cr", "LDH"].includes(key) ? "TLS" : "Lyte/Renal";
   }
-  if (["Na", "K", "Ca", "Mg", "P"].includes(key)) return "Renal/electrolyte";
+  if (["Na", "K", "Ca", "Mg", "P"].includes(key)) return "Lyte/Renal";
   if (hasCardiac && ["Troponin", "Troponin I", "Troponin T", "BNP", "NT-proBNP", "Cr", "K"].includes(key)) return "Cardiac";
   if (hasCancerOrNutrition && ["Alb", "Hb", "Ca", "Mg", "P", "Uric acid", "LDH", "CA125", "CEA", "SCC", "CA19-9"].includes(key)) {
     return hasTls && ["K", "Ca", "P", "Uric acid", "Cr", "LDH"].includes(key) ? "TLS" : "Onc/nutrition";
@@ -1215,7 +1237,7 @@ function isDiseaseAnchorLab(key: string, patient: Patient) {
   const hasCancerOrGyn = /cancer|tumor|malign|carcinoma|ca\?|ca |gyn|ob|ovary|ovarian|cervical|uterine|postmenopausal/.test(context);
   const hasInfection = /infection|bacteremia|sepsis|septic|fever|culture|b\/c|bcx|pneumonia|pna|uti|abx|antibiotic/.test(context);
   const hasNutrition = /j-?tube|jejunostomy|nutrition|malnutrition|poor intake|dysphag|tube feeding/.test(context);
-  const hasTls = /tls|tumou?r lysis|uric acid|rasburicase|allopurinol/.test(context);
+  const hasTls = hasSpecificTlsLabContext(context);
 
   if (hasStroke && ["HbA1c", "LDL", "TG", "Cholesterol"].includes(key)) return true;
   if (hasHf && ["BNP", "NT-proBNP", "Cr", "eGFR", "Na", "K"].includes(key)) return true;
@@ -1249,19 +1271,48 @@ function shouldShowAnchorLab(key: string, abnormalLevel: number) {
   return abnormalLevel >= 1 || persistentAnchorKeys.has(key);
 }
 
-function formatLabFocusEntryGroups(entries: LabFocusEntry[]) {
-  const order = ["Infx", "Anemia/bleed", "Renal/electrolyte", "TLS", "Cardiac", "Onc/nutrition", ""];
+function severityLabel(severity: LabFocusSeverity) {
+  if (severity === "critical") return "Crit";
+  if (severity === "abnormal") return "Abn";
+  if (severity === "trend") return "Trend";
+  return "Anchor";
+}
+
+function entrySeverity(level: number, hasDelta: boolean, anchor: boolean): LabFocusSeverity {
+  if (level >= 2) return "critical";
+  if (level >= 1) return "abnormal";
+  if (hasDelta) return "trend";
+  return anchor ? "anchor" : "trend";
+}
+
+function groupLabFocusSignals(entries: LabFocusEntry[]): LabFocusSignal[] {
+  const categoryOrder = ["Infx", "Anemia", "Lyte/Renal", "TLS", "Cardiac", "Onc/nutrition", ""];
+  const severityOrder: LabFocusSeverity[] = ["critical", "abnormal", "trend", "anchor"];
   const groups = new Map<string, LabFocusEntry[]>();
   entries.forEach((entry) => {
-    const key = entry.category;
+    const key = `${entry.severity}|${entry.category}`;
     groups.set(key, [...(groups.get(key) ?? []), entry]);
   });
 
   return [...groups.entries()]
-    .sort(([a], [b]) => order.indexOf(a) - order.indexOf(b))
-    .map(([category, group]) => {
+    .sort(([a], [b]) => {
+      const [aSeverity, aCategory] = a.split("|") as [LabFocusSeverity, string];
+      const [bSeverity, bCategory] = b.split("|") as [LabFocusSeverity, string];
+      const severityDiff = severityOrder.indexOf(aSeverity) - severityOrder.indexOf(bSeverity);
+      if (severityDiff !== 0) return severityDiff;
+      return categoryOrder.indexOf(aCategory) - categoryOrder.indexOf(bCategory);
+    })
+    .map(([key, group]) => {
+      const [severity, category] = key.split("|") as [LabFocusSeverity, string];
       const text = group.map((entry) => entry.text).join(", ");
-      return category ? `${category}: ${text}` : text;
+      const prefix = [severityLabel(severity), category].filter(Boolean).join(" ");
+      return {
+        severity,
+        category,
+        text,
+        display: prefix ? `${prefix}: ${text}` : `${severityLabel(severity)}: ${text}`,
+        important: severity === "critical",
+      };
     });
 }
 
@@ -1354,7 +1405,8 @@ export function getLabFocusSummary(
     const text = `${labDisplayLabel(key)} ${formattedValue}${labFocusUnitText(key, latest.item)}${direction}${labFocusSuffix(latest.item)}`;
     const category = labFocusCategory(key, patient);
     const critical = level >= 2;
-    const trend = hasDelta || qualitativeLevel >= 1 || (level >= 1 && !anchor) || level >= 2;
+    const trend = hasDelta || qualitativeLevel >= 1 || level >= 1;
+    const severity = entrySeverity(level, hasDelta, anchor);
     const score =
       level * 100 +
       Number(hasDelta) * 35 +
@@ -1363,7 +1415,7 @@ export function getLabFocusSummary(
       Number(latest.item.important || latest.item.isImportant) * 40;
 
     if (critical || trend || anchor) {
-      entries.push({ key, text, score, category, anchor, critical, trend });
+      entries.push({ key, text, score, category, anchor, critical, trend, severity });
     }
   });
 
@@ -1381,23 +1433,26 @@ export function getLabFocusSummary(
   trend.forEach((entry) => used.add(entry.key));
 
   const anchors = entries
-    .filter((entry) => entry.anchor && !used.has(entry.key))
+    .filter((entry) => entry.anchor && entry.severity === "anchor" && !used.has(entry.key))
     .sort((a, b) => b.score - a.score)
     .slice(0, maxAnchors);
   anchors.forEach((entry) => used.add(entry.key));
 
   const hiddenCount = Math.max(entries.length - used.size, 0);
-  const sections = [
-    critical.length > 0 ? `!Critical: ${formatLabFocusEntryGroups(critical).join("; ")}` : "",
-    trend.length > 0 ? `Lab \u0394: ${formatLabFocusEntryGroups(trend).join("; ")}` : "",
-    anchors.length > 0 ? `Anchor: ${formatLabFocusEntryGroups(anchors).join("; ")}` : "",
-  ].filter(Boolean);
-  const text = [sections.join(separator), hiddenCount > 0 ? `+${hiddenCount} labs` : ""].filter(Boolean).join(separator);
+  const criticalSignals = groupLabFocusSignals(critical);
+  const trendSignals = groupLabFocusSignals(trend);
+  const anchorSignals = groupLabFocusSignals(anchors);
+  const signals = [...criticalSignals, ...trendSignals, ...anchorSignals];
+  const text = [
+    signals.map((signal) => `${signal.important ? "!" : ""}${signal.display}`).join(separator),
+    hiddenCount > 0 ? `+${hiddenCount} labs` : "",
+  ].filter(Boolean).join(separator);
 
   return {
-    critical: formatLabFocusEntryGroups(critical),
-    trend: formatLabFocusEntryGroups(trend),
-    anchors: formatLabFocusEntryGroups(anchors),
+    critical: criticalSignals.map((signal) => signal.display),
+    trend: trendSignals.map((signal) => signal.display),
+    anchors: anchorSignals.map((signal) => signal.display),
+    signals,
     hiddenCount,
     text,
   };

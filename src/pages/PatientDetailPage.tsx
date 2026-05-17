@@ -17,7 +17,6 @@ import {
   IconAssessment,
   IconInfo,
   IconObjective,
-  IconQuickUpdate,
   IconRounds,
   IconTasks,
 } from "../components/icons";
@@ -44,13 +43,12 @@ interface PageProps {
   onSaveDailyNote: (patientId: string, note: DailyNote) => Promise<void>;
 }
 
-type DetailTab = "rounds" | "quick" | "objective" | "assessmentPlan" | "tasksDischarge" | "aiIntake" | "more";
+type DetailTab = "rounds" | "objective" | "assessmentPlan" | "tasksDischarge" | "aiIntake" | "more";
 
 type DetailTabIcon = (props: React.SVGProps<SVGSVGElement>) => React.ReactElement;
 
 const detailTabs: Array<{ id: DetailTab; labelKey: string; shortKey: string; Icon: DetailTabIcon }> = [
   { id: "rounds", labelKey: "detail.tabs.rounds", shortKey: "detail.tabs.short.rounds", Icon: IconRounds },
-  { id: "quick", labelKey: "detail.tabs.quick", shortKey: "detail.tabs.short.quick", Icon: IconQuickUpdate },
   { id: "objective", labelKey: "detail.tabs.objective", shortKey: "detail.tabs.short.objective", Icon: IconObjective },
   { id: "assessmentPlan", labelKey: "detail.tabs.assessmentPlan", shortKey: "detail.tabs.short.assessmentPlan", Icon: IconAssessment },
   { id: "tasksDischarge", labelKey: "detail.tabs.tasksDischarge", shortKey: "detail.tabs.short.tasksDischarge", Icon: IconTasks },
@@ -580,7 +578,8 @@ function PatientDetailPage({
       mode: "rounds",
       hideCompletedTasks: true,
     });
-    const redFlags = simpleDetailRedFlags(digest.redFlags);
+    const snapshot = digest.snapshot;
+    const redFlags = snapshot.redFlags.map(simpleDetailRedFlags).filter(Boolean).join("\n");
     const prepText = dischargePrepText(roundsSummary);
     const taskDcText = [
       digest.tasks,
@@ -605,16 +604,17 @@ function PatientDetailPage({
         <div className="detail-rounding-sheet">
           <section className="detail-soap-block detail-rounding-context">
             <span className="board-label">Dx / Issues</span>
-            <ClinicalText
-              value={[
-                digest.diagnosis ? `Dx: ${digest.diagnosis}` : "",
-                digest.risks ? `PMH: ${digest.risks}` : "",
-                digest.issues ? `Issues: ${digest.issues}` : "",
-              ].filter(Boolean).join("\n")}
-              fallback="-"
-              maxLines={4}
-              maxCharsPerLine={92}
-            />
+            <div className="detail-context-lines">
+              <strong>{snapshot.dxCore || "-"}</strong>
+              {snapshot.activeIssues.length > 0 && (
+                <div className="board-chip-row">
+                  {snapshot.activeIssues.slice(0, 5).map((issue) => (
+                    <span className="board-mini-chip" key={issue}>{issue}</span>
+                  ))}
+                </div>
+              )}
+              {snapshot.risks.length > 0 && <span className="muted">PMH: {snapshot.risks.slice(0, 5).join(", ")}</span>}
+            </div>
           </section>
 
           <section className="detail-soap-block">
@@ -631,7 +631,7 @@ function PatientDetailPage({
               </div>
               <div>
                 <span className="objective-chip-label">Lab focus</span>
-                <ClinicalText value={digest.lab} fallback="No lab signal" maxLines={3} maxCharsPerLine={88} />
+                <ClinicalText value={digest.lab} fallback="No lab signal" maxLines={4} maxCharsPerLine={88} />
               </div>
               <div>
                 <span className="objective-chip-label">Image focus</span>
@@ -669,6 +669,15 @@ function PatientDetailPage({
               Add to today's SOAP
             </button>
           </section>
+        </details>
+
+        <details className="rounds-quick-order-collapse rounds-intake-collapse">
+          <summary>Paste update / AI intake preview</summary>
+          <AiIntakePanel
+            patient={currentPatient}
+            selectedDate={selectedDate}
+            onApplyPatient={applyAiIntakePatient}
+          />
         </details>
       </section>
     );
@@ -813,31 +822,6 @@ function PatientDetailPage({
       </section>
 
       {activeTab === "rounds" && renderRoundsMode()}
-
-      {activeTab === "quick" && (
-        <div className="detail-update-stack">
-          <DailyNoteForm
-            patient={currentPatient}
-            onChange={updateDraft}
-            section="subjective"
-            displaySummary={displaySummary ?? undefined}
-            onImmediateCommit={() => void commitDraft()}
-            onFieldBlur={handleFieldBlur}
-            onCompositionStart={handleCompositionStart}
-            onCompositionEnd={handleCompositionEnd}
-          />
-          <DailyNoteForm
-            patient={currentPatient}
-            onChange={updateDraft}
-            section="quick"
-            displaySummary={displaySummary ?? undefined}
-            onImmediateCommit={() => void commitDraft()}
-            onFieldBlur={handleFieldBlur}
-            onCompositionStart={handleCompositionStart}
-            onCompositionEnd={handleCompositionEnd}
-          />
-        </div>
-      )}
 
       {activeTab === "objective" && (
         <>

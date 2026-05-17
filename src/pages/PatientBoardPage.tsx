@@ -1247,6 +1247,7 @@ function PatientBoardPage({
         <div className="patient-board-grid">
           {activePatients.map((patient) => {
             const digest = boardDigest(patient);
+            const snapshot = digest.snapshot;
             const pendingTaskCount = pendingTasks(patient).length;
             const urgentTaskCount = pendingTasks(patient).filter(
               (task) => task.priority === "urgent" || task.text.trim().startsWith("!"),
@@ -1268,20 +1269,27 @@ function PatientBoardPage({
 
               <div className="patient-board-card-body">
                 <section className="patient-board-section patient-board-overview">
-                  {digest.redFlags && (
-                    <div className="board-red-flags">
+                  {snapshot.redFlags.length > 0 && (
+                    <div className="board-red-flag-strip">
                       <span className="board-label">Red Flags</span>
-                      <ClinicalText value={digest.redFlags} maxLines={2} maxCharsPerLine={52} importantDefault />
+                      <span>{snapshot.redFlags.slice(0, 2).join("; ")}</span>
                     </div>
                   )}
                   <div className="digest-line digest-line-primary">
-                    <span className="board-label">Dx / Issues</span>
-                    <strong>{[digest.diagnosis, digest.issues].filter(Boolean).join(" / ") || "-"}</strong>
+                    <span className="board-label">Dx</span>
+                    <strong>{snapshot.dxCore || "-"}</strong>
                   </div>
-                  {digest.risks && (
+                  {snapshot.activeIssues.length > 0 && (
+                    <div className="board-chip-row" aria-label="Active issues">
+                      {snapshot.activeIssues.slice(0, 4).map((issue) => (
+                        <span className="board-mini-chip" key={issue}>{issue}</span>
+                      ))}
+                    </div>
+                  )}
+                  {snapshot.risks.length > 0 && (
                   <div className="digest-line digest-line-muted">
                     <span className="board-label">Risk</span>
-                    <span>{digest.risks}</span>
+                    <span>{snapshot.risks.slice(0, 4).join(", ")}</span>
                   </div>
                   )}
                   <div className="muted">Attending: {patient.attending || t("board.unassigned")}</div>
@@ -1295,9 +1303,10 @@ function PatientBoardPage({
                     <BoardSignalPanel value={digest.objective} fallback="-" kind="objective" maxItems={2} />
                   </div>
                   <div className="board-subsection">
-                    <span className="board-label">Lab / Image</span>
+                    <span className="board-label">Lab focus</span>
                     <BoardSignalPanel value={digest.lab} fallback="No lab signal" kind="lab" maxItems={2} />
                   </div>
+                  <span className="board-label">Image focus</span>
                   <BoardSignalPanel value={digest.image} fallback="-" kind="image" maxItems={2} />
                 </section>
 

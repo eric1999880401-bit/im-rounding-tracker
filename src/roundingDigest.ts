@@ -1,4 +1,5 @@
 import type { DailyNote, Patient } from "./types";
+import type { LabFocusSignal } from "./utils";
 import { cleanAssessmentPlanItems, specificAntibioticPlan } from "./clinicalFieldRouter";
 import {
   formatDateLabel,
@@ -32,6 +33,23 @@ export interface RoundingDigest {
   discharge: string;
   urgentLines: string[];
   attendingSummary: string;
+  snapshot: RoundingSnapshot;
+}
+
+export interface RoundingSnapshot {
+  dxCore: string;
+  activeIssues: string[];
+  risks: string[];
+  redFlags: string[];
+  today: string[];
+  objective: {
+    vitalPe: string[];
+    labSignals: LabFocusSignal[];
+    imageSignals: string[];
+  };
+  apProblems: string[];
+  tasks: string[];
+  dc: string[];
 }
 
 function digestLimits(mode: DigestMode) {
@@ -160,6 +178,19 @@ function clinicalDedupeKey(value: string) {
     .replace(/\bbilateral\b|\bbilat\b|\bbil\b/gi, "bl")
     .replace(/[^\p{L}\p{N}]+/gu, "")
     .toLowerCase();
+}
+
+function conceptKey(value: string) {
+  const clean = cleanDigestLine(value).toLowerCase();
+  if (/mrsa|enterococcus|bacteremia|blood culture|\bb\/c\b|bcx/.test(clean)) return "bacteremia";
+  if (/infection|sepsis|septic|pneumonia|\bpna\b|uti/.test(clean)) return "infection";
+  if (/esophageal|hypopharyngeal|tonsil|scc|cancer|carcinoma|malign|tumou?r|metasta/.test(clean)) return "cancer";
+  if (/j-?tube|jejunostomy|tube feeding|nutrition|malnutrition|dysphag|swallow/.test(clean)) return "nutrition";
+  if (/anemia|hb|bleed|melena|hematemesis|hematochezia|transfusion/.test(clean)) return "anemia";
+  if (/aki|renal|ckd|cr\b|bun|egfr|hyperk|hypok|electrolyte/.test(clean)) return "renal-electrolyte";
+  if (/stroke|ais|tia|infarct|neuro deficit|weak|palsy|aphasia|dysarth/.test(clean)) return "neuro";
+  if (/heart failure|\bhf\b|arrhythm|af\b|acs|troponin|cardiac/.test(clean)) return "cardiac";
+  return clinicalDedupeKey(value) || clean.replace(/[^a-z0-9]+/g, "");
 }
 
 function uniqueClinicalLines(lines: string[]) {
@@ -476,7 +507,7 @@ function problemLabel(value: string, maxChars: number) {
 }
 
 function diagnosisSummary(patient: Patient, maxItems: number, maxChars: number) {
-  const text = [patient.primaryDiagnosis, patient.oneLiner].filter(Boolean).join(" ");
+  const text = patient.primaryDiagnosis.trim() || patient.oneLiner.trim();
   const diagnosisText = patient.primaryDiagnosis || patient.oneLiner;
   const lower = text.toLowerCase();
   const tags: string[] = [];
@@ -534,7 +565,7 @@ function riskSummary(patient: Patient, maxItems: number, maxChars: number) {
   return joinTags(tags, maxItems) || compactList(getUnderlyingDiseaseItems(patient), 3, maxChars);
 }
 
-function issueSummary(patient: Patient, maxItems: number, maxChars: number) {
+function issueSummary(patient: Patient, maxItems: number, maxChars: number, diagnosis = "") {
   const text = [
     patient.activeProblems,
     ...getActiveProblemItems(patient),
@@ -559,7 +590,21 @@ function issueSummary(patient: Patient, maxItems: number, maxChars: number) {
     (/weak/.test(lower) && /\b(stroke|neuro|focal|hemip|cva|spinal|cord)\b/.test(lower));
   if (hasFocalNeuroDeficit) tags.push("neuro deficit");
 
-  return joinTags(tags, maxItems) || compactList(getActiveProblemItems(patient).map((item) => problemLabel(item, maxChars)), maxItems, maxChars);
+  const diagnosisKeys = new Set(
+    clinicalItems(diagnosis)
+      .concat(diagnosis.split(/[,\/;]+/))
+      .map(conceptKey)
+      .filter(Boolean),
+  );
+  const cleanedTags = uniqueLines(tags).filter((tag) => !diagnosisKeys.has(conceptKey(tag)));
+  return cleanedTags.slice(0, maxItems).join(", ") ||
+    compactList(
+      getActiveProblemItems(patient)
+        .map((item) => problemLabel(item, maxChars))
+        .filter((item) => !diagnosisKeys.has(conceptKey(item))),
+      maxItems,
+      maxChars,
+    );
 }
 
 function importantObjectiveText(value: string, maxChars: number, maxItems: number) {
@@ -594,6 +639,14 @@ function labFocusText(patient: Patient, notes: DailyNote[], mode: DigestMode) {
     .join("\n");
 
   return { text, labFocus };
+}
+
+function snapshotLines(value: string) {
+  return value.split(/\r?\n|;\s*/).map(cleanDigestLine).filter(Boolean);
+}
+
+function issueArray(value: string) {
+  return value.split(/\s*,\s*|\r?\n|;\s*/).map(cleanDigestLine).filter(Boolean);
 }
 
 function compactDateLabel(date: string) {
@@ -959,7 +1012,7 @@ export function getRoundingDigest(
   const lab = labFocusText(patient, notes, mode);
   const diagnosis = diagnosisSummary(patient, limits.diagnosis, limits.detailChars);
   const risks = riskSummary(patient, limits.risks, limits.chars);
-  const issues = issueSummary(patient, limits.issues, limits.chars);
+  const issues = issueSummary(patient, limits.issues, limits.chars, diagnosis);
   const redFlags = redFlagText(patient, limits.redFlags, limits.detailChars);
   const subjective = subjectiveText(patient, limits.subjective, limits.detailChars);
   const objective = objectiveSummaryText(patient, limits.objective, limits.detailChars);
@@ -976,7 +1029,7 @@ export function getRoundingDigest(
     importantObjectiveText(patient.bloodSugar, limits.detailChars, 1),
   ].filter(Boolean);
   const subjectiveSignals = topSubjectiveSignals(patient, 1, limits.detailChars).map((line) => `S: ${line}`);
-  const labSignals = lab.labFocus.critical.map((line) => `Lab: ${line}`);
+  const labSignals = lab.labFocus.signals.filter((signal) => signal.important).map((signal) => `Lab: ${signal.display}`);
   const assessmentLines = assessmentPlan.split(/\n|;/).map((line) => line.trim()).filter(Boolean).slice(0, 2);
   const aiPatientPicture = shortDigestText(getAdmissionSummaryText(patient, { allowFallback: false }), limits.detailChars);
   const urgentAssessmentLines = assessmentLines
@@ -998,6 +1051,21 @@ export function getRoundingDigest(
   ])
     .slice(0, mode === "rounds" ? 5 : 4)
     .join("\n");
+  const snapshot: RoundingSnapshot = {
+    dxCore: diagnosis,
+    activeIssues: issueArray(issues),
+    risks: issueArray(risks),
+    redFlags: snapshotLines(redFlags),
+    today: snapshotLines(subjective),
+    objective: {
+      vitalPe: snapshotLines(objective),
+      labSignals: lab.labFocus.signals,
+      imageSignals: snapshotLines(image),
+    },
+    apProblems: snapshotLines(assessmentPlan),
+    tasks: snapshotLines(tasks),
+    dc: snapshotLines(discharge),
+  };
 
   return {
     diagnosis,
@@ -1013,5 +1081,6 @@ export function getRoundingDigest(
     discharge,
     urgentLines,
     attendingSummary,
+    snapshot,
   };
 }
