@@ -1,4 +1,5 @@
 import type { DailyNote, Patient } from "./types";
+import { cleanAssessmentPlanItems, specificAntibioticPlan } from "./clinicalFieldRouter";
 import {
   formatDateLabel,
   getActiveProblemItems,
@@ -213,6 +214,60 @@ function compactList(items: string[], maxItems: number, maxChars: number) {
 
 function compactText(value: string, maxItems: number, maxChars: number) {
   return compactList(clinicalItems(value), maxItems, maxChars);
+}
+
+function patientDigestContext(patient: Patient, includeTasks = true) {
+  return [
+    patient.primaryDiagnosis,
+    patient.oneLiner,
+    patient.activeProblems,
+    ...getActiveProblemItems(patient),
+    patient.underlyingDiseases,
+    ...getUnderlyingDiseaseItems(patient),
+    patient.hospitalCourseHighlights,
+    patient.earlyHospitalCourse,
+    patient.initialPlan,
+    patient.subjectiveOrChiefConcern,
+    patient.overnightEvent,
+    patient.vitalSigns,
+    patient.physicalExam,
+    patient.rawLabText,
+    patient.newLabs,
+    patient.newImaging,
+    patient.importantRedFlags,
+    patient.assessment,
+    patient.plan,
+    patient.dischargePlan,
+    ...patient.assessmentPlanItems.flatMap((item) => [
+      item.problemTitle,
+      item.assessmentSummary,
+      ...item.evidenceOrCourseItems,
+      ...item.planItems,
+    ]),
+    ...(includeTasks ? patient.tasks.map((task) => task.text) : []),
+  ]
+    .join(" ")
+    .toLowerCase();
+}
+
+function hasTlsLabSignal(context: string) {
+  return (
+    /\b(?:tumou?r lysis|tls|rasburicase|allopurinol)\b/i.test(context) &&
+    /\b(?:uric acid|ua\s*[0-9]|phos|phosphate|\bp\s*[0-9]|ldh|ca\s*[0-9]|k\s*[5-9]|cr\s*[2-9])\b/i.test(context)
+  ) || /\b(?:uric acid|phos|phosphate|ldh)\b[\s:=]*[0-9]/i.test(context);
+}
+
+function hasVteBleedContext(context: string) {
+  const clean = context
+    .replace(/review\s+vte\/bleed(?:\s+risk)?/gi, " ")
+    .replace(/\bvte\/bleed(?:\s+risk)?\b/gi, " ");
+  return /\b(?:vte|pe\b|dvt|anticoag|antiplatelet|doac|heparin|apixaban|warfarin|rivaroxaban|bleed|plt|platelet|procedure|biopsy|egd|surgery)\b/i.test(
+    clean,
+  );
+}
+
+function cleanedApItemsForDigest(patient: Patient) {
+  return cleanAssessmentPlanItems(patient.assessmentPlanItems, patientDigestContext(patient));
 }
 
 function highlightedClinicalItems(value: string) {
@@ -483,7 +538,7 @@ function issueSummary(patient: Patient, maxItems: number, maxChars: number) {
   const text = [
     patient.activeProblems,
     ...getActiveProblemItems(patient),
-    ...patient.assessmentPlanItems.map((item) => `${item.problemTitle} ${item.assessmentSummary}`),
+    ...cleanedApItemsForDigest(patient).map((item) => `${item.problemTitle} ${item.assessmentSummary}`),
   ].join(" ");
   const lower = text.toLowerCase();
   const tags: string[] = [];
@@ -495,7 +550,8 @@ function issueSummary(patient: Patient, maxItems: number, maxChars: number) {
   if (/aki|acute kidney|renal function/.test(lower)) tags.push("AKI");
   if (/anemia|bleed|hb drop/.test(lower)) tags.push("anemia/bleed");
   if (/neutropenic|neutropenia|leukopenia|wbc low/.test(lower)) tags.push("neutropenia");
-  if (/infection|sepsis|pneumonia|\bpna\b/.test(lower)) tags.push(/pneumonia|\bpna\b/.test(lower) ? "PNA" : "infection");
+  if (/bacteremia|blood culture|b\/c|bcx|mrsa|enterococcus/.test(lower)) tags.push("bacteremia");
+  else if (/infection|sepsis|pneumonia|\bpna\b/.test(lower)) tags.push(/pneumonia|\bpna\b/.test(lower) ? "PNA" : "infection");
   if (/dysphag|swallow/.test(lower)) tags.push("dysphagia");
   if (/carotid|mca|ica/.test(lower) && /stenos/.test(lower)) tags.push("large-vessel stenosis");
   const hasFocalNeuroDeficit =
@@ -527,8 +583,8 @@ function shortDateSortValue(value: string) {
 function labFocusText(patient: Patient, notes: DailyNote[], mode: DigestMode) {
   const labFocus = getLabFocusSummary(patient, notes, {
     maxCritical: 2,
-    maxTrend: mode === "rounds" ? 3 : 2,
-    maxAnchors: 2,
+    maxTrend: 4,
+    maxAnchors: 3,
     separator: "\n",
   });
   const text = labFocus.text
@@ -652,6 +708,9 @@ function objectiveSummaryText(patient: Patient, maxItems: number, maxChars: numb
 }
 
 function assessmentPlanSummaryText(patient: Patient, maxItems: number, maxChars: number) {
+  const context = patientDigestContext(patient);
+  const noTaskContext = patientDigestContext(patient, false);
+
   function isOperationalTaskLine(value: string) {
     const lower = value.toLowerCase();
     const hasTaskWords = /找|聯絡|通知|報告|計畫|出來|安排|預約|請|call|contact|arrange|pending|follow/.test(lower);
@@ -672,17 +731,6 @@ function assessmentPlanSummaryText(patient: Patient, maxItems: number, maxChars:
     if (/pending|f\/u|follow|consult|hold|resume|repeat|monitor|titrate|adjust|dc|discharge/.test(lower)) score += 3;
     if (/\d/.test(lower)) score += 1;
 
-    const context = [
-      patient.primaryDiagnosis,
-      patient.oneLiner,
-      patient.activeProblems,
-      patient.importantRedFlags,
-      patient.newImaging,
-      patient.rawLabText,
-      patient.newLabs,
-    ]
-      .join(" ")
-      .toLowerCase();
     const titleWords = value
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, " ")
@@ -690,6 +738,9 @@ function assessmentPlanSummaryText(patient: Patient, maxItems: number, maxChars:
       .filter((word) => word.length > 3 && !problemStopWords.has(word));
     const matchedWords = titleWords.filter((word) => context.includes(word));
     score += Math.min(matchedWords.length, 3) * 3;
+    if (/tls\s*\/\s*onc safety|heme\/onc safety/i.test(lower) && !hasTlsLabSignal(noTaskContext)) score -= 60;
+    if (/review\s+vte\/bleed|vte\/bleed risk/i.test(lower) && !hasVteBleedContext(noTaskContext)) score -= 25;
+    if (/teicoplanin|vancomycin|vanco|cefepime|ceftriaxone|meropenem|abx|antibiotic/i.test(lower)) score += 14;
     return score;
   }
 
@@ -699,6 +750,10 @@ function assessmentPlanSummaryText(patient: Patient, maxItems: number, maxChars:
     if (/pending|f\/u|follow|consult|biopsy|pathology|culture|repeat|monitor|trend|hold|resume|adjust|titrate|start|stop|switch|abx|antiplatelet|anticoag|statin|rehab|swallow|ng|foley|oxygen|diuresis|dc|discharge/.test(lower)) score += 7;
     if (/stroke|ais|tia|ich|sepsis|shock|resp failure|hypox|desat|bleed|hb|aki|hf|pna|uti|cancer|carcinoma|tumou?r|mass|stenos|occlusion|dvt|pe\b|fracture|hematoma/.test(lower)) score += 6;
     if (/\d/.test(lower)) score += 2;
+    if (specificAntibioticPlan(value)) score += 16;
+    if (/trend tls labs|tls labs/i.test(lower) && !hasTlsLabSignal(noTaskContext)) score -= 18;
+    if (/review\s+vte\/bleed|vte\/bleed risk/i.test(lower) && !hasVteBleedContext(noTaskContext)) score -= 14;
+    if (/^f\/u pathology\/staging(?:;?\s*review\s+vte\/bleed risk)?$/i.test(value.trim())) score -= 10;
     if (lowValueClause(value) || /\b(stable|no change|unchanged|continue same|cont same)\b/i.test(value)) score -= 4;
     return score;
   }
@@ -749,10 +804,15 @@ function assessmentPlanSummaryText(patient: Patient, maxItems: number, maxChars:
     const detail = bestAssessmentDetail(splitClinicalClauses(value));
     if (!detail || clinicalDedupeKey(detail) === clinicalDedupeKey(label)) return label;
     const detailText = shortDigestText(detail, Math.max(18, maxChars - label.length - 2));
+    if (clinicalDedupeKey(detailText).startsWith(clinicalDedupeKey(label))) {
+      return shortDigestText(detailText, maxChars);
+    }
     return shortDigestText(`${label}: ${detailText}`, Math.max(maxChars, label.length + detailText.length + 2));
   }
 
-  if (patient.assessmentPlanItems.length === 0) {
+  const cleanedItems = cleanedApItemsForDigest(patient);
+
+  if (cleanedItems.length === 0) {
     const legacyItems = [...clinicalItems(patient.assessment), ...clinicalItems(patient.plan)]
       .filter((item) => !isOperationalTaskLine(item))
       .map((item, index) => ({ item, index, score: assessmentImportanceScore(item) }))
@@ -765,7 +825,7 @@ function assessmentPlanSummaryText(patient: Patient, maxItems: number, maxChars:
       .join("\n");
   }
 
-  const scoredItems = [...patient.assessmentPlanItems]
+  const scoredItems = cleanedItems
     .filter((item) => item.category !== "underlyingDisease")
     .filter((item) => !isOperationalTaskLine(`${item.problemTitle} ${item.assessmentSummary}`))
     .map((item) => {
@@ -790,17 +850,57 @@ function assessmentPlanSummaryText(patient: Patient, maxItems: number, maxChars:
     .join("\n");
 }
 
-function taskSummaryText(patient: Patient, hideCompleted: boolean, maxItems: number, maxChars: number) {
+function clinicalTokenSet(value: string) {
+  const stop = new Set(["with", "without", "from", "after", "before", "current", "continue", "review", "define", "duration", "source"]);
+  return new Set(
+    cleanDigestLine(value)
+      .toLowerCase()
+      .replace(/b\/c|bcx/g, "culture")
+      .replace(/\bcx\b/g, "culture")
+      .replace(/\babx\b/g, "antibiotic")
+      .replace(/[^a-z0-9]+/g, " ")
+      .split(/\s+/)
+      .filter((word) => word.length > 2 && !stop.has(word)),
+  );
+}
+
+function overlapsAssessmentPlan(value: string, assessmentPlan: string) {
+  if (!assessmentPlan.trim()) return false;
+  const taskTokens = clinicalTokenSet(value);
+  if (taskTokens.size === 0) return false;
+  const apTokens = clinicalTokenSet(assessmentPlan);
+  const overlap = [...taskTokens].filter((token) => apTokens.has(token)).length;
+  return overlap >= Math.min(3, taskTokens.size);
+}
+
+function cleanTaskDigestText(value: string, context: string) {
+  let text = cleanDigestLine(value).replace(/^!+/, "").trim();
+  if (/f\/u pathology\/staging/i.test(text) && /review\s+vte\/bleed/i.test(text)) return "";
+  if (/trend\s+tls\s+labs/i.test(text) && !hasTlsLabSignal(context)) return "";
+  if (/review\s+vte\/bleed(?:\s+risk)?/i.test(text) && !hasVteBleedContext(context)) {
+    text = text.replace(/;?\s*review\s+vte\/bleed(?:\s+risk)?/gi, "").trim();
+  }
+  if (/^f\/u pathology\/staging$/i.test(text)) return "";
+  return cleanShortTail(text);
+}
+
+function taskSummaryText(patient: Patient, hideCompleted: boolean, maxItems: number, maxChars: number, assessmentPlan = "") {
+  const noTaskContext = patientDigestContext(patient, false);
   const tasks = hideCompleted ? patient.tasks.filter((task) => !task.done) : patient.tasks;
   const sortedTasks = [...tasks].sort((a, b) => {
     const priority = { urgent: 0, normal: 1, low: 2 };
     return priority[a.priority] - priority[b.priority];
   });
   const orderLines = clinicalItems(patient.vsOrder).map((line) => `Order: ${shortDigestText(line, maxChars)}`);
-  const taskLines = sortedTasks.map((task) => {
-    const text = task.text.trim().startsWith("!") ? task.text.trim().slice(1).trim() : task.text;
-    return `${task.priority === "urgent" ? "! " : ""}${shortDigestText(text, maxChars)}${task.dueDate ? ` (${task.dueDate})` : ""}`;
-  });
+  const taskLines = sortedTasks
+    .map((task) => {
+      const urgent = task.priority === "urgent" || task.text.trim().startsWith("!");
+      const text = cleanTaskDigestText(task.text, noTaskContext);
+      if (!text) return "";
+      if (!urgent && !task.dueDate && overlapsAssessmentPlan(text, assessmentPlan)) return "";
+      return `${urgent ? "! " : ""}${shortDigestText(text, maxChars)}${task.dueDate ? ` (${task.dueDate})` : ""}`;
+    })
+    .filter(Boolean);
   return uniqueLines([...orderLines, ...taskLines])
     .slice(0, maxItems)
     .filter(Boolean)
@@ -808,7 +908,23 @@ function taskSummaryText(patient: Patient, hideCompleted: boolean, maxItems: num
 }
 
 function redFlagText(patient: Patient, maxItems: number, maxChars: number) {
+  const context = patientDigestContext(patient, false);
   return uniqueLines(clinicalItems(patient.importantRedFlags))
+    .filter((line) => {
+      if (/^(possible sepsis\/shock physiology|high-risk cardiac signal|active bleeding or severe anemia signal|febrile neutropenia safety signal)\b/i.test(line)) {
+        return false;
+      }
+      if (/shock|hypotension|pressor|norepi/i.test(line) && /\b(?:resolved|improved|responded to|fluid[- ]responsive|off pressor)\b/i.test(context)) {
+        return false;
+      }
+      if (/febrile neutropenia|neutropenia/i.test(line) && !/\b(?:fever|febrile|anc\s*[0-9]|wbc\s*[0-3](?:\.\d+)?)\b/i.test(context)) {
+        return false;
+      }
+      if (/active bleeding|transfusion|scope|egd/i.test(line) && !/\b(?:active bleed|melena|hematemesis|hematochezia|transfusion|egd|scope|hb\s*[0-7](?:\.\d+)?)\b/i.test(context)) {
+        return false;
+      }
+      return true;
+    })
     .slice(0, maxItems)
     .map((item) => shortDigestText(item, maxChars))
     .filter(Boolean)
@@ -849,7 +965,7 @@ export function getRoundingDigest(
   const objective = objectiveSummaryText(patient, limits.objective, limits.detailChars);
   const image = imageSummaryText(patient, limits.images, limits.detailChars);
   const assessmentPlan = assessmentPlanSummaryText(patient, limits.ap, limits.detailChars);
-  const tasks = taskSummaryText(patient, options.hideCompletedTasks ?? true, limits.tasks, limits.detailChars);
+  const tasks = taskSummaryText(patient, options.hideCompletedTasks ?? true, limits.tasks, limits.detailChars, assessmentPlan);
   const discharge = dischargeText(patient, limits.detailChars);
   const urgentTasks = patient.tasks
     .filter((task) => !task.done && (task.priority === "urgent" || task.text.trim().startsWith("!")))

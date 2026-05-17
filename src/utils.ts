@@ -893,6 +893,7 @@ interface LabFocusEntry {
   key: string;
   text: string;
   score: number;
+  category: string;
   anchor: boolean;
   critical: boolean;
   trend: boolean;
@@ -936,8 +937,13 @@ function canonicalLabKey(label: string) {
   if (normalized === "plt" || normalized.includes("platelet")) return "Plt";
   if (normalized === "cr" || normalized.includes("creatinine")) return "Cr";
   if (normalized === "egfr") return "eGFR";
+  if (normalized === "bun") return "BUN";
   if (normalized === "na" || normalized === "sodium") return "Na";
   if (normalized === "k" || normalized === "potassium") return "K";
+  if (normalized === "ca" || normalized === "calcium") return "Ca";
+  if (normalized === "mg" || normalized === "magnesium") return "Mg";
+  if (normalized === "p" || normalized === "phos" || normalized === "phosphate") return "P";
+  if (normalized === "uricacid" || normalized === "uaacid") return "Uric acid";
   if (normalized.includes("lactate")) return "Lactate";
   if (normalized === "crp") return "CRP";
   if (normalized === "pct" || normalized.includes("procalcitonin")) return "PCT";
@@ -955,6 +961,7 @@ function canonicalLabKey(label: string) {
   if (normalized === "scc") return "SCC";
   if (normalized === "esr") return "ESR";
   if (normalized === "fib" || normalized.includes("fibrinogen")) return "Fibrinogen";
+  if (normalized === "ldh") return "LDH";
   if (normalized.includes("troponini") || normalized === "tni" || normalized === "hstni") return "Troponin I";
   if (normalized.includes("troponint") || normalized === "tnt" || normalized === "hstnt") return "Troponin T";
   if (normalized === "troponin" || normalized === "trop") return "Troponin";
@@ -964,6 +971,7 @@ function canonicalLabKey(label: string) {
 function labDisplayLabel(key: string) {
   if (key === "Cholesterol") return "Chol";
   if (key === "Glucose") return "Glu";
+  if (key === "P") return "Phos";
   return key;
 }
 
@@ -1029,12 +1037,22 @@ function labAbnormalLevel(key: string, value: number | null) {
       return value < 50 ? 2 : value < 100 || value > 450 ? 1 : 0;
     case "Cr":
       return value >= 2 ? 2 : value > 1.3 ? 1 : 0;
+    case "BUN":
+      return value >= 50 ? 2 : value > 25 ? 1 : 0;
     case "eGFR":
       return value < 30 ? 2 : value < 60 ? 1 : 0;
     case "Na":
       return value < 130 || value > 150 ? 2 : value < 135 || value > 145 ? 1 : 0;
     case "K":
       return value < 3 || value > 5.5 ? 2 : value < 3.5 || value > 5 ? 1 : 0;
+    case "Ca":
+      return value < 7 || value > 12 ? 2 : value < 8.5 || value > 10.5 ? 1 : 0;
+    case "Mg":
+      return value < 1.2 || value > 3 ? 2 : value < 1.6 || value > 2.6 ? 1 : 0;
+    case "P":
+      return value < 2 || value > 6 ? 2 : value < 2.5 || value > 4.5 ? 1 : 0;
+    case "Uric acid":
+      return value >= 10 ? 2 : value >= 7 ? 1 : 0;
     case "Glucose":
       return value < 70 || value >= 300 ? 2 : value >= 180 ? 1 : 0;
     case "HbA1c":
@@ -1067,6 +1085,11 @@ function labAbnormalLevel(key: string, value: number | null) {
       return value >= 60 ? 2 : value > 36 ? 1 : 0;
     case "Alb":
       return value < 3 ? 1 : 0;
+    case "AST":
+    case "ALT":
+      return value >= 200 ? 2 : value >= 80 ? 1 : 0;
+    case "LDH":
+      return value >= 500 ? 2 : value >= 250 ? 1 : 0;
     case "Troponin":
     case "Troponin I":
     case "Troponin T":
@@ -1090,12 +1113,20 @@ function meaningfulLabDelta(key: string, value: number | null, previous: number 
       return delta >= 50 || percent >= 0.25;
     case "Cr":
       return delta >= 0.3 || percent >= 0.25;
+    case "BUN":
+      return delta >= 10 || percent >= 0.3;
     case "eGFR":
       return delta >= 10 || percent >= 0.25;
     case "Na":
       return delta >= 3;
     case "K":
       return delta >= 0.4;
+    case "Ca":
+    case "Mg":
+    case "P":
+      return delta >= 0.5 || percent >= 0.2;
+    case "Uric acid":
+      return delta >= 1 || percent >= 0.25;
     case "Glucose":
       return delta >= 50;
     case "Lactate":
@@ -1110,9 +1141,56 @@ function meaningfulLabDelta(key: string, value: number | null, previous: number 
     case "Troponin I":
     case "Troponin T":
       return percent >= 0.2;
+    case "LDH":
+      return delta >= 100 || percent >= 0.25;
     default:
       return percent >= 0.35;
   }
+}
+
+function patientLabContext(patient: Patient) {
+  return [
+    patient.primaryDiagnosis,
+    patient.oneLiner,
+    patient.activeProblems,
+    ...patient.activeProblemItems,
+    ...patient.activeProblemStructuredItems.map((item) => `${item.title} ${item.note}`),
+    patient.underlyingDiseases,
+    ...patient.underlyingDiseaseItems,
+    patient.hospitalCourseHighlights,
+    patient.earlyHospitalCourse,
+    patient.rawLabText,
+    patient.newLabs,
+    patient.importantRedFlags,
+    patient.dischargePlan,
+    ...patient.assessmentPlanItems.map((item) => `${item.problemTitle} ${item.assessmentSummary} ${item.evidenceOrCourseItems.join(" ")} ${item.planItems.join(" ")}`),
+  ]
+    .join(" ")
+    .toLowerCase();
+}
+
+function labFocusCategory(key: string, patient: Patient) {
+  const context = patientLabContext(patient);
+  const hasInfection = /\b(infection|bacteremia|sepsis|septic|fever|febrile|culture|b\/c|bcx|pna|pneumonia|uti|abscess|lactate|abx|antibiotic)\b/.test(context);
+  const hasRenalOrElectrolyte = /\b(aki|ckd|renal|dialysis|crrt|oliguria|hyperk|hypok|electrolyte|dehydrat|tumou?r lysis|tls)\b/.test(context);
+  const hasAnemiaOrBleeding = /\b(anemia|bleed|bleeding|melena|hematemesis|hematochezia|hematuria|transfusion|anticoag|antiplatelet|thrombocytopenia)\b/.test(context);
+  const hasCancerOrNutrition = /\b(cancer|tumou?r|malign|carcinoma|scc|chemo|onc|j-?tube|jejunostomy|nutrition|malnutrition|poor intake|dysphag|tube feeding)\b/.test(context);
+  const hasTls = /\b(tls|tumou?r lysis|uric acid|rasburicase|allopurinol)\b/.test(context);
+  const hasCardiac = /\b(hf|heart failure|acs|mi|troponin|arrhythm|af\b|pulmonary edema)\b/.test(context);
+
+  if (hasInfection && ["WBC", "Neu", "Lactate", "CRP", "PCT", "Blood culture", "Sputum culture", "Urine culture"].includes(key)) {
+    return "Infx";
+  }
+  if (hasAnemiaOrBleeding && ["Hb", "Plt", "PT", "INR", "aPTT", "Fibrinogen"].includes(key)) return "Anemia/bleed";
+  if ((hasRenalOrElectrolyte || hasTls) && ["BUN", "Cr", "eGFR", "Na", "K", "Ca", "Mg", "P", "Uric acid", "LDH"].includes(key)) {
+    return hasTls && ["K", "Ca", "P", "Uric acid", "Cr", "LDH"].includes(key) ? "TLS" : "Renal/electrolyte";
+  }
+  if (["Na", "K", "Ca", "Mg", "P"].includes(key)) return "Renal/electrolyte";
+  if (hasCardiac && ["Troponin", "Troponin I", "Troponin T", "BNP", "NT-proBNP", "Cr", "K"].includes(key)) return "Cardiac";
+  if (hasCancerOrNutrition && ["Alb", "Hb", "Ca", "Mg", "P", "Uric acid", "LDH", "CA125", "CEA", "SCC", "CA19-9"].includes(key)) {
+    return hasTls && ["K", "Ca", "P", "Uric acid", "Cr", "LDH"].includes(key) ? "TLS" : "Onc/nutrition";
+  }
+  return "";
 }
 
 function isDiseaseAnchorLab(key: string, patient: Patient) {
@@ -1135,20 +1213,56 @@ function isDiseaseAnchorLab(key: string, patient: Patient) {
   const hasBleeding = /bleed|bleeding|anemia|melena|hematemesis|hematuria|vaginal|postmenopausal|ob gyn|obgyn/.test(context);
   const hasLiver = /cirrhosis|hepatitis|liver|jaundice/.test(context);
   const hasCancerOrGyn = /cancer|tumor|malign|carcinoma|ca\?|ca |gyn|ob|ovary|ovarian|cervical|uterine|postmenopausal/.test(context);
+  const hasInfection = /infection|bacteremia|sepsis|septic|fever|culture|b\/c|bcx|pneumonia|pna|uti|abx|antibiotic/.test(context);
+  const hasNutrition = /j-?tube|jejunostomy|nutrition|malnutrition|poor intake|dysphag|tube feeding/.test(context);
+  const hasTls = /tls|tumou?r lysis|uric acid|rasburicase|allopurinol/.test(context);
 
   if (hasStroke && ["HbA1c", "LDL", "TG", "Cholesterol"].includes(key)) return true;
   if (hasHf && ["BNP", "NT-proBNP", "Cr", "eGFR", "Na", "K"].includes(key)) return true;
   if (hasDm && ["HbA1c", "Glucose", "Cr", "eGFR"].includes(key)) return true;
-  if (hasRenal && ["Cr", "eGFR", "K", "Na"].includes(key)) return true;
+  if (hasInfection && ["WBC", "Neu", "Lactate", "CRP", "PCT", "Blood culture", "Sputum culture", "Urine culture"].includes(key)) return true;
+  if (hasRenal && ["BUN", "Cr", "eGFR", "K", "Na", "Ca", "Mg", "P"].includes(key)) return true;
   if (hasBleeding && ["Hb", "Plt", "PT", "INR", "aPTT"].includes(key)) return true;
   if (hasLiver && ["AST", "ALT", "Bilirubin", "Alb", "INR"].includes(key)) return true;
-  if (hasCancerOrGyn && ["CA125", "CEA", "SCC", "Hb"].includes(key)) return true;
+  if (hasCancerOrGyn && ["CA125", "CEA", "SCC", "CA19-9", "Hb", "Alb", "Ca", "Mg", "P", "LDH"].includes(key)) return true;
+  if (hasNutrition && ["Alb", "Mg", "P", "Ca", "Hb"].includes(key)) return true;
+  if (hasTls && ["K", "P", "Ca", "Uric acid", "Cr", "LDH"].includes(key)) return true;
   return false;
 }
 
 function shouldShowAnchorLab(key: string, abnormalLevel: number) {
-  const persistentAnchorKeys = new Set(["HbA1c", "LDL", "TG", "Cholesterol", "BNP", "NT-proBNP", "CA125", "CEA", "SCC"]);
+  const persistentAnchorKeys = new Set([
+    "HbA1c",
+    "LDL",
+    "TG",
+    "Cholesterol",
+    "BNP",
+    "NT-proBNP",
+    "Blood culture",
+    "Sputum culture",
+    "Urine culture",
+    "CA125",
+    "CEA",
+    "SCC",
+    "CA19-9",
+  ]);
   return abnormalLevel >= 1 || persistentAnchorKeys.has(key);
+}
+
+function formatLabFocusEntryGroups(entries: LabFocusEntry[]) {
+  const order = ["Infx", "Anemia/bleed", "Renal/electrolyte", "TLS", "Cardiac", "Onc/nutrition", ""];
+  const groups = new Map<string, LabFocusEntry[]>();
+  entries.forEach((entry) => {
+    const key = entry.category;
+    groups.set(key, [...(groups.get(key) ?? []), entry]);
+  });
+
+  return [...groups.entries()]
+    .sort(([a], [b]) => order.indexOf(a) - order.indexOf(b))
+    .map(([category, group]) => {
+      const text = group.map((entry) => entry.text).join(", ");
+      return category ? `${category}: ${text}` : text;
+    });
 }
 
 function collectLabObservations(patient: Patient, notes: DailyNote[] = []) {
@@ -1238,12 +1352,18 @@ export function getLabFocusSummary(
     const direction = value !== null ? labDirection(key, value, previous) : latest.previousValue ? `(${latest.previousValue})` : "";
     const formattedValue = value !== null ? formatLabFocusValue(key, value) : latest.value;
     const text = `${labDisplayLabel(key)} ${formattedValue}${labFocusUnitText(key, latest.item)}${direction}${labFocusSuffix(latest.item)}`;
+    const category = labFocusCategory(key, patient);
     const critical = level >= 2;
     const trend = hasDelta || qualitativeLevel >= 1 || (level >= 1 && !anchor) || level >= 2;
-    const score = level * 100 + Number(hasDelta) * 35 + Number(anchor) * 25 + Number(latest.item.important || latest.item.isImportant) * 40;
+    const score =
+      level * 100 +
+      Number(hasDelta) * 35 +
+      Number(anchor) * 25 +
+      Number(Boolean(category)) * 45 +
+      Number(latest.item.important || latest.item.isImportant) * 40;
 
     if (critical || trend || anchor) {
-      entries.push({ key, text, score, anchor, critical, trend });
+      entries.push({ key, text, score, category, anchor, critical, trend });
     }
   });
 
@@ -1268,16 +1388,16 @@ export function getLabFocusSummary(
 
   const hiddenCount = Math.max(entries.length - used.size, 0);
   const sections = [
-    critical.length > 0 ? `!Critical: ${critical.map((entry) => entry.text).join(", ")}` : "",
-    trend.length > 0 ? `Lab \u0394: ${trend.map((entry) => entry.text).join(", ")}` : "",
-    anchors.length > 0 ? `Anchor: ${anchors.map((entry) => entry.text).join(", ")}` : "",
+    critical.length > 0 ? `!Critical: ${formatLabFocusEntryGroups(critical).join("; ")}` : "",
+    trend.length > 0 ? `Lab \u0394: ${formatLabFocusEntryGroups(trend).join("; ")}` : "",
+    anchors.length > 0 ? `Anchor: ${formatLabFocusEntryGroups(anchors).join("; ")}` : "",
   ].filter(Boolean);
   const text = [sections.join(separator), hiddenCount > 0 ? `+${hiddenCount} labs` : ""].filter(Boolean).join(separator);
 
   return {
-    critical: critical.map((entry) => entry.text),
-    trend: trend.map((entry) => entry.text),
-    anchors: anchors.map((entry) => entry.text),
+    critical: formatLabFocusEntryGroups(critical),
+    trend: formatLabFocusEntryGroups(trend),
+    anchors: formatLabFocusEntryGroups(anchors),
     hiddenCount,
     text,
   };

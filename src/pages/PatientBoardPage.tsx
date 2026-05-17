@@ -32,7 +32,7 @@ import {
   IconStar,
 } from "../components/icons";
 import { useT } from "../i18n";
-import { getRoundingDigest, type RoundingDigest } from "../roundingDigest";
+import { getRoundingDigest } from "../roundingDigest";
 
 interface PageProps {
   patients: Patient[];
@@ -734,21 +734,6 @@ function PatientBoardPage({
     });
   }
 
-  function taskSummary(patient: Patient, digest: RoundingDigest) {
-    const pendingTasks = patient.tasks.filter((task) => !task.done);
-    const urgentTasks = pendingTasks.filter(
-      (task) => task.priority === "urgent" || task.text.trim().startsWith("!"),
-    );
-
-    return (
-      <div>
-        {urgentTasks.length > 0 && <span className="badge urgent">{urgentTasks.length} urgent</span>}{" "}
-        <span>{pendingTasks.length} pending</span>
-        <ClinicalText value={digest.tasks} fallback="No pending tasks" maxLines={3} maxCharsPerLine={46} />
-      </div>
-    );
-  }
-
   function pendingTasks(patient: Patient) {
     return patient.tasks.filter((task) => !task.done);
   }
@@ -1262,17 +1247,10 @@ function PatientBoardPage({
         <div className="patient-board-grid">
           {activePatients.map((patient) => {
             const digest = boardDigest(patient);
-            const patientNotes = dailyNotesByPatient[patient.id] ?? [];
             const pendingTaskCount = pendingTasks(patient).length;
             const urgentTaskCount = pendingTasks(patient).filter(
               (task) => task.priority === "urgent" || task.text.trim().startsWith("!"),
             ).length;
-            const todaySignal = digest.subjective || digest.objective || digest.lab || digest.image;
-            const dischargeSignal = hasDischargeSoonSignal(patient)
-              ? dischargeCockpitLine(patient)
-              : patient.dischargeTargetDate
-                ? `Target ${patient.dischargeTargetDate}`
-                : "TBD";
 
             return (
             <article className="patient-board-card" key={patient.id}>
@@ -1288,52 +1266,29 @@ function PatientBoardPage({
                 </div>
               </header>
 
-              <div className="board-card-scanline" aria-label="Patient scan summary">
-                <div className="board-scan-item">
-                  <span>Dx / Issues</span>
-                  <strong>{shortCockpitText(digest.diagnosis || digest.issues || patient.primaryDiagnosis || patient.oneLiner || "-", 96)}</strong>
-                </div>
-                <div className="board-scan-item">
-                  <span>Today</span>
-                  <strong>{shortCockpitText(todaySignal || "No new signal", 96)}</strong>
-                </div>
-                <div className={`board-scan-item ${pendingTaskCount > 0 ? "scan-active" : ""}`}>
-                  <span>Tasks</span>
-                  <strong>
-                    {pendingTaskCount} pending{urgentTaskCount > 0 ? ` / ${urgentTaskCount} urgent` : ""}
-                  </strong>
-                </div>
-                <div className={`board-scan-item ${hasDischargeSoonSignal(patient) ? "scan-discharge" : ""}`}>
-                  <span>DC</span>
-                  <strong>{shortCockpitText(dischargeSignal, 72)}</strong>
-                </div>
-              </div>
-
               <div className="patient-board-card-body">
-                <section className="patient-board-section patient-board-overview patient-board-priority">
+                <section className="patient-board-section patient-board-overview">
                   {digest.redFlags && (
                     <div className="board-red-flags">
                       <span className="board-label">Red Flags</span>
                       <ClinicalText value={digest.redFlags} maxLines={2} maxCharsPerLine={52} importantDefault />
                     </div>
                   )}
-                  <div className="digest-line">
-                    <span className="board-label">Dx</span>
-                    <strong>{digest.diagnosis || "-"}</strong>
+                  <div className="digest-line digest-line-primary">
+                    <span className="board-label">Dx / Issues</span>
+                    <strong>{[digest.diagnosis, digest.issues].filter(Boolean).join(" / ") || "-"}</strong>
                   </div>
-                  <div className="digest-line">
+                  {digest.risks && (
+                  <div className="digest-line digest-line-muted">
                     <span className="board-label">Risk</span>
-                    <span>{digest.risks || "-"}</span>
+                    <span>{digest.risks}</span>
                   </div>
-                  <div className="digest-line">
-                    <span className="board-label">Issues</span>
-                    <span>{digest.issues || "-"}</span>
-                  </div>
+                  )}
                   <div className="muted">Attending: {patient.attending || t("board.unassigned")}</div>
                 </section>
 
                 <section className="patient-board-section patient-board-today">
-                  <span className="board-label">Today Signal</span>
+                  <span className="board-label">S</span>
                   <ClinicalText value={digest.subjective} fallback="-" maxLines={2} maxCharsPerLine={48} />
                   <div className="board-subsection">
                     <span className="board-label">V/S / PE</span>
@@ -1347,12 +1302,22 @@ function PatientBoardPage({
                 </section>
 
                 <section className="patient-board-section patient-board-plan">
-                  <span className="board-label">Plan / Tasks</span>
+                  <span className="board-label">A/P</span>
                   <ClinicalText value={digest.assessmentPlan} fallback="-" maxLines={3} maxCharsPerLine={50} />
-                  <div className="board-subsection patient-board-tasks">{taskSummary(patient, digest)}</div>
+                </section>
+
+                <section className="patient-board-section patient-board-tasks-dc">
+                  <div className="patient-board-task-heading">
+                    <span className="board-label">Tasks / DC</span>
+                    <span>
+                      {urgentTaskCount > 0 && <span className="badge urgent">{urgentTaskCount} urgent</span>}{" "}
+                      <span>{pendingTaskCount} pending</span>
+                    </span>
+                  </div>
+                  <ClinicalText value={digest.tasks} fallback="No pending tasks" maxLines={3} maxCharsPerLine={50} />
                   <div className="board-subsection patient-board-discharge">
                     <span className="board-label">DC</span>
-                    <strong>{patient.dischargeTargetDate || "TBD"}</strong>
+                    <ClinicalText value={digest.discharge || (patient.dischargeTargetDate ? `Target: ${patient.dischargeTargetDate}` : "")} fallback="TBD" maxLines={2} maxCharsPerLine={50} />
                     {dischargeReminder(patient) && <div className="important-line">{dischargeReminder(patient)}</div>}
                   </div>
                 </section>

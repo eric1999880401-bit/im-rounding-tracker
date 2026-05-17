@@ -1210,6 +1210,13 @@ input[type="checkbox"] {
   grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr);
 }
 
+.detail-rounding-sheet {
+  align-items: start;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(170px, 0.95fr) minmax(170px, 0.8fr) minmax(230px, 1.2fr) minmax(230px, 1.15fr) minmax(230px, 1.15fr);
+}
+
 .detail-soap-block {
   background: var(--surface-muted);
   border: 1px solid var(--border);
@@ -1224,6 +1231,15 @@ input[type="checkbox"] {
 .detail-soap-ap,
 .detail-soap-task {
   background: var(--surface);
+}
+
+.detail-objective-stack {
+  display: grid;
+  gap: 8px;
+}
+
+.detail-objective-stack > div {
+  min-width: 0;
 }
 
 .rounds-quick-order-collapse {
@@ -2046,7 +2062,7 @@ tbody tr:last-child td {
 .patient-board-card-body {
   display: grid;
   gap: 10px;
-  grid-template-columns: minmax(220px, 0.95fr) minmax(260px, 1.15fr) minmax(280px, 1.2fr);
+  grid-template-columns: minmax(210px, 0.95fr) minmax(250px, 1.1fr) minmax(240px, 1fr) minmax(250px, 1.05fr);
   padding: 12px;
 }
 
@@ -2063,8 +2079,36 @@ tbody tr:last-child td {
 .patient-board-today,
 .patient-board-plan,
 .patient-board-tasks,
-.patient-board-discharge {
+.patient-board-discharge,
+.patient-board-tasks-dc {
   overflow-wrap: anywhere;
+}
+
+.digest-line-primary strong {
+  display: block;
+  font-size: 14px;
+  line-height: 1.3;
+}
+
+.digest-line-muted {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.patient-board-task-heading {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+
+.patient-board-task-heading > span:last-child {
+  align-items: center;
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  justify-content: flex-end;
 }
 
 .patient-board-card-actions {
@@ -3400,6 +3444,10 @@ tbody tr:last-child td {
     grid-template-columns: 1fr;
   }
 
+  .detail-rounding-sheet {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .patient-board-section + .patient-board-section {
     border-left: 0;
     padding-left: 0;
@@ -3410,6 +3458,21 @@ tbody tr:last-child td {
   .objective-entry-grid,
   .objective-entry-grid.single-column {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 1320px) {
+  .patient-board-card-body {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .detail-rounding-sheet {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .patient-board-section + .patient-board-section {
+    border-left: 0;
+    padding-left: 0;
   }
 }
 
@@ -3462,6 +3525,7 @@ tbody tr:last-child td {
   .clinical-doc-action-grid,
   .patient-board-card-body,
   .detail-soap-grid,
+  .detail-rounding-sheet,
   .rounds-detail-grid,
   .rounds-quick-order,
   .task-input-row,

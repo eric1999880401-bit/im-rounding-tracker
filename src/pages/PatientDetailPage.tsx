@@ -602,15 +602,42 @@ function PatientDetailPage({
           </section>
         )}
 
-        <div className="detail-soap-grid">
+        <div className="detail-rounding-sheet">
+          <section className="detail-soap-block detail-rounding-context">
+            <span className="board-label">Dx / Issues</span>
+            <ClinicalText
+              value={[
+                digest.diagnosis ? `Dx: ${digest.diagnosis}` : "",
+                digest.risks ? `PMH: ${digest.risks}` : "",
+                digest.issues ? `Issues: ${digest.issues}` : "",
+              ].filter(Boolean).join("\n")}
+              fallback="-"
+              maxLines={4}
+              maxCharsPerLine={92}
+            />
+          </section>
+
           <section className="detail-soap-block">
             <span className="board-label">S</span>
             <ClinicalText value={digest.subjective} fallback="-" maxLines={4} maxCharsPerLine={90} />
           </section>
 
-          <section className="detail-soap-block">
+          <section className="detail-soap-block detail-soap-objective">
             <span className="board-label">O</span>
-            <ClinicalText value={[digest.objective, digest.lab, digest.image].filter(Boolean).join("\n")} fallback="-" maxLines={6} maxCharsPerLine={90} />
+            <div className="detail-objective-stack">
+              <div>
+                <span className="objective-chip-label">V/S / PE</span>
+                <ClinicalText value={digest.objective} fallback="-" maxLines={3} maxCharsPerLine={88} />
+              </div>
+              <div>
+                <span className="objective-chip-label">Lab focus</span>
+                <ClinicalText value={digest.lab} fallback="No lab signal" maxLines={3} maxCharsPerLine={88} />
+              </div>
+              <div>
+                <span className="objective-chip-label">Image focus</span>
+                <ClinicalText value={digest.image} fallback="-" maxLines={2} maxCharsPerLine={88} />
+              </div>
+            </div>
           </section>
 
           <section className="detail-soap-block detail-soap-ap">
@@ -731,7 +758,10 @@ function PatientDetailPage({
             </div>
           </div>
           {cleanupStatus && <p className="status-message">{cleanupStatus}</p>}
-          {visibleCleanupChanges.length > 0 && (
+          {!cleanupPreview && visibleCleanupChanges.length > 0 && (
+            <p className="muted">{visibleCleanupChanges.length} AI-draft field cleanup(s) detected. Preview to compare before applying to the local draft.</p>
+          )}
+          {cleanupPreview && visibleCleanupChanges.length > 0 && (
             <div className="cleanup-change-grid">
               {visibleCleanupChanges.map((change) => (
                 <article className="cleanup-change-card" key={`${change.field}-${change.reason}`}>

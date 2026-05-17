@@ -932,6 +932,70 @@ try {
   console.error(`FAIL Heme/onc A/P is concise and has no clipped tails: ${failures[failures.length - 1].error}`);
 }
 
+try {
+  const labText = "5/15 WBC 12.7, Neu 88.9, Hb 9.4, Plt 259, Cr 0.46, K 3.0. B/C MRSA then Enterococcus. Teicoplanin 5/13-.";
+  const patient = {
+    ...emptyPatient(),
+    id: "demo-board-detail-clean",
+    bed: "H5-113",
+    patientCode: "TEST-BOARD",
+    age: 51,
+    sex: "M",
+    primaryDiagnosis: "esophageal SCC",
+    oneLiner: "51M SCC with bacteremia and J-tube nutrition",
+    underlyingDiseases: "hypopharyngeal SCC s/p chemotherapy; J-tube",
+    activeProblems: "Bacteremia / infection\nHeme/Onc safety\nUGIB / anemia",
+    hospitalCourseHighlights: "B/C peripheral MRSA, Port-A Enterococcus faecalis. Teicoplanin 5/13-. ED shock responded to IV fluids.",
+    rawLabText: labText,
+    newLabs: labText,
+    parsedLabItems: parseLabText(labText),
+    newImaging: "CT neck/chest: persistent esophageal wall thickening; necrotic metastatic LAD. Brain CT no hemorrhage/edema.",
+    importantRedFlags:
+      "Bacteremia\n!Possible sepsis/shock physiology - Reason: resolved initial shock.\n!Active bleeding or severe anemia signal - Reason: Hb 9.4 without bleeding.\n!Febrile neutropenia safety signal - Reason: cancer.",
+    tasks: [
+      { id: "t-board-1", text: "Continue teicoplanin for MRSA bacteremia / Enterococcus infection", done: false, priority: "normal", category: "order", dueDate: "", createdAt: nowIso(), completedAt: "" },
+      { id: "t-board-2", text: "f/u repeat blood cultures from 5/15", done: false, priority: "urgent", category: "lab", dueDate: "", createdAt: nowIso(), completedAt: "" },
+      { id: "t-board-3", text: "trend TLS labs: K/Phos/Ca/uric acid/Cr", done: false, priority: "urgent", category: "lab", dueDate: "", createdAt: nowIso(), completedAt: "" },
+      { id: "t-board-4", text: "f/u pathology/staging; review VTE/bleed risk", done: false, priority: "normal", category: "other", dueDate: "", createdAt: nowIso(), completedAt: "" },
+    ],
+    assessmentPlanItems: [
+      {
+        id: "ap-board-dirty",
+        problemTitle: "Heme/Onc safety",
+        assessmentSummary: "Cancer/infx risk; staging/path pending; review VTE/bleed.",
+        evidenceOrCourseItems: ["B/C MRSA and Enterococcus", "hypovolemic shock improved after IV fluids"],
+        planItems: ["f/u pathology/staging", "review VTE/bleed risk", "Onc/ID if fever/neutro"],
+        category: "activeProblem",
+        isImportant: true,
+        color: "",
+        order: 0,
+      },
+    ],
+    updatedAt: nowIso(),
+  };
+  const digest = getRoundingDigest(patient, [], { mode: "board", hideCompletedTasks: true });
+  if (!/MRSA\/Enterococcus bacteremia|Teicoplanin/i.test(digest.assessmentPlan)) {
+    throw new Error(`board/detail A/P lost concrete infection plan: ${digest.assessmentPlan}`);
+  }
+  if (/TLS\s*\/\s*onc safety|Heme\/Onc safety|review VTE\/bleed risk|UGIB|transfusion|EGD/i.test(digest.assessmentPlan)) {
+    throw new Error(`board/detail A/P kept generic or false plans: ${digest.assessmentPlan}`);
+  }
+  if (!/Infx:.*WBC.*Neu/i.test(digest.lab) || !/Anemia\/bleed:.*Hb/i.test(digest.lab) || !/Renal\/electrolyte:.*K/i.test(digest.lab)) {
+    throw new Error(`lab focus was not clinically grouped: ${digest.lab}`);
+  }
+  if (/Continue teicoplanin|review VTE\/bleed risk|TLS labs/i.test(digest.tasks) || !/blood culture/i.test(digest.tasks)) {
+    throw new Error(`tasks were not deduped/action-focused: ${digest.tasks}`);
+  }
+  if (/Possible sepsis\/shock|Active bleeding|Febrile neutropenia/i.test(digest.redFlags)) {
+    throw new Error(`rule-label red flags leaked into board/detail digest: ${digest.redFlags}`);
+  }
+  console.log("PASS Board/detail digest is print-like, lab grouped, and task-deduped");
+  supplementalPasses += 1;
+} catch (error) {
+  failures.push({ name: "Board/detail digest is print-like, lab grouped, and task-deduped", error: error instanceof Error ? error.message : String(error) });
+  console.error(`FAIL Board/detail digest is print-like, lab grouped, and task-deduped: ${failures[failures.length - 1].error}`);
+}
+
 await server.close();
 
 if (failures.length > 0) {
