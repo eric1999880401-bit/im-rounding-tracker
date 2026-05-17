@@ -13,9 +13,11 @@ const {
   applyClinicalKnowledgeToAiSoapDraft,
   applyClinicalKnowledgeToPatientImportDraft,
   applyClinicalKnowledgeToText,
+  formatRuleBasedAdmissionSummary,
   formatRuleBasedSbar,
   formatRuleBasedWeeklySummary,
 } = await server.ssrLoadModule("/src/clinicalKnowledge.ts");
+const { formatClinicalDocumentDraft } = await server.ssrLoadModule("/src/clinicalDocumentFormat.ts");
 const { emptyPatient, getLabFocusSummary, parseLabText, textToItems, todayKey, nowIso, createId } = await server.ssrLoadModule("/src/utils.ts");
 const { getRoundingDigest } = await server.ssrLoadModule("/src/roundingDigest.ts");
 const { buildConcisePatientClinicalUpdate } = await server.ssrLoadModule("/src/clinicalPatientPolish.ts");
@@ -291,6 +293,102 @@ try {
 } catch (error) {
   failures.push({ name: "Reasoning-driven SOAP overrides generic AI prose", error: error instanceof Error ? error.message : String(error) });
   console.error(`FAIL Reasoning-driven SOAP overrides generic AI prose: ${failures[failures.length - 1].error}`);
+}
+
+try {
+  const icuTransferReasoning = {
+    currentClinicalState:
+      "ICU transfer after cholangitis septic shock; off pressor/CRRT but aspiration PNA, AKI/hyperK, thrombocytopenia and anticoag decision remain active.",
+    primaryRisk: "Ward transfer after septic shock with AKI/hyperK, O2/aspiration risk, and Plt-limited anticoag decision",
+    whyThisMatters: [
+      { fact: "s/p ERCP stent, off pressor", source: "ICU course", implication: "source controlled but Abx/Cx plan still needs closure" },
+      { fact: "Cr 2.9, K 5.4", source: "latest labs", implication: "renal recovery incomplete; hyperK can change orders overnight" },
+      { fact: "Plt 78 and AF previously on apixaban", source: "PMH/labs", implication: "anticoag restart needs bleeding-risk review" },
+    ],
+    activeProblemsRanked: [
+      {
+        problem: "Resolving cholangitis/sepsis",
+        status: "improving",
+        whyImportant: "ERCP source control done, but Cx/Abx de-escalation and recurrent fever threshold remain important.",
+        evidence: ["ERCP stent", "off pressor", "sputum Cx pending"],
+        todayPlan: ["f/u Cx/Abx de-escalation", "confirm no abscess/source-control issue"],
+        callThresholds: ["fever recurrence or SBP <90"],
+      },
+      {
+        problem: "AKI on CKD with hyperK",
+        status: "improving",
+        whyImportant: "Off CRRT but Cr/K still unsafe enough to affect renal dosing and telemetry/lab cadence.",
+        evidence: ["Cr 2.9 from peak 5.6", "K 5.4"],
+        todayPlan: ["trend Cr/K/UO", "renal-dose Abx and hold nephrotoxins"],
+        callThresholds: ["K rising, oliguria, ECG change"],
+      },
+      {
+        problem: "Aspiration PNA / O2 need",
+        status: "improving",
+        whyImportant: "Extubated but still needs NC O2 and swallow/aspiration plan before safe disposition.",
+        evidence: ["SpO2 94 NC3L", "RLL infiltrate improving"],
+        todayPlan: ["O2 wean", "swallow eval and aspiration precaution"],
+        callThresholds: ["worsening hypoxia or CO2 retention"],
+      },
+      {
+        problem: "AF anticoag vs thrombocytopenia",
+        status: "uncertain",
+        whyImportant: "Stroke prevention competes with bleeding risk while Plt is still low after ICU course.",
+        evidence: ["AF on apixaban before admission", "Plt 78"],
+        todayPlan: ["restart anticoag only after Hb/Plt/bleed review"],
+        callThresholds: ["bleeding, Plt drop, new neuro deficit"],
+      },
+    ],
+    resolvedOrLessImportant: ["Head CT no ICH is a negative image result, not an active neuro problem."],
+    missingDataNeeded: ["Abx stop/de-escalation date", "anticoag restart threshold", "disposition/rehab target"],
+    noiseToIgnore: ["routine normal vitals", "old CVA without new focal deficit", "negative head CT wording"],
+  };
+  const baseDraft = {
+    title: "AI document draft",
+    conciseSummary: "Patient is stable. Continue current management.",
+    clinicalReasoning: icuTransferReasoning,
+    sections: [
+      { heading: "Summary", content: "Patient is stable. Continue current management." },
+      { heading: "Recommendation", content: "Monitor closely." },
+    ],
+    followUpItems: ["monitor closely"],
+    uncertainty: [],
+  };
+  const admission = formatClinicalDocumentDraft({ ...baseDraft, documentType: "admissionSummary" });
+  const weekly = formatClinicalDocumentDraft({ ...baseDraft, documentType: "weeklySummary" });
+  const sbar = formatClinicalDocumentDraft({ ...baseDraft, documentType: "isbar" });
+  const combined = `${admission}\n${weekly}\n${sbar}`;
+  if (/continue current management|monitor closely/i.test(combined)) {
+    throw new Error(`shared document formatter retained generic filler: ${combined}`);
+  }
+  if (/negative head CT wording|old CVA without new focal deficit/i.test(combined)) {
+    throw new Error(`shared document formatter leaked noise-to-ignore content: ${combined}`);
+  }
+  assertDocumentIncludes(admission, /AKI\/hyperK|Plt-limited anticoag|aspiration risk/i, "admission summary should lead with current transfer risks");
+  assertDocumentIncludes(weekly, /Problem-Based A\/P[\s\S]*AKI on CKD with hyperK[\s\S]*Pending \/ Disposition/i, "weekly summary should keep A/P and pending structure");
+  assertDocumentIncludes(sbar, /^Situation: .*septic shock.*AKI\/hyperK.*O2\/aspiration/im, "SBAR should lead with transfer risk");
+  assertDocumentIncludes(sbar, /Recommendation:[\s\S]*f\/u Cx\/Abx de-escalation[\s\S]*restart anticoag only after Hb\/Plt\/bleed review/i, "SBAR should keep concrete actions");
+  console.log("PASS Shared document formatter projects reasoning into concise admission/weekly/SBAR drafts");
+  supplementalPasses += 1;
+} catch (error) {
+  failures.push({ name: "Shared document formatter projects reasoning into concise admission/weekly/SBAR drafts", error: error instanceof Error ? error.message : String(error) });
+  console.error(`FAIL Shared document formatter projects reasoning into concise admission/weekly/SBAR drafts: ${failures[failures.length - 1].error}`);
+}
+
+try {
+  const newAdmissionPlan = applyClinicalKnowledgeToText(
+    "New admission 62F fever and dyspnea. Dx CAP with sepsis physiology, BP 92/58, lactate 3.1, WBC 18, SpO2 91% NC3L. PMH CKD3 and AF on apixaban. CXR RLL PNA. Ceftriaxone/azithro started after B/C. Pending sputum Cx, repeat lactate, O2 wean, renal-dose meds and anticoag/bleed review.",
+  );
+  const admission = formatRuleBasedAdmissionSummary(newAdmissionPlan);
+  if (/monitor closely|continue current management|clinical correlation/i.test(admission)) {
+    throw new Error(`rule-based new-admission summary retained filler: ${admission}`);
+  }
+  assertDocumentIncludes(admission, /PNA|sepsis|lactate|culture|O2|renal|anticoag/i, "new admission summary should preserve admission reason, active risks, and pending work");
+  console.log("PASS Rule-based new-admission summary is concise and preserves key IM work");
+  supplementalPasses += 1;
+} catch (error) {
+  failures.push({ name: "Rule-based new-admission summary is concise and preserves key IM work", error: error instanceof Error ? error.message : String(error) });
+  console.error(`FAIL Rule-based new-admission summary is concise and preserves key IM work: ${failures[failures.length - 1].error}`);
 }
 
 try {
