@@ -1,5 +1,5 @@
 import type { HighlightLine } from "../types";
-import { splitHighlightLines } from "../utils";
+import { safeClinicalLine, splitHighlightLines } from "../utils";
 
 interface ClinicalTextProps {
   value: string;
@@ -10,21 +10,7 @@ interface ClinicalTextProps {
 }
 
 function shortenText(text: string, maxChars?: number) {
-  if (!maxChars || text.length <= maxChars) return text;
-  const limit = Math.max(8, maxChars);
-  const sliced = text.slice(0, limit).trimEnd();
-  const lastSpace = sliced.lastIndexOf(" ");
-  const cleanTail = (value: string) => {
-    let clean = value.replace(/\s+[+,;:-]\s*$/g, "").trim();
-    for (let index = 0; index < 2; index += 1) {
-      clean = clean.replace(/\s+\b(?:if|and|or|with|without|w\/|for|to|from|of|the|a|an|when|as|after|before|are|is)\b\.?$/i, "").trim();
-    }
-    return clean;
-  };
-  if (lastSpace >= Math.min(16, maxChars - 1)) {
-    return cleanTail(sliced.slice(0, lastSpace));
-  }
-  return cleanTail(sliced);
+  return maxChars ? safeClinicalLine(text, maxChars) : text;
 }
 
 function groupLines(lines: HighlightLine[], maxCharsPerLine?: number) {

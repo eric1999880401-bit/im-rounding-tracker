@@ -1,5 +1,5 @@
 import type { ParsedLabItem } from "../types";
-import { formatLabItem, keyLabItems } from "../utils";
+import { formatLabItem, interpretLabItem, keyLabItems } from "../utils";
 
 interface LabChipsProps {
   items: ParsedLabItem[];
@@ -18,12 +18,18 @@ export function LabChips({ items, maxItems, showMoreCount = false, onRemove }: L
     <div className="lab-chip-row">
       {visibleItems.map((item, index) => {
         const formatted = formatLabItem(item);
+        const interpretation = interpretLabItem(item);
         const sourceIndex = items.indexOf(item);
         return (
           <span
-            className={`lab-chip ${item.important || item.isImportant ? "important-lab-chip" : ""}`}
+            className={[
+              "lab-chip",
+              interpretation.important ? "important-lab-chip" : "",
+              interpretation.severity !== "normal" ? `lab-chip-${interpretation.severity}` : "",
+            ].filter(Boolean).join(" ")}
             key={`${formatted.label}-${formatted.value}-${index}`}
           >
+            {interpretation.badge && <span className="lab-chip-flag">{interpretation.badge}</span>}
             <span className="lab-chip-name">{formatted.label}</span>
             <span className="lab-chip-value">{formatted.value}</span>
             {item.unit && <span className="lab-chip-unit">{item.unit}</span>}

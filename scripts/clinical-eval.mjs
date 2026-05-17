@@ -18,7 +18,7 @@ const {
   formatRuleBasedWeeklySummary,
 } = await server.ssrLoadModule("/src/clinicalKnowledge.ts");
 const { formatClinicalDocumentDraft } = await server.ssrLoadModule("/src/clinicalDocumentFormat.ts");
-const { emptyPatient, getLabFocusSummary, parseLabText, textToItems, todayKey, nowIso, createId } = await server.ssrLoadModule("/src/utils.ts");
+const { emptyPatient, getLabFocusSummary, interpretLabItem, parseLabReports, parseLabText, safeClinicalLine, textToItems, todayKey, nowIso, createId } = await server.ssrLoadModule("/src/utils.ts");
 const { getRoundingDigest } = await server.ssrLoadModule("/src/roundingDigest.ts");
 const { buildConcisePatientClinicalUpdate } = await server.ssrLoadModule("/src/clinicalPatientPolish.ts");
 const { sanitizeAiSoapDraftForReview } = await server.ssrLoadModule("/src/aiDraftSanitizer.ts");
@@ -1002,6 +1002,86 @@ try {
 } catch (error) {
   failures.push({ name: "Board/detail digest is print-like, lab severity-grouped, dx-deduped, and task-deduped", error: error instanceof Error ? error.message : String(error) });
   console.error(`FAIL Board/detail digest is print-like, lab severity-grouped, dx-deduped, and task-deduped: ${failures[failures.length - 1].error}`);
+}
+
+try {
+  const clipped = safeClinicalLine("MRSA/Enterococcus: Teicoplanin 5/13-, f/u B/C clearance, define duration/source control", 62);
+  if (/\b(?:define|after|and|with|ct|feeding)$/i.test(clipped)) {
+    throw new Error(`safe clinical line left dangling tail: ${clipped}`);
+  }
+
+  const reports = parseLabReports(
+    "5/12 WBC 8.0, Neu 70, Hb 10.2, K 3.8\n5/15 WBC 12.7, Neu 88.9, Hb 9.4, K 3.0",
+    "2026-05-18",
+    "CBC/DC",
+  );
+  const dates = reports.map((report) => report.date).join("\n");
+  if (!/2026-05-12/.test(dates) || !/2026-05-15/.test(dates)) {
+    throw new Error(`lab parser did not preserve embedded report dates: ${dates}`);
+  }
+  const latestItems = reports.find((report) => report.date === "2026-05-15")?.items ?? [];
+  const abnormalLabels = latestItems
+    .filter((item) => ["WBC", "Neu", "Hb", "K"].includes(item.label))
+    .map((item) => `${item.label}:${interpretLabItem(item).severity}`)
+    .join(", ");
+  if (!/WBC:abnormal/.test(abnormalLabels) || !/Neu:abnormal/.test(abnormalLabels) || !/Hb:abnormal/.test(abnormalLabels) || !/K:abnormal/.test(abnormalLabels)) {
+    throw new Error(`smart lab abnormal interpretation missing: ${abnormalLabels}`);
+  }
+
+  const patient = {
+    ...emptyPatient(),
+    id: "demo-h5-113-quality",
+    bed: "H5-113",
+    patientCode: "TEST-H5",
+    age: 51,
+    sex: "M",
+    primaryDiagnosis: "esophageal SCC",
+    oneLiner: "51M esophageal SCC with MRSA/Enterococcus bacteremia",
+    underlyingDiseases: "right hypopharyngeal SCC cT4bN2bM0; mid-lower esophageal SCC; J-tube",
+    activeProblems: "MRSA/Enterococcus bacteremia\nSCC with J-tube nutrition/malnutrition\nAnemia",
+    hospitalCourseHighlights: "Initial shock improved after IV fluids. B/C MRSA and Port-A Enterococcus faecalis. Teicoplanin 5/13-.",
+    rawLabText: "5/15 WBC 12.7, Neu 88.9, Hb 9.4, K 3.0",
+    newLabs: "5/15 WBC 12.7, Neu 88.9, Hb 9.4, K 3.0",
+    parsedLabItems: parseLabText("5/15 WBC 12.7, Neu 88.9, Hb 9.4, K 3.0"),
+    newImaging: "CT neck/chest 5/13: persistent esophageal wall thickening; stable metastatic LAD. Brain CT 5/7: no ICH/edema.",
+    tasks: [
+      { id: "h5-task-1", text: "f/u repeat blood cultures from 5/15", done: false, priority: "urgent", category: "lab", dueDate: "", createdAt: nowIso(), completedAt: "" },
+      { id: "h5-task-2", text: "trend TLS labs: K/Phos/Ca/uric acid/Cr", done: false, priority: "urgent", category: "lab", dueDate: "", createdAt: nowIso(), completedAt: "" },
+    ],
+    assessmentPlanItems: [
+      {
+        id: "h5-ap-infx",
+        problemTitle: "MRSA/Enterococcus bacteremia",
+        assessmentSummary: "MRSA/Enterococcus bacteremia; Teicoplanin 5/13-, f/u B/C clearance, define duration/source.",
+        evidenceOrCourseItems: ["B/C MRSA and Port-A Enterococcus faecalis"],
+        planItems: ["Teicoplanin 5/13-, f/u B/C clearance, define duration/source"],
+        category: "activeProblem",
+        isImportant: true,
+        color: "",
+        order: 0,
+      },
+    ],
+    updatedAt: nowIso(),
+  };
+  const digest = getRoundingDigest(patient, [], { mode: "rounds", hideCompletedTasks: true });
+  const combined = `${digest.risks}\n${digest.image}\n${digest.assessmentPlan}\n${digest.tasks}`;
+  if (!/hypopharyngeal SCC.*esophageal SCC|esophageal SCC.*hypopharyngeal SCC/i.test(digest.risks)) {
+    throw new Error(`PMH did not name cancer type: ${digest.risks}`);
+  }
+  if (!/CT neck\/chest/i.test(digest.image)) {
+    throw new Error(`image focus did not include study type: ${digest.image}`);
+  }
+  if (/trend TLS labs|TLS \/ onc safety/i.test(combined)) {
+    throw new Error(`unsupported TLS leaked into H5 snapshot: ${combined}`);
+  }
+  if (/\b(?:define|after|and|with|ct|feeding)$/im.test(digest.assessmentPlan)) {
+    throw new Error(`rounds A/P has dangling line ending: ${digest.assessmentPlan}`);
+  }
+  console.log("PASS H5-113 quality regression keeps safe A/P, named PMH, image study type, lab dates, and abnormal flags");
+  supplementalPasses += 1;
+} catch (error) {
+  failures.push({ name: "H5-113 quality regression keeps safe A/P, named PMH, image study type, lab dates, and abnormal flags", error: error instanceof Error ? error.message : String(error) });
+  console.error(`FAIL H5-113 quality regression keeps safe A/P, named PMH, image study type, lab dates, and abnormal flags: ${failures[failures.length - 1].error}`);
 }
 
 await server.close();

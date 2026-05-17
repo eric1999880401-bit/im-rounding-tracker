@@ -58,6 +58,34 @@ export function normalizeDateKey(input: unknown, fallback = todayKey()) {
   return fallback;
 }
 
+function yearFromDateKey(dateKey: string) {
+  return normalizeDateKey(dateKey).slice(0, 4);
+}
+
+export function dateFromClinicalText(value: string, fallback = todayKey()) {
+  const text = String(value ?? "");
+  const fullDate = text.match(/\b(20\d{2})[-/](\d{1,2})[-/](\d{1,2})\b/);
+  if (fullDate) {
+    const [, year, month, day] = fullDate;
+    return `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
+  }
+
+  const shortDate = text.match(/(?:^|[^\d])(\d{1,2})\/(\d{1,2})(?=$|[^\d])/);
+  if (shortDate) {
+    const [, month, day] = shortDate;
+    return `${yearFromDateKey(fallback)}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
+  }
+
+  return normalizeDateKey(fallback);
+}
+
+function stripLeadingClinicalDate(value: string) {
+  return value
+    .replace(/^\s*20\d{2}[-/]\d{1,2}[-/]\d{1,2}\s*(?:[:：,-]|\s)\s*/i, "")
+    .replace(/^\s*\d{1,2}\/\d{1,2}\s*(?:[:：,-]|\s)\s*/i, "")
+    .trim();
+}
+
 export function formatDateLabel(dateKey: string) {
   return normalizeDateKey(dateKey).replace(/-/g, "/");
 }
@@ -143,6 +171,44 @@ export function splitHighlightLines(value: string): HighlightLine[] {
 
 export function stripColorMarkup(value: string) {
   return value.replace(/\[\[(red|orange|yellow|blue|green|purple):([\s\S]*?)\]\]/gi, "$2");
+}
+
+export function cleanClinicalTail(value: string) {
+  let clean = value
+    .replace(/\s+[+,;:/-]\s*$/g, "")
+    .replace(/\s+\.\s*$/g, ".")
+    .trim();
+  const danglingTail =
+    /(?:^|\s)(?:if|and|or|with|without|w\/|for|to|from|of|the|a|an|when|as|in|on|by|after|before|through|via|define|confirm|clarify|review|monitor|trend|repeat|continue|maintain|start|stop|hold|resume|call|contact|arrange|pending|source|duration|coverage|feeding|course|ct|mri|cxr|image)\.?$/i;
+  for (let index = 0; index < 4; index += 1) {
+    const next = clean.replace(danglingTail, "").replace(/\s+[+,;:/-]\s*$/g, "").trim();
+    if (next === clean) break;
+    clean = next;
+  }
+  return clean;
+}
+
+export function safeClinicalLine(value: string, maxChars = 120) {
+  const clean = stripColorMarkup(String(value ?? ""))
+    .replace(/\s+([,.;:])/g, "$1")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!clean) return "";
+  if (clean.length <= maxChars) return cleanClinicalTail(clean);
+
+  const limit = Math.max(12, maxChars);
+  const hardSlice = clean.slice(0, limit).trimEnd();
+  const clauseCandidates = [
+    hardSlice.lastIndexOf(";"),
+    hardSlice.lastIndexOf("."),
+    hardSlice.lastIndexOf(","),
+  ].filter((index) => index >= Math.min(18, Math.max(8, limit - 18)));
+  const clauseCut = clauseCandidates.length > 0 ? Math.max(...clauseCandidates) : -1;
+  if (clauseCut > 0) return cleanClinicalTail(hardSlice.slice(0, clauseCut));
+
+  const lastSpace = hardSlice.lastIndexOf(" ");
+  if (lastSpace >= Math.min(16, limit - 1)) return cleanClinicalTail(hardSlice.slice(0, lastSpace));
+  return cleanClinicalTail(hardSlice);
 }
 
 export function importantLines(value: string) {
@@ -805,20 +871,24 @@ export function parseLabText(value: string): ParsedLabItem[] {
 
 export function parseLabReports(value: string, date = todayDate(), defaultTitle = ""): LabReport[] {
   const reports: LabReport[] = [];
+  const fallbackDate = normalizeDateKey(date);
 
   value.split(/\r?\n/).forEach((rawLine) => {
     const trimmedLine = rawLine.trim();
     if (!trimmedLine) return;
 
     const important = trimmedLine.startsWith("!");
-    const line = important ? trimmedLine.slice(1).trim() : trimmedLine;
+    const lineWithDate = important ? trimmedLine.slice(1).trim() : trimmedLine;
+    const leadingDate = lineWithDate.match(/^\s*(?:20\d{2}[-/]\d{1,2}[-/]\d{1,2}|\d{1,2}\/\d{1,2})\b/)?.[0] ?? "";
+    const lineDate = leadingDate ? dateFromClinicalText(leadingDate, fallbackDate) : fallbackDate;
+    const line = stripLeadingClinicalDate(lineWithDate);
     const { title, body } = splitLabLineTitle(line);
     const reportTitle = title || defaultTitle;
     const items = parseLabItemsFromLine(body, important, reportTitle);
 
     reports.push({
       id: reportId(line, reports.length),
-      date,
+      date: lineDate,
       title: reportTitle,
       rawText: rawLine,
       items,
@@ -1283,6 +1353,52 @@ function entrySeverity(level: number, hasDelta: boolean, anchor: boolean): LabFo
   if (level >= 1) return "abnormal";
   if (hasDelta) return "trend";
   return anchor ? "anchor" : "trend";
+}
+
+export type LabInterpretationSeverity = LabFocusSeverity | "normal";
+
+export interface LabInterpretation {
+  severity: LabInterpretationSeverity;
+  category: string;
+  label: string;
+  value: string;
+  previous: string;
+  badge: string;
+  important: boolean;
+}
+
+function defaultLabFocusCategory(key: string) {
+  if (["WBC", "Neu", "Lactate", "CRP", "PCT", "Blood culture", "Sputum culture", "Urine culture"].includes(key)) return "Infx";
+  if (["Hb", "Plt", "PT", "INR", "aPTT", "Fibrinogen"].includes(key)) return "Anemia";
+  if (["BUN", "Cr", "eGFR", "Na", "K", "Ca", "Mg", "P", "Uric acid", "LDH"].includes(key)) return "Lyte/Renal";
+  if (["Troponin", "Troponin I", "Troponin T", "BNP", "NT-proBNP"].includes(key)) return "Cardiac";
+  if (["Alb", "CA125", "CEA", "SCC", "CA19-9"].includes(key)) return "Onc/nutrition";
+  return "";
+}
+
+export function interpretLabItem(item: ParsedLabItem, patient?: Patient): LabInterpretation {
+  const key = canonicalLabKey(item.name || item.label);
+  const rawValue = numericLabValue(item.value);
+  const rawPrevious = numericLabValue(item.previousValue ?? "");
+  const value = labClinicalNumericValue(key, rawValue);
+  const previous = labClinicalNumericValue(key, rawPrevious);
+  const qualitativeLevel = labQualitativeLevel(key, item);
+  const level = Math.max(labAbnormalLevel(key, value), qualitativeLevel);
+  const hasDelta = meaningfulLabDelta(key, value, previous);
+  const anchor = patient ? isDiseaseAnchorLab(key, patient) && shouldShowAnchorLab(key, level) : false;
+  const severity: LabInterpretationSeverity = level >= 1 || hasDelta || anchor ? entrySeverity(level, hasDelta, anchor) : "normal";
+  const formattedValue = value !== null ? formatLabFocusValue(key, value) : item.value;
+  const previousText = item.previousValue ? `prev ${item.previousValue}` : "";
+
+  return {
+    severity,
+    category: patient ? labFocusCategory(key, patient) : defaultLabFocusCategory(key),
+    label: labDisplayLabel(key),
+    value: formattedValue,
+    previous: previousText,
+    badge: severity === "critical" ? "Crit" : severity === "abnormal" ? "Abn" : severity === "trend" ? "Trend" : severity === "anchor" ? "Anchor" : "",
+    important: severity === "critical" || severity === "abnormal" || Boolean(item.important || item.isImportant),
+  };
 }
 
 function groupLabFocusSignals(entries: LabFocusEntry[]): LabFocusSignal[] {

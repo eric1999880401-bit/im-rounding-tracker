@@ -9,6 +9,7 @@ import {
   getUnderlyingDiseaseItems,
   pendingDischargePrep,
   plainClinicalText,
+  safeClinicalLine,
   splitHighlightLines,
 } from "./utils";
 
@@ -98,11 +99,7 @@ function cleanDigestLine(value: string) {
 }
 
 function cleanShortTail(value: string) {
-  let clean = value.replace(/\s+[+,;:-]\s*$/g, "").trim();
-  for (let index = 0; index < 2; index += 1) {
-    clean = clean.replace(/\s+\b(?:if|and|or|with|without|w\/|for|to|from|of|the|a|an|when|as)\b\.?$/i, "").trim();
-  }
-  return clean;
+  return safeClinicalLine(value, value.length);
 }
 
 export function shortDigestText(value: string, maxChars = 52) {
@@ -125,20 +122,7 @@ export function shortDigestText(value: string, maxChars = 52) {
     .replace(/\s+/g, " ")
     .trim();
 
-  if (clean.length <= maxChars) return cleanShortTail(clean);
-
-  const limit = Math.max(8, maxChars);
-  const firstClause = clean.split(/[;\n]/)[0]?.trim() || clean;
-  if (firstClause.length <= maxChars) return firstClause;
-
-  const words = firstClause.split(" ");
-  const kept: string[] = [];
-  words.forEach((word) => {
-    const next = [...kept, word].join(" ");
-    if (next.length <= limit) kept.push(word);
-  });
-
-  return cleanShortTail(kept.join(" ") || firstClause.slice(0, limit).trim());
+  return safeClinicalLine(clean, maxChars);
 }
 
 function uniqueLines(lines: string[]) {
@@ -416,6 +400,11 @@ function shortStudyType(value: string) {
   if (!text) return "";
   if (/mri|mra/i.test(text) && /brain/i.test(text)) return "MRI/MRA brain";
   if (/ct|cta/i.test(text) && /brain/i.test(text)) return "CT/CTA brain";
+  if (/brain|head/i.test(text) && /ct/i.test(text)) return "Brain CT";
+  if (/neck/i.test(text) && /chest/i.test(text) && /ct/i.test(text)) return "CT neck/chest";
+  if (/neck/i.test(text) && /ct/i.test(text)) return "CT neck";
+  if (/chest/i.test(text) && /ct/i.test(text)) return "Chest CT";
+  if (/\bct\b/i.test(text) && /\bap\b|abd|pelvis/i.test(text)) return "CT AP";
   if (/cxr|chest x/i.test(text)) return "CXR";
   if (/pelvis/i.test(text) && /mri/i.test(text)) return "MRI pelvis";
   if (/carotid|tcd/i.test(text)) return "Carotid/TCD";
@@ -423,6 +412,30 @@ function shortStudyType(value: string) {
   if (/ncv|emg/i.test(text)) return "NCV/EMG";
   if (/ultrasound|sono|u\/s/i.test(text)) return "U/S";
   return shortDigestText(text, 18);
+}
+
+function inferLegacyStudyType(value: string) {
+  const text = value.trim();
+  const dateStripped = text.replace(/\b(?:20\d{2}[-/]\d{1,2}[-/]\d{1,2}|\d{1,2}\/\d{1,2})\b/g, " ");
+  if (/brain|head/i.test(dateStripped) && /\bct\b/i.test(dateStripped)) return "Brain CT";
+  if (/neck/i.test(dateStripped) && /chest/i.test(dateStripped) && /\bct\b/i.test(dateStripped)) return "CT neck/chest";
+  if (/neck/i.test(dateStripped) && /\bct\b/i.test(dateStripped)) return "CT neck";
+  if (/chest/i.test(dateStripped) && /\bct\b/i.test(dateStripped)) return "Chest CT";
+  if (/\bct\b/i.test(dateStripped) && /\b(?:ap|abd|abdomen|pelvis)\b/i.test(dateStripped)) return "CT AP";
+  if (/\bcxr\b|chest x/i.test(dateStripped)) return "CXR";
+  if (/\bmri\b/i.test(dateStripped) && /brain/i.test(dateStripped)) return "MRI brain";
+  if (/\bmri\b/i.test(dateStripped)) return "MRI";
+  if (/\bct\b/i.test(dateStripped)) return "CT";
+  return "";
+}
+
+function stripStudyWords(value: string, studyType: string) {
+  if (!studyType) return value;
+  return value
+    .replace(/\b(?:20\d{2}[-/]\d{1,2}[-/]\d{1,2}|\d{1,2}\/\d{1,2})\b/g, " ")
+    .replace(/\b(?:brain|head|neck|chest|abdomen|abd|pelvis|ap|ct|mri|mra|cxr|impression|image|study)\b/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim() || value;
 }
 
 function sidePrefix(text: string) {
@@ -560,7 +573,19 @@ function riskSummary(patient: Patient, maxItems: number, maxChars: number) {
   if (/pulmonary hypertension|phtn/.test(lower)) tags.push("pulm HTN");
   if (/tricuspid regurgitation|\btr\b/.test(lower)) tags.push("TR");
   if (/hypothyroid|hyperthyroid|thyroid/.test(lower)) tags.push("thyroid");
-  if (/cancer|malign|carcinoma|tumou?r|ca\b/.test(lower)) tags.push("CA hx");
+  const cancerLabels = uniqueLines([
+    /hypopharyngeal/.test(lower) && /scc|squamous/.test(lower) ? "hypopharyngeal SCC" : "",
+    /esophageal|esophagus/.test(lower) && /scc|squamous|cancer|carcinoma/.test(lower) ? "esophageal SCC" : "",
+    /tonsillar|tonsil/.test(lower) && /scc|squamous|cancer|carcinoma/.test(lower) ? "tonsillar SCC" : "",
+    /lymphoma/.test(lower) ? "lymphoma" : "",
+    /leukemia/.test(lower) ? "leukemia" : "",
+    /hcc|hepatocellular/.test(lower) ? "HCC" : "",
+    /breast/.test(lower) && /cancer|carcinoma|\bca\b/.test(lower) ? "breast CA" : "",
+    /colon|colorectal/.test(lower) && /cancer|carcinoma|\bca\b/.test(lower) ? "colon CA" : "",
+    /lung/.test(lower) && /cancer|carcinoma|\bca\b/.test(lower) ? "lung CA" : "",
+  ].filter(Boolean));
+  if (cancerLabels.length > 0) tags.push(cancerLabels.slice(0, 2).join(" / "));
+  else if (/cancer|malign|carcinoma|tumou?r|ca\b/.test(lower)) tags.push("CA hx");
 
   return joinTags(tags, maxItems) || compactList(getUnderlyingDiseaseItems(patient), 3, maxChars);
 }
@@ -708,10 +733,14 @@ function imageSummaryText(patient: Patient, maxItems: number, maxChars: number) 
     .map((entry) => entry.text);
   const legacy = highlightedClinicalItems(patient.newImaging)
     .flatMap((line) => splitClinicalClauses(line.text).map((text) => ({ ...line, text })))
-    .map((line) => ({
-      score: clinicalSignalScore(line.text, "image") + Number(line.important) * 10,
-      text: imageFindingLabel("", line.text, maxChars),
-    }))
+    .map((line) => {
+      const study = inferLegacyStudyType(line.text);
+      const finding = imageFindingLabel(study, stripStudyWords(line.text, study), maxChars);
+      return {
+        score: clinicalSignalScore(line.text, "image") + Number(line.important) * 10,
+        text: [study, finding].filter(Boolean).join(": "),
+      };
+    })
     .filter((entry) => entry.score >= 7)
     .map((entry) => entry.text);
   return uniqueClinicalLines([...structured, ...legacy])
@@ -930,10 +959,12 @@ function cleanTaskDigestText(value: string, context: string) {
   let text = cleanDigestLine(value).replace(/^!+/, "").trim();
   if (/f\/u pathology\/staging/i.test(text) && /review\s+vte\/bleed/i.test(text)) return "";
   if (/trend\s+tls\s+labs/i.test(text) && !hasTlsLabSignal(context)) return "";
+  if (/cbc diff\/anc|anc\/wbc|fever curve|isolation/i.test(text) && !/\b(?:neutropen|febrile|fever|anc\s*\d|wbc\s*(?:[0-3](?:\.\d+)?|[0-3]\d{2,3}))\b/i.test(context)) return "";
   if (/review\s+vte\/bleed(?:\s+risk)?/i.test(text) && !hasVteBleedContext(context)) {
     text = text.replace(/;?\s*review\s+vte\/bleed(?:\s+risk)?/gi, "").trim();
   }
   if (/^f\/u pathology\/staging$/i.test(text)) return "";
+  if (/transfusion|egd|t&s|ppi|scope/i.test(text) && !/\b(?:active bleed|melena|hematemesis|hematochezia|transfusion|egd|scope|hb\s*[0-7](?:\.\d+)?)\b/i.test(context)) return "";
   return cleanShortTail(text);
 }
 

@@ -878,12 +878,15 @@ function applyHemeOncRules(plan: GeneratedClinicalPlan, text: string) {
   const creatinine = maxNumberAfter(/\b(?:cr|creatinine)\s*[:=]?\s*(\d+(?:\.\d+)?)/gi, text);
   const uricAcid = maxNumberAfter(/\buric acid\s*[:=]?\s*(\d+(?:\.\d+)?)/gi, text);
   const phosphorus = maxNumberAfter(/\b(?:phos|phosphate|p)\s*[:=]?\s*(\d+(?:\.\d+)?)/gi, text);
+  const ldh = maxNumberAfter(/\bldh\s*[:=]?\s*(\d+(?:\.\d+)?)/gi, text);
   const feedingAccessSignal = /\b(j-?tube|jejunostomy|feeding tube|tube feeding|malnutrition|po intolerance|dysphagia)\b/i.test(text);
   const vteBleedRelevant = /\b(vte|pe\b|dvt|anticoag|heparin|doac|warfarin|apixaban|rivaroxaban|bleed|plt|platelet|procedure|biopsy|egd|surgery)\b/i.test(text);
+  const explicitTlsContext = /\b(?:tumou?r lysis|tls concern|tls risk|rasburicase|allopurinol)\b/i.test(text);
+  const tlsLabEvidence = (uricAcid !== null && uricAcid >= 8) || (phosphorus !== null && phosphorus >= 5) || (ldh !== null && ldh > 250);
   const tlsSignal =
-    /\b(tls|tumor lysis|rasburicase|allopurinol)\b/i.test(text) ||
+    (explicitTlsContext && (tlsLabEvidence || /\b(?:lymphoma|leukemia|chemo|chemotherapy|bulky tumor)\b/i.test(text))) ||
     (/\b(lymphoma|leukemia|chemo|chemotherapy|bulky tumor)\b/i.test(text) &&
-      ((uricAcid !== null && uricAcid >= 8) || (phosphorus !== null && phosphorus >= 5) || (potassium !== null && potassium >= 5.5) || (creatinine !== null && creatinine >= 1.5)));
+      (tlsLabEvidence || ((potassium !== null && potassium >= 5.5) && (creatinine !== null && creatinine >= 1.5))));
   const thrombocytopeniaSignal = (plateletMin !== null && plateletMin < 50) || /\b(thrombocytopenia|low platelet)\b/i.test(text);
   const hasNeutropenicFeverContext = /\b(neutropenic fever|febrile neutropen)\b/i.test(text) || ((hasSevereWbc || hasLowAnc) && feverOrInfectionContext(text));
   const title = tlsSignal

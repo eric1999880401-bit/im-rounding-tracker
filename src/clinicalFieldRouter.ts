@@ -1,4 +1,5 @@
 import type { AssessmentPlanItem, Patient, PatientImportDraft } from "./types";
+import { safeClinicalLine } from "./utils";
 
 export interface ClinicalFieldCleanupChange {
   field: keyof Patient | keyof PatientImportDraft | "assessmentPlanItems";
@@ -42,8 +43,7 @@ function cleanText(value: string, maxChars = 220) {
     .replace(/\s+/g, " ")
     .replace(/\s+([,.;:])/g, "$1")
     .trim();
-  if (clean.length <= maxChars) return clean.replace(/\s+[;:,/-]\s*$/g, "").trim();
-  return `${clean.slice(0, maxChars).replace(/\s+\S*$/, "").replace(/\s+[;:,/-]\s*$/g, "").trim()}`;
+  return safeClinicalLine(clean, maxChars);
 }
 
 function splitClinicalText(value: string) {
@@ -61,11 +61,26 @@ function isLikelyActionLine(value: string) {
   return /\b(?:pending|f\/u|follow|repeat|continue|maintain|start|stop|hold|resume|trend|monitor|check|order|consult|arrange|define|confirm|clarify|review|culture|b\/c|bcx|teicoplanin|abx|antibiotic|j-?tube|feeding|nutrition)\b/i.test(value);
 }
 
-function shouldKeepImportTask(value: string) {
+function hasSupportedTlsContext(value: string) {
+  const clean = removeRuleLabels(value)
+    .replace(/\btrend\s+tls\s+labs?\b/gi, " ")
+    .replace(/\btls\s*\/\s*onc safety\b/gi, " ");
+  const explicitTls = /\b(?:tumou?r lysis|tls concern|tls risk|rasburicase|allopurinol)\b/i.test(clean);
+  const tlsSpecificLab = /\b(?:uric acid|phos|phosphate|ldh)\b(?:\s*[:=]?\s*[<>]?\d|\s+(?:high|low|elevated|up|down))/i.test(clean);
+  return tlsSpecificLab || (explicitTls && /\b(?:uric acid|phos|phosphate|ldh|rasburicase|allopurinol)\b/i.test(clean));
+}
+
+function shouldKeepImportTask(value: string, contextText = "") {
+  const context = `${contextText}\n${value}`;
   if (!isLikelyActionLine(value)) return false;
   const hasActionVerb = /\b(?:pending|f\/u|follow|repeat|continue|maintain|start|stop|hold|resume|trend|monitor|check|order|consult|arrange|define|confirm|clarify|review)\b/i.test(value);
   if (/^\s*(?:PE|physical exam)\b/i.test(value) && !hasActionVerb) return false;
   if ((isLabLine(value) || isImageLine(value)) && !/\b(?:pending|f\/u|follow|repeat|review|suggested|culture|b\/c|bcx|teicoplanin|abx|antibiotic)\b/i.test(value)) return false;
+  if (/trend\s+tls\s+labs|tls labs|tls\s*\/\s*onc/i.test(value) && !hasSupportedTlsContext(context)) return false;
+  if (/cbc diff\/anc|anc\/wbc|fever curve|isolation/i.test(value) && !/\b(?:neutropen|febrile|fever|anc\s*\d|wbc\s*(?:[0-3](?:\.\d+)?|[0-3]\d{2,3}))\b/i.test(context)) return false;
+  if (/review\s+vte\/bleed|vte\/bleed risk/i.test(value) && !/\b(?:vte|pe\b|dvt|anticoag|heparin|doac|warfarin|apixaban|bleed|plt|platelet|procedure|biopsy|egd|surgery)\b/i.test(context)) return false;
+  if (/transfusion|egd|t&s|ppi|scope/i.test(value) && !hasActionableBleedContext(context)) return false;
+  if (/^f\/u pathology\/staging(?:;?\s*review\s+vte\/bleed(?:\s+risk)?)?$/i.test(value.trim())) return false;
   return true;
 }
 
@@ -322,6 +337,7 @@ function shouldDropPlanLine(line: string, contextText: string, title: string) {
     .replace(/review\s+VTE\/bleed(?:\s+risk)?/gi, " ")
     .replace(/\bVTE\/bleed(?:\s+risk)?\b/gi, " ")
     .replace(/f\/u pathology\/staging/gi, " ");
+  if (/trend\s+tls\s+labs|tls labs/i.test(lower) && !hasSupportedTlsContext(contextText)) return true;
   if (/review vte\/bleed risk|vte\/bleed/.test(lower) && !/\b(?:vte|pe\b|dvt|anticoag|doac|heparin|apixaban|warfarin|bleed|plt|platelet|procedure)\b/i.test(signalContext)) return true;
   if (/f\/u pathology\/staging|pathology\/staging/.test(lower) && !/onc|cancer|scc|malign|nutrition/i.test(title)) return true;
   if (/onc\/id if fever\/neutro|fever\/neutro/i.test(lower) && !/\b(?:neutropen|anc|wbc\s*[0-3](?:\.\d+)?)\b/i.test(signalContext)) return true;
@@ -344,6 +360,7 @@ export function cleanAssessmentPlanItems(items: AssessmentPlanItem[], contextTex
       const originalTitle = cleanText(item.problemTitle, 80);
       const itemContext = `${contextText}\n${apText(item)}`;
       let title = originalTitle
+        .replace(/^TLS\s*\/\s*onc safety$/i, hasSupportedTlsContext(itemContext) ? "TLS / onc safety" : hasBacteremia ? "MRSA/Enterococcus bacteremia" : hasTube ? "SCC with J-tube nutrition/malnutrition" : hasCancer ? "Cancer staging / Onc plan" : "")
         .replace(/^Heme\/Onc safety$/i, hasBacteremia ? "MRSA/Enterococcus bacteremia" : hasCancer ? "Cancer staging / Onc plan" : "Heme/Onc")
         .replace(/^Cancer \/ staging-nutrition$/i, hasTube ? "SCC with J-tube nutrition/malnutrition" : "Cancer staging / Onc plan")
         .replace(/^Cardio \/ HF \/ rhythm$/i, "Cardio / HF / rhythm")
@@ -360,12 +377,14 @@ export function cleanAssessmentPlanItems(items: AssessmentPlanItem[], contextTex
       if (!title) return null;
 
       const isInfection = /infection|bacteremia|sepsis/.test(title.toLowerCase());
+      const isTls = /tls/i.test(title);
       const isCancer = /onc|cancer|scc|malign|nutrition/.test(title.toLowerCase());
       const evidence = compactList(item.evidenceOrCourseItems, 3, 115);
       const planItems = compactList(
         [
           isInfection && antibioticPlan ? antibioticPlan : "",
           ...item.planItems.filter((line) => !shouldDropPlanLine(line, itemContext, title)),
+          isTls && hasSupportedTlsContext(itemContext) ? "trend K/Phos/Ca/uric acid/Cr" : "",
           isCancer && hasTube ? "J-tube feeds/nutrition tolerance" : "",
           isCancer && hasCancer ? "Onc f/u/staging" : "",
         ].filter(Boolean),
@@ -374,6 +393,8 @@ export function cleanAssessmentPlanItems(items: AssessmentPlanItem[], contextTex
       );
       const assessmentSummary = isInfection && antibioticPlan
         ? `${title}; ${antibioticPlan}.`
+        : isTls && hasSupportedTlsContext(itemContext)
+          ? "TLS risk; follow metabolic/renal trend and heme plan."
         : isCancer && hasTube
           ? `${title}; Onc staging plus nutrition route/tolerance.`
           : cleanText(item.assessmentSummary, 125);
@@ -466,7 +487,7 @@ export function routePatientImportDraft(draft: PatientImportDraft): PatientImpor
     imageText,
     hospitalCourseHighlights: course,
     activeProblems,
-    tasks: draft.tasks.filter((task) => shouldKeepImportTask(task.text)).slice(0, 8),
+    tasks: draft.tasks.filter((task) => shouldKeepImportTask(task.text, contextText)).slice(0, 6),
   };
 }
 
@@ -488,6 +509,14 @@ function patientContext(patient: Patient) {
     patient.tasks.map((task) => task.text).join("\n"),
     patient.assessmentPlanItems.map(apText).join("\n"),
   ].join("\n");
+}
+
+function looksLikeGeneratedTask(value: string) {
+  return /\b(?:trend\s+tls\s+labs|tls\s+labs|cbc diff\/anc|fever curve|isolation need|review\s+vte\/bleed|transfusion\/t&s|antithrombotic\/statin|track volume\/o2|i\/o\/diuresis response|rate-control plan if present|onc\/id if fever\/neutro)\b/i.test(value);
+}
+
+function taskPreviewText(tasks: Patient["tasks"]) {
+  return tasks.map((task) => `${task.priority === "urgent" ? "! " : ""}${task.text}`).join("\n");
 }
 
 function addChange(
@@ -515,6 +544,12 @@ export function routePatientClinicalFields(patient: Patient) {
   const nextCourse = uniqueLines(patient.hospitalCourseHighlights, fromSubjective.course, fromPe.course);
   const nextActiveProblems = cleanActiveProblemText(patient.activeProblems, `${context}\n${nextImaging}\n${nextCourse}`);
   const nextAssessmentPlanItems = cleanAssessmentPlanItems(patient.assessmentPlanItems, `${context}\n${nextImaging}\n${nextCourse}`);
+  const nextTasks = patient.tasks.filter((task) => {
+    if (/^rule-task-/.test(task.id) || looksLikeGeneratedTask(task.text)) {
+      return shouldKeepImportTask(task.text, `${context}\n${nextImaging}\n${nextCourse}`);
+    }
+    return true;
+  });
 
   const changes: ClinicalFieldCleanupChange[] = [];
   addChange(changes, "subjectiveOrChiefConcern", "Subjective / chief concern", patient.subjectiveOrChiefConcern, nextSubjective, "Moved vitals, labs, and report text out of S.");
@@ -532,6 +567,7 @@ export function routePatientClinicalFields(patient: Patient) {
     nextAssessmentPlanItems.map(apText).join("\n\n"),
     "Removed generic plans and kept concrete Abx/treatment plans.",
   );
+  addChange(changes, "tasks", "Tasks", taskPreviewText(patient.tasks), taskPreviewText(nextTasks), "Removed unsupported generic AI-generated tasks.");
 
   return {
     patient: {
@@ -546,6 +582,7 @@ export function routePatientClinicalFields(patient: Patient) {
       activeProblems: nextActiveProblems,
       activeProblemItems: nextActiveProblems.split(/\r?\n/).map((line) => line.trim()).filter(Boolean),
       assessmentPlanItems: nextAssessmentPlanItems,
+      tasks: nextTasks,
     },
     changes,
   };

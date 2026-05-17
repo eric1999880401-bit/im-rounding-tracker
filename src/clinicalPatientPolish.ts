@@ -1,7 +1,7 @@
 import { applyClinicalKnowledgeToText, formatRuleBasedSbar, formatRuleBasedWeeklySummary } from "./clinicalKnowledge";
 import { cleanAssessmentPlanItems, specificAntibioticPlan } from "./clinicalFieldRouter";
 import type { AssessmentPlanItem, DailyNote, GeneratedClinicalPlan, Patient, PatientTask, TaskCategory, TaskPriority } from "./types";
-import { nowIso, textToItems } from "./utils";
+import { nowIso, safeClinicalLine, textToItems } from "./utils";
 
 function cleanLine(value: string, maxChars = 220) {
   const clean = value
@@ -11,22 +11,11 @@ function cleanLine(value: string, maxChars = 220) {
     .replace(/\bcontinue current management\b/gi, "")
     .replace(/\s+/g, " ")
     .trim();
-  if (clean.length <= maxChars) return cleanTail(clean);
-  const words = clean.split(" ");
-  const kept: string[] = [];
-  words.forEach((word) => {
-    const next = [...kept, word].join(" ");
-    if (next.length <= maxChars) kept.push(word);
-  });
-  return cleanTail(kept.join(" ") || clean.slice(0, maxChars).trim());
+  return safeClinicalLine(clean, maxChars);
 }
 
 function cleanTail(value: string) {
-  let clean = value.replace(/\s+[+,;:/-]\s*$/g, "").trim();
-  for (let index = 0; index < 3; index += 1) {
-    clean = clean.replace(/\s+\b(?:if|and|or|with|without|w\/|for|to|from|of|the|a|an|when|as|in|on|by)\b\.?$/i, "").trim();
-  }
-  return clean;
+  return safeClinicalLine(value, value.length);
 }
 
 function extractToken(text: string, pattern: RegExp) {
@@ -96,6 +85,10 @@ function compactPlanLines(lines: string[], problemTitle: string) {
       .slice(0, 3);
   }
   return dedupeByKey(lines.map(compactTaskText).filter(Boolean), (line) => line).slice(0, 3);
+}
+
+function apItemText(item: AssessmentPlanItem) {
+  return [item.problemTitle, item.assessmentSummary, ...item.evidenceOrCourseItems, ...item.planItems].join("\n");
 }
 
 function dedupeByKey<T>(items: T[], keyFn: (item: T) => string) {
@@ -176,7 +169,9 @@ function ruleApToAssessmentPlanItem(item: GeneratedClinicalPlan["problemBasedAP"
         : /bleed|anemia/i.test(lowerTitle)
           ? `${hb ? `Hb ${hb}; ` : ""}trend Hb/Plt/V/S; bleeding/anticoag plan.`
         : /heme\/onc|onc safety|cancer|malign/i.test(lowerTitle)
-          ? "Cancer/infx risk; staging/path pending; review VTE/bleed."
+          ? /j-?tube|jejunostomy|nutrition|malnutrition|dysphag/i.test(summaryText)
+            ? "SCC with J-tube nutrition; Onc f/u/staging."
+            : "Cancer staging / Onc plan."
         : cleanLine(item.assessmentSummary, 120);
   return {
     id: `rule-ap-${index}-${item.problemTitle.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}`,
@@ -265,7 +260,9 @@ function finalSanitizeApItem(item: AssessmentPlanItem, index: number): Assessmen
     return {
       ...item,
       problemTitle: title.replace(/^Heme\/Onc safety$/i, "Heme/Onc"),
-      assessmentSummary: "Cancer/infx risk; staging/path pending; review VTE/bleed.",
+      assessmentSummary: /j-?tube|jejunostomy|nutrition|malnutrition|dysphag/i.test(apItemText(item))
+        ? "SCC with J-tube nutrition; Onc f/u/staging."
+        : "Cancer staging / Onc plan.",
       evidenceOrCourseItems: compactEvidenceLines(item.evidenceOrCourseItems, title),
       planItems: compactPlanLines(item.planItems, title),
       order: index,
@@ -288,6 +285,34 @@ function conciseRedFlagLines(plan: GeneratedClinicalPlan) {
   ).slice(0, 1);
 }
 
+function hasTaskEvidence(text: string, context: string) {
+  const combined = `${context}\n${text}`;
+  if (/trend\s+tls\s+labs|tls labs|tls\s*\/\s*onc/i.test(text) && !/\b(?:tumou?r lysis|tls concern|tls risk|rasburicase|allopurinol|uric acid\s*[:=]?\s*\d|phos(?:phate)?\s*[:=]?\s*\d|ldh\s*[:=]?\s*\d)\b/i.test(combined)) {
+    return false;
+  }
+  if (/cbc diff\/anc|anc\/wbc|fever curve|isolation/i.test(text) && !/\b(?:neutropen|febrile|fever|anc\s*\d|wbc\s*(?:[0-3](?:\.\d+)?|[0-3]\d{2,3}))\b/i.test(combined)) {
+    return false;
+  }
+  if (/review\s+vte\/bleed|vte\/bleed risk/i.test(text) && !/\b(?:vte|pe\b|dvt|anticoag|heparin|doac|warfarin|apixaban|bleed|plt|platelet|procedure|biopsy|egd|surgery)\b/i.test(combined)) {
+    return false;
+  }
+  if (/transfusion|egd|t&s|ppi|scope/i.test(text) && !/\b(?:active bleed|melena|hematemesis|hematochezia|transfusion|egd|scope|hb\s*[0-7](?:\.\d+)?)\b/i.test(combined)) {
+    return false;
+  }
+  return true;
+}
+
+function shouldKeepGeneratedTask(text: string, context: string) {
+  const clean = cleanLine(text, 160);
+  if (!clean) return false;
+  if (!hasTaskEvidence(clean, context)) return false;
+  const hasAction = /\b(?:f\/u|follow|pending|repeat|trend|monitor|check|order|consult|arrange|define|confirm|clarify|review|continue|start|stop|hold|resume|culture|b\/c|bcx)\b/i.test(clean);
+  const hasTarget = /\b(?:culture|b\/c|bcx|cx|abx|antibiotic|teicoplanin|vanco|cef|mero|duration|source|cbc|anc|wbc|hb|plt|cr|k\b|na|o2|spo2|j-?tube|feeding|nutrition|pathology|staging|onc|opd|discharge|certificate)\b/i.test(clean);
+  if (!hasAction || !hasTarget) return false;
+  if (/^f\/u pathology\/staging(?: and onc plan)?$/i.test(clean) && !/\b(?:pathology|biopsy|staging|onc|cancer|scc|malign)\b/i.test(context)) return false;
+  return true;
+}
+
 function taskFromRule(text: string, priority: TaskPriority, category: TaskCategory, index: number): PatientTask {
   const compactText = compactTaskText(text);
   return {
@@ -304,7 +329,8 @@ function taskFromRule(text: string, priority: TaskPriority, category: TaskCatego
 
 function ruleTaskPriorityScore(text: string) {
   const clean = text.toLowerCase();
-  if (/anc\/wbc|wbc recovery|fever curve|cultures\/abx|isolation|cbc diff/.test(clean)) return 100;
+  if (/blood culture|b\/c|bcx|teicoplanin|abx duration|source/.test(clean)) return 100;
+  if (/anc\/wbc|wbc recovery|fever curve|cultures\/abx|isolation|cbc diff/.test(clean)) return 60;
   if (/antiviral|antibiotic|abx|ent|id follow/.test(clean)) return 80;
   if (/abi|ncv|neuro|rehab/.test(clean)) return 60;
   return 50;
@@ -326,8 +352,9 @@ export function buildConcisePatientClinicalUpdate(patient: Patient, notes: Daily
     .map(finalSanitizeApItem), contextText);
   const redFlagLines = conciseRedFlagLines(plan);
   const ruleTasks = plan.todayTasks
+    .filter((task) => shouldKeepGeneratedTask(task.text, contextText))
     .sort((left, right) => ruleTaskPriorityScore(right.text) - ruleTaskPriorityScore(left.text))
-    .slice(0, 4)
+    .slice(0, 3)
     .map((task, index) => taskFromRule(task.text, task.priority, task.category, index));
   const nextTasks = dedupeByKey([...ruleTasks, ...patient.tasks.filter((task) => !/^rule-task-/.test(task.id))], (task) => task.text)
     .slice(0, 16)

@@ -2619,6 +2619,33 @@ tbody tr:last-child td {
   font-weight: 600;
 }
 
+.lab-chip-critical {
+  border-left: 3px solid var(--danger-text);
+}
+
+.lab-chip-abnormal {
+  background: var(--warning-bg);
+  border-color: var(--warning-border);
+  color: var(--warning-text);
+  font-weight: 600;
+}
+
+.lab-chip-trend,
+.lab-chip-anchor {
+  border-left: 3px solid var(--accent);
+}
+
+.lab-chip-flag {
+  border: 1px solid currentColor;
+  border-radius: 3px;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  line-height: 1;
+  padding: 2px 3px;
+  text-transform: uppercase;
+}
+
 .lab-chip-name {
   font-size: 10.5px;
   font-weight: 700;

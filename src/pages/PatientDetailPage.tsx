@@ -755,7 +755,7 @@ function PatientDetailPage({
           <div className="section-heading">
             <div>
               <h3>Clean AI Draft</h3>
-              <p className="muted">Preview-only cleanup for V/S-in-S, report-in-PE, rule labels, and generic A/P.</p>
+              <p className="muted">Preview-only cleanup for V/S-in-S, report-in-PE, rule labels, generic A/P, and noisy AI tasks.</p>
             </div>
             <div className="form-actions">
               <button type="button" className="secondary" onClick={previewClinicalFieldCleanup}>

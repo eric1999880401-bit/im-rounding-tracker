@@ -1,5 +1,5 @@
 import type { DailyNote, Patient } from "../types";
-import { dailyNoteFromPatient, formatDateLabel, normalizeDateKey } from "../utils";
+import { dailyNoteFromPatient, dateFromClinicalText, formatDateLabel, normalizeDateKey } from "../utils";
 import { formatLabItem } from "../utils";
 
 interface LabHistoryPanelProps {
@@ -46,7 +46,9 @@ function LabHistoryPanel({ patient, notes }: LabHistoryPanelProps) {
 
     if (reportsWithItems.length > 0) {
       reportsWithItems.forEach((report) => {
-        const reportDate = normalizeDateKey(report.date, normalizeDateKey(note.labDate || note.date));
+        const fallbackDate = normalizeDateKey(note.labDate || note.date);
+        const rawTextHasDate = /^\s*(?:20\d{2}[-/]\d{1,2}[-/]\d{1,2}|\d{1,2}\/\d{1,2})\b/.test(report.rawText);
+        const reportDate = normalizeDateKey(rawTextHasDate ? dateFromClinicalText(report.rawText, fallbackDate) : report.date, fallbackDate);
         report.items.forEach((item) => {
           const label = item.name || item.label;
           const values = rows.get(label) ?? [];
