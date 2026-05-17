@@ -222,11 +222,19 @@ export interface AnalyzePatientBatchTextInput {
   rawText: string;
   deidentifiedConfirmed: boolean;
   importMode?: "newAdmission" | "existingInpatient";
+  targetPatientId?: string;
   existingPatients?: Array<{
     id: string;
     bed: string;
     patientCode: string;
+    age?: number | string;
+    sex?: Patient["sex"];
+    attending?: string;
+    teamOrService?: string;
     primaryDiagnosis?: string;
+    oneLiner?: string;
+    underlyingDiseases?: string;
+    activeProblems?: string;
   }>;
 }
 

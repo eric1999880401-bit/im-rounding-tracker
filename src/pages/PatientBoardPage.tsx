@@ -210,6 +210,69 @@ function importFragments(chunk: string) {
     .filter(Boolean);
 }
 
+function selectedPatientContext(patient: Patient, rawText: string) {
+  return [
+    "Target existing patient for this pasted update:",
+    `Bed: ${patient.bed || ""}`,
+    `Patient code: ${patient.patientCode || ""}`,
+    patient.age ? `Age/Sex: ${patient.age}/${patient.sex}` : "",
+    patient.attending ? `Attending: ${patient.attending}` : "",
+    patient.teamOrService ? `Service: ${patient.teamOrService}` : "",
+    patient.primaryDiagnosis ? `Dx: ${patient.primaryDiagnosis}` : "",
+    patient.underlyingDiseases ? `PMH: ${patient.underlyingDiseases}` : "",
+    patient.activeProblems ? `Active problems: ${patient.activeProblems}` : "",
+    "",
+    "Pasted update/report for this target patient:",
+    rawText.trim(),
+  ].filter(Boolean).join("\n");
+}
+
+function applyTargetPatientToDraft(draft: PatientImportDraft, targetPatient?: Patient): PatientImportDraft {
+  if (!targetPatient) return draft;
+
+  return {
+    ...draft,
+    status: "updateCandidate",
+    matchPatientId: targetPatient.id,
+    bed: draft.bed || targetPatient.bed,
+    patientCode: draft.patientCode || targetPatient.patientCode,
+    age: draft.age || String(targetPatient.age || ""),
+    sex: draft.sex || targetPatient.sex,
+    attending: draft.attending || targetPatient.attending,
+    teamOrService: draft.teamOrService || targetPatient.teamOrService,
+    primaryDiagnosis: draft.primaryDiagnosis || targetPatient.primaryDiagnosis,
+    oneLiner: draft.oneLiner || targetPatient.oneLiner || targetPatient.primaryDiagnosis,
+    underlyingDiseases: draft.underlyingDiseases || targetPatient.underlyingDiseases,
+    activeProblems: draft.activeProblems || targetPatient.activeProblems,
+    uncertainty: uniqueLines(...draft.uncertainty, "Target patient selected on Board; verify before saving.").split("\n"),
+  };
+}
+
+function friendlyBulkImportError(error: unknown, hasTargetPatient: boolean) {
+  const value = error as { code?: string; message?: string; details?: unknown };
+  const code = String(value?.code ?? "");
+  const message = String(value?.message ?? "").trim();
+  if (code.includes("internal") || message.toLowerCase() === "internal") {
+    return hasTargetPatient
+      ? "AI batch import failed on the server. I made no changes. You can retry, or review the local fallback draft if one appears."
+      : "AI batch import failed on the server. If this is one patient's report/progress note, choose a Target patient first; otherwise include bed or patient code in each patient block.";
+  }
+  if (message) return message;
+  return "Bulk import analysis failed. No patient data was saved.";
+}
+
+function looksLikeDiscreteTargetUpdate(rawText: string) {
+  const hasReportOrLabSignal =
+    /\b(impression|report|ct|mri|cxr|echo|sono|ultrasound|x-ray|xray|image|imaging|lab|wbc|hb|hgb|plt|cr|bun|na|k|inr|pt|aptt|lactate|crp|pct|troponin|bnp|culture|vanco)\b/i.test(rawText);
+  const hasBroadCourseSignal =
+    /\b(hospital course|icu course|transfer summary|admission note|weekly summary|soap|assessment\s*\/?\s*plan|a\/p|pmh|underlying|active problems?|disposition|discharge plan)\b/i.test(rawText);
+  return hasReportOrLabSignal && !hasBroadCourseSignal;
+}
+
+function hasBulkPatientIdentity(rawText: string) {
+  return /\b(?:bed|room|rm|床)\s*[:#-]?\s*[A-Za-z0-9][A-Za-z0-9-]{1,}\b|\b(?:code|pt|patient|id)\s*[:#-]?\s*[A-Za-z0-9-]{2,}\b|\b[A-Z]?\d{1,2}[A-Z]-\d{2,3}\b/i.test(rawText);
+}
+
 function localRuleBasedImportDrafts(rawText: string, existingPatients: Patient[], importMode: BulkImportMode = "existingInpatient"): PatientImportDraft[] {
   const chunks = splitImportChunks(rawText);
   const stopLabels = ["bed", "room", "rm", "dx", "diagnosis", "impression", "pmh", "underlying", "past history", "today", "task", "tasks", "pending", "dispo", "disposition", "dc", "discharge"];
@@ -261,7 +324,7 @@ function localRuleBasedImportDrafts(rawText: string, existingPatients: Patient[]
       vitalSigns: fragments.filter((line) => /\b(bp|hr|rr|spo2|sat|temp|fever|afebrile|o2|nc|hfno|bipap)\b/i.test(line)).slice(0, 3).join("\n"),
       physicalExam: fragments.filter((line) => /\b(pe|exam|abd|lung|edema|wound|confusion|weak|delirium|pressure injury)\b/i.test(line)).slice(0, 4).join("\n"),
       labText: fragments.filter((line) => /\b(lab|wbc|hb|plt|cr|bun|na|k|inr|lactate|crp|pct|troponin|bnp|culture|vanco|bilirubin|ast|alt)\b/i.test(line)).slice(0, 8).join("\n"),
-      imageText: fragments.filter((line) => /\b(image|ct|mri|cxr|echo|sono|x-ray|xray|ercp)\b/i.test(line)).slice(0, 6).join("\n"),
+      imageText: fragments.filter((line) => /\b(image|impression|report|ct|mri|cxr|echo|sono|ultrasound|x-ray|xray|ercp)\b/i.test(line)).slice(0, 6).join("\n"),
       admissionSummary: draftSummary,
       underlyingDiseases: pmh,
       activeProblems: diagnosis,
@@ -283,6 +346,62 @@ function localRuleBasedImportDrafts(rawText: string, existingPatients: Patient[]
       sourceExcerpt: chunk.slice(0, 500),
     };
   });
+}
+
+function localTargetPatientUpdateDraft(patient: Patient, rawText: string): PatientImportDraft[] {
+  const fragments = importFragments(rawText);
+  const lowerText = rawText.toLowerCase();
+  const reportLike = /\b(impression|report|ct|mri|cxr|echo|sono|ultrasound|x-ray|xray|image|imaging)\b/i.test(rawText);
+  const labLike = /\b(lab|wbc|hb|hgb|plt|cr|bun|na|k|inr|pt|aptt|lactate|crp|pct|troponin|bnp|culture|vanco)\b/i.test(rawText);
+  const courseLike = /course|transfer|icu|ward|progress|admission|hospital|consult|today|overnight|abx|antibiotic|procedure|dispo|dc|discharge/i.test(rawText);
+  const tasks = fragments
+    .filter((line) => /f\/u|follow|pending|consult|call|repeat|order|arrange|hold|resume|taper|dc|discharge|opd|cert/i.test(line))
+    .slice(0, 6)
+    .map((line) => ({
+      text: line.trim(),
+      priority: /urgent|stat|call|shock|desat|bleed|fever|hypotension|!/.test(line.toLowerCase()) ? "urgent" as const : "normal" as const,
+      dueDate: "",
+      category: /culture|hb|cr|k|glucose|lactate|lab|cbc/i.test(line) ? "lab" as const : /mri|ct|echo|cxr|image/i.test(line) ? "imaging" as const : /consult|rehab|id|neuro|cardio|renal|gi|onc/i.test(line) ? "consult" as const : /dc|discharge|dispo|home|opd|cert/i.test(line) ? "discharge" as const : "other" as const,
+    }));
+
+  return [{
+    id: "target-import-1",
+    status: "updateCandidate",
+    matchPatientId: patient.id,
+    sourceIndex: 0,
+    bed: patient.bed,
+    patientCode: patient.patientCode,
+    age: String(patient.age || ""),
+    sex: patient.sex,
+    attending: patient.attending,
+    teamOrService: patient.teamOrService,
+    primaryDiagnosis: patient.primaryDiagnosis,
+    oneLiner: patient.oneLiner || patient.primaryDiagnosis,
+    chiefComplaint: "",
+    todayUpdates: !reportLike && !labLike ? fragments.slice(0, 6).join("\n") : "",
+    vitalSigns: fragments.filter((line) => /\b(bp|hr|rr|spo2|sat|temp|fever|afebrile|o2|nc|hfno|bipap)\b/i.test(line)).slice(0, 3).join("\n"),
+    physicalExam: fragments.filter((line) => /\b(pe|exam|abd|lung|edema|wound|confusion|weak|delirium|pressure injury)\b/i.test(line)).slice(0, 4).join("\n"),
+    labText: labLike
+      ? fragments.filter((line) => /\b(lab|wbc|hb|hgb|plt|cr|bun|na|k|inr|pt|aptt|lactate|crp|pct|troponin|bnp|culture|vanco)\b/i.test(line)).join("\n")
+      : "",
+    imageText: reportLike ? rawText : fragments.filter((line) => /\b(image|impression|report|ct|mri|cxr|echo|sono|ultrasound|x-ray|xray|ercp)\b/i.test(line)).join("\n"),
+    admissionSummary: courseLike && !reportLike && !labLike ? fragments.slice(0, 5).join(" ").slice(0, 700) : "",
+    underlyingDiseases: patient.underlyingDiseases,
+    activeProblems: patient.activeProblems,
+    hospitalCourseHighlights: courseLike && !reportLike && !labLike ? fragments.slice(0, 6).join("\n") : "",
+    importantRedFlags: fragments
+      .filter((line) => /shock|hypotension|desat|hypoxia|sepsis|unstable|active bleed|melena|hematemesis|neutropenic fever|new weakness|aphasia|decreased consciousness|urgent|red flag/i.test(line))
+      .slice(0, 4)
+      .join("\n"),
+    tasks,
+    antibioticsProceduresConsults: fragments
+      .filter((line) => /cef|pip\/tazo|vanco|abx|antibiotic|consult|procedure|scope|cath|biopsy/i.test(line))
+      .slice(0, 5),
+    dischargePlan: /discharge|dc|dispo|opd|cert|home|transfer/i.test(lowerText) ? fragments.filter((line) => /discharge|dc|dispo|opd|cert|home|transfer/i.test(line)).join("\n") : "",
+    disposition: "",
+    uncertainty: ["Local target-patient parser only. Review before saving."],
+    sourceExcerpt: rawText.slice(0, 500),
+  }];
 }
 
 function localDemoImportDrafts(rawText: string, existingPatients: Patient[]): PatientImportDraft[] {
@@ -333,7 +452,7 @@ function localDemoImportDrafts(rawText: string, existingPatients: Patient[]): Pa
         .join("\n"),
       imageText: chunk
         .split(/\r?\n/)
-        .filter((line) => /\b(image|ct|mri|cxr|echo|sono|x-ray|xray|ercp)\b/i.test(line))
+        .filter((line) => /\b(image|impression|report|ct|mri|cxr|echo|sono|ultrasound|x-ray|xray|ercp)\b/i.test(line))
         .slice(0, 6)
         .join("\n"),
       admissionSummary: chunk.split(/\r?\n/).slice(0, 4).join(" ").slice(0, 500),
@@ -374,6 +493,7 @@ function PatientBoardPage({
   const [attendingFilter, setAttendingFilter] = useState("all");
   const [bulkText, setBulkText] = useState("");
   const [bulkImportMode, setBulkImportMode] = useState<BulkImportMode>("existingInpatient");
+  const [bulkTargetPatientId, setBulkTargetPatientId] = useState("");
   const [bulkConfirmed, setBulkConfirmed] = useState(false);
   const [bulkLoading, setBulkLoading] = useState(false);
   const [bulkError, setBulkError] = useState("");
@@ -383,6 +503,9 @@ function PatientBoardPage({
   const attendingNames = getActiveAttendingNames(patients);
   const uniquePatients = Array.from(new Map(patients.map((patient) => [patient.id, patient])).values());
   const activeSourcePatients = getActivePatients(uniquePatients);
+  const bulkTargetPatient = bulkImportMode === "existingInpatient" && bulkTargetPatientId
+    ? activeSourcePatients.find((patient) => patient.id === bulkTargetPatientId)
+    : undefined;
   const activePatients = sortPatients(
     activeSourcePatients.filter(
       (patient) => attendingFilter === "all" || patient.attending.trim() === attendingFilter,
@@ -418,40 +541,86 @@ function PatientBoardPage({
       return;
     }
     if (bulkText.trim().length < 40) {
-      setBulkError("Paste a longer service list or handover batch.");
+      setBulkError(
+        bulkTargetPatient
+          ? "Paste a longer note, report, progress update, or transfer summary for the selected patient."
+          : "Paste a longer service list or handover batch. For one patient's note/report, choose a Target patient first.",
+      );
+      return;
+    }
+    if (bulkImportMode === "existingInpatient" && !bulkTargetPatient && !hasBulkPatientIdentity(bulkText)) {
+      setBulkError("Choose a Target patient for one patient's note/report, or paste a batch where each patient block includes bed or patient code.");
       return;
     }
 
     setBulkLoading(true);
+    const targetPatient = bulkTargetPatient;
+    const matchingPatients = targetPatient ? [targetPatient] : activeSourcePatients;
+    const analysisText = targetPatient ? selectedPatientContext(targetPatient, bulkText) : bulkText;
+    const targetUpdateOnly = Boolean(targetPatient && looksLikeDiscreteTargetUpdate(bulkText));
+    const localDraftsForCurrentInput = () =>
+      targetPatient
+        ? localTargetPatientUpdateDraft(targetPatient, bulkText)
+        : localRuleBasedImportDrafts(bulkText, activeSourcePatients, bulkImportMode);
+
+    const prepareDrafts = (drafts: PatientImportDraft[]) =>
+      drafts
+        .map((draft) => applyTargetPatientToDraft(draft, targetPatient))
+        .map((draft) => applyClinicalKnowledgeToPatientImportDraft(draft, { targetUpdate: targetUpdateOnly }));
+
     try {
       const result = isDemoMode
         ? {
-            drafts: localRuleBasedImportDrafts(bulkText, activeSourcePatients, bulkImportMode),
+            drafts: localDraftsForCurrentInput(),
             model: "local-demo-parser",
             draftId: "local-demo",
-            rawTextPreview: bulkText.slice(0, 700),
+            rawTextPreview: analysisText.slice(0, 700),
           }
         : await analyzePatientBatchText({
-            rawText: bulkText,
+            rawText: analysisText,
             deidentifiedConfirmed: true,
             importMode: bulkImportMode,
-            existingPatients: activeSourcePatients.map((patient) => ({
+            targetPatientId: targetPatient?.id,
+            existingPatients: matchingPatients.map((patient) => ({
               id: patient.id,
               bed: patient.bed,
               patientCode: patient.patientCode,
+              age: patient.age,
+              sex: patient.sex,
+              attending: patient.attending,
+              teamOrService: patient.teamOrService,
               primaryDiagnosis: patient.primaryDiagnosis,
+              oneLiner: patient.oneLiner,
+              underlyingDiseases: patient.underlyingDiseases,
+              activeProblems: patient.activeProblems,
             })),
           });
-      const knowledgeDrafts = result.drafts.map((draft) => applyClinicalKnowledgeToPatientImportDraft(draft));
+      const fallbackDrafts = targetPatient && result.drafts.length === 0
+        ? localDraftsForCurrentInput()
+        : [];
+      const knowledgeDrafts = prepareDrafts(result.drafts.length > 0 ? result.drafts : fallbackDrafts);
       setBulkDrafts(knowledgeDrafts);
-      setSelectedDraftIds(new Set(knowledgeDrafts.filter((draft) => draft.status === "new").map((draft) => draft.id)));
+      setSelectedDraftIds(new Set(knowledgeDrafts.map((draft) => draft.id)));
       setBulkStatus(
         knowledgeDrafts.length > 0
-          ? `Extracted ${knowledgeDrafts.length} draft card${knowledgeDrafts.length > 1 ? "s" : ""} with Clinical Knowledge review. Review before saving.`
-          : "No patient cards were extracted. Try separating patients with blank lines or bed labels.",
+          ? targetPatient
+            ? `Extracted one update draft for ${targetPatient.bed || targetPatient.patientCode || "selected patient"} with Clinical Knowledge review. Review before saving.`
+            : `Extracted ${knowledgeDrafts.length} draft card${knowledgeDrafts.length > 1 ? "s" : ""} with Clinical Knowledge review. Review before saving.`
+          : "No patient cards were extracted. If this is one patient's report/progress note, choose a Target patient; for batch import, include bed or patient code in each patient block.",
       );
     } catch (error) {
-      setBulkError(error instanceof Error ? error.message : "Bulk import analysis failed.");
+      if (targetPatient) {
+        const fallbackDrafts = prepareDrafts(localDraftsForCurrentInput());
+        if (fallbackDrafts.length > 0) {
+          setBulkDrafts(fallbackDrafts);
+          setSelectedDraftIds(new Set(fallbackDrafts.map((draft) => draft.id)));
+          setBulkStatus(
+            `AI service failed, so a local update draft was created for ${targetPatient.bed || targetPatient.patientCode || "the selected patient"}. Review carefully before saving.`,
+          );
+          return;
+        }
+      }
+      setBulkError(friendlyBulkImportError(error, Boolean(targetPatient)));
     } finally {
       setBulkLoading(false);
     }
@@ -706,20 +875,46 @@ function PatientBoardPage({
           Import intent
           <select
             value={bulkImportMode}
-            onChange={(event) => setBulkImportMode(event.target.value as BulkImportMode)}
+            onChange={(event) => {
+              setBulkImportMode(event.target.value as BulkImportMode);
+              if (event.target.value !== "existingInpatient") setBulkTargetPatientId("");
+            }}
           >
             <option value="existingInpatient">Existing inpatient / transfer-in</option>
             <option value="newAdmission">New admissions / mixed list</option>
           </select>
         </label>
+        {bulkImportMode === "existingInpatient" && (
+          <label>
+            Target patient for one-patient paste
+            <select
+              value={bulkTargetPatientId}
+              onChange={(event) => setBulkTargetPatientId(event.target.value)}
+            >
+              <option value="">No target - batch text must include bed or patient code</option>
+              {activeSourcePatients.map((patient) => (
+                <option value={patient.id} key={patient.id}>
+                  {[patient.bed || "No bed", patient.patientCode || "No code", patient.primaryDiagnosis || patient.oneLiner || "No Dx"]
+                    .filter(Boolean)
+                    .join(" / ")}
+                </option>
+              ))}
+            </select>
+            <span className="muted">
+              For a single imaging report, lab block, consult note, or progress update, choose the patient first so the draft updates that patient instead of guessing.
+            </span>
+          </label>
+        )}
         <label>
-          Service list / handover batch
+          {bulkTargetPatient ? "Selected patient note / report" : "Service list / handover batch"}
           <textarea
             className="bulk-import-textarea"
             value={bulkText}
             onChange={(event) => setBulkText(event.target.value)}
-            placeholder={bulkImportMode === "existingInpatient"
-              ? "Paste de-identified admission note + course summary + latest progress/labs/images. The draft should compress prior course and emphasize active A/P, today, tasks, and DC barriers."
+            placeholder={bulkTargetPatient
+              ? "Paste this patient's de-identified latest progress, labs, imaging report, consult note, or transfer summary. Nothing is saved until you review and apply the update draft."
+              : bulkImportMode === "existingInpatient"
+              ? "Paste a de-identified service list or transfer-in batch. Include bed or patient code in each patient block, or choose a Target patient above for one-patient paste."
               : "Paste de-identified admission or service-list batch text. Nothing is saved until reviewed cards are selected and created."}
           />
         </label>
@@ -733,11 +928,11 @@ function PatientBoardPage({
             Text is de-identified and ready for clinician-reviewed draft extraction.
           </label>
           <button type="button" onClick={analyzeBulkText} disabled={bulkLoading}>
-            {bulkLoading ? "Working..." : "Analyze batch"}
+            {bulkLoading ? "Working..." : bulkTargetPatient ? "Analyze selected patient update" : "Analyze batch"}
           </button>
           {bulkDrafts.length > 0 && (
             <button type="button" onClick={createSelectedBulkDrafts} disabled={bulkLoading || selectedDraftIds.size === 0}>
-              Create selected patients ({selectedDraftIds.size})
+              Apply selected drafts ({selectedDraftIds.size})
             </button>
           )}
         </div>

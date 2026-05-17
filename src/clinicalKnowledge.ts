@@ -1132,20 +1132,37 @@ export function applyClinicalKnowledgeToAiSoapDraft(draft: AiSoapDraft, rawText:
   };
 }
 
-export function applyClinicalKnowledgeToPatientImportDraft(draft: PatientImportDraft): PatientImportDraft {
-  const plan = applyClinicalKnowledgeToText([
-    draft.sourceExcerpt,
-    draft.primaryDiagnosis,
-    draft.oneLiner,
-    draft.admissionSummary,
-    draft.underlyingDiseases,
-    draft.activeProblems,
-    draft.hospitalCourseHighlights,
-    draft.importantRedFlags,
-    draft.tasks.map((task) => task.text).join("\n"),
-    draft.dischargePlan,
-    draft.disposition,
-  ].join("\n"));
+export function applyClinicalKnowledgeToPatientImportDraft(
+  draft: PatientImportDraft,
+  options: { targetUpdate?: boolean } = {},
+): PatientImportDraft {
+  const sourceText = options.targetUpdate
+    ? [
+        draft.sourceExcerpt,
+        draft.todayUpdates,
+        draft.vitalSigns,
+        draft.physicalExam,
+        draft.labText,
+        draft.imageText,
+        draft.importantRedFlags,
+        draft.tasks.map((task) => task.text).join("\n"),
+        draft.dischargePlan,
+        draft.disposition,
+      ].join("\n")
+    : [
+        draft.sourceExcerpt,
+        draft.primaryDiagnosis,
+        draft.oneLiner,
+        draft.admissionSummary,
+        draft.underlyingDiseases,
+        draft.activeProblems,
+        draft.hospitalCourseHighlights,
+        draft.importantRedFlags,
+        draft.tasks.map((task) => task.text).join("\n"),
+        draft.dischargePlan,
+        draft.disposition,
+      ].join("\n");
+  const plan = applyClinicalKnowledgeToText(sourceText);
   return {
     ...draft,
     activeProblems: dedupe([draft.activeProblems, ...plan.problemBasedAP.map((item) => item.problemTitle)]).join("\n"),
@@ -1159,7 +1176,7 @@ export function applyClinicalKnowledgeToPatientImportDraft(draft: PatientImportD
         category: task.category,
       })),
     ], "text"),
-    admissionSummary: draft.admissionSummary || formatRuleBasedAdmissionSummary(plan),
+    admissionSummary: options.targetUpdate ? draft.admissionSummary : draft.admissionSummary || formatRuleBasedAdmissionSummary(plan),
     uncertainty: dedupe([
       ...draft.uncertainty,
       ...(plan.needsReview ? [`Review rule matches: ${plan.ruleMatches.map((match) => match.title).join(", ")}`] : []),

@@ -440,6 +440,7 @@ interface PatientBatchCallableInput {
   rawText?: unknown;
   deidentifiedConfirmed?: unknown;
   importMode?: unknown;
+  targetPatientId?: unknown;
   existingPatients?: unknown;
 }
 
@@ -449,7 +450,14 @@ interface ExistingPatientForBatch {
   id: string;
   bed: string;
   patientCode: string;
+  age: string;
+  sex: string;
+  attending: string;
+  teamOrService: string;
   primaryDiagnosis: string;
+  oneLiner: string;
+  underlyingDiseases: string;
+  activeProblems: string;
 }
 
 function getOpenAiApiKey() {
@@ -501,13 +509,26 @@ function sanitizeExistingPatientsForBatch(value: unknown): ExistingPatientForBat
       id: truncateString(item.id, 120),
       bed: truncateString(item.bed, 80),
       patientCode: truncateString(item.patientCode, 120),
+      age: truncateString(item.age, 12),
+      sex: truncateString(item.sex, 20),
+      attending: truncateString(item.attending, 120),
+      teamOrService: truncateString(item.teamOrService, 120),
       primaryDiagnosis: truncateString(item.primaryDiagnosis, 220),
+      oneLiner: truncateString(item.oneLiner, 240),
+      underlyingDiseases: truncateString(item.underlyingDiseases, 500),
+      activeProblems: truncateString(item.activeProblems, 500),
     }))
     .filter((item) => item.id && (item.bed || item.patientCode));
 }
 
 function sanitizePatientBatchImportMode(value: unknown): PatientBatchImportMode {
   return value === "newAdmission" ? "newAdmission" : "existingInpatient";
+}
+
+function findTargetPatientForBatch(targetPatientId: unknown, existingPatients: ExistingPatientForBatch[]) {
+  const targetId = truncateString(targetPatientId, 120);
+  if (!targetId) return undefined;
+  return existingPatients.find((patient) => patient.id === targetId);
 }
 
 function isGenericClinicalFiller(value: string) {
@@ -628,7 +649,13 @@ function sanitizeImportTask(value: unknown) {
   };
 }
 
-function sanitizeImportDraft(value: unknown, index: number, rawText: string, existingPatients: ExistingPatientForBatch[]) {
+function sanitizeImportDraft(
+  value: unknown,
+  index: number,
+  rawText: string,
+  existingPatients: ExistingPatientForBatch[],
+  targetPatient?: ExistingPatientForBatch,
+) {
   const item = asPlainObject(value);
   const tasks = Array.isArray(item.tasks)
     ? item.tasks.map((task) => sanitizeImportTask(task)).filter((task): task is NonNullable<typeof task> => Boolean(task))
@@ -677,30 +704,102 @@ function sanitizeImportDraft(value: unknown, index: number, rawText: string, exi
     baseDraft.hospitalCourseHighlights,
     baseDraft.importantRedFlags,
   ].join("\n");
-  const matchedPatient = matchExistingPatient(baseDraft, existingPatients);
+  const matchedPatient = targetPatient ?? matchExistingPatient(baseDraft, existingPatients);
+  const uncertainty = targetPatient
+    ? [
+        ...baseDraft.uncertainty,
+        "Target patient was selected by clinician; verify imported fields before saving.",
+      ].slice(0, 6)
+    : baseDraft.uncertainty;
 
   return {
     ...baseDraft,
     status: matchedPatient ? "updateCandidate" : baseDraft.status,
     matchPatientId: matchedPatient?.id ?? "",
+    bed: baseDraft.bed || matchedPatient?.bed || "",
+    patientCode: baseDraft.patientCode || matchedPatient?.patientCode || "",
+    age: baseDraft.age || matchedPatient?.age || "",
+    sex: baseDraft.sex || matchedPatient?.sex || "",
+    attending: baseDraft.attending || matchedPatient?.attending || "",
+    teamOrService: baseDraft.teamOrService || matchedPatient?.teamOrService || "",
+    primaryDiagnosis: baseDraft.primaryDiagnosis || matchedPatient?.primaryDiagnosis || "",
+    oneLiner: baseDraft.oneLiner || matchedPatient?.oneLiner || matchedPatient?.primaryDiagnosis || "",
+    underlyingDiseases: baseDraft.underlyingDiseases || matchedPatient?.underlyingDiseases || "",
+    activeProblems: baseDraft.activeProblems || matchedPatient?.activeProblems || "",
     importantRedFlags: filterStrokePermissiveBpRedFlags(baseDraft.importantRedFlags, allText),
     tasks: baseDraft.tasks.filter((task) => {
       if (!shouldSuppressStrokeBpRedFlag(allText)) return true;
       return !lineLooksLikeBpRedFlag(task.text);
     }),
+    uncertainty,
   };
 }
 
-function sanitizePatientBatchOutput(value: unknown, rawText: string, existingPatients: ExistingPatientForBatch[]) {
+function targetUpdateText(rawText: string) {
+  const marker = "Pasted update/report for this target patient:";
+  const markerIndex = rawText.indexOf(marker);
+  return markerIndex >= 0 ? rawText.slice(markerIndex + marker.length).trim() : rawText;
+}
+
+function fallbackTargetImportDraft(rawText: string, targetPatient: ExistingPatientForBatch) {
+  const updateText = targetUpdateText(rawText);
+  const reportLike = /\b(impression|report|ct|mri|cxr|echo|sono|ultrasound|x-ray|xray|image|imaging)\b/i.test(updateText);
+  const labLike = /\b(lab|wbc|hb|hgb|plt|cr|bun|na|k|inr|pt|aptt|lactate|crp|pct|troponin|bnp|culture|vanco)\b/i.test(updateText);
+
+  return {
+    id: "target-update-1",
+    status: "updateCandidate",
+    matchPatientId: targetPatient.id,
+    sourceIndex: 0,
+    bed: targetPatient.bed,
+    patientCode: targetPatient.patientCode,
+    age: targetPatient.age,
+    sex: targetPatient.sex,
+    attending: targetPatient.attending,
+    teamOrService: targetPatient.teamOrService,
+    primaryDiagnosis: targetPatient.primaryDiagnosis,
+    oneLiner: targetPatient.oneLiner || targetPatient.primaryDiagnosis,
+    chiefComplaint: "",
+    todayUpdates: reportLike || labLike ? "" : updateText.slice(0, 700),
+    vitalSigns: "",
+    physicalExam: "",
+    labText: labLike ? updateText : "",
+    imageText: reportLike ? updateText : "",
+    admissionSummary: "",
+    underlyingDiseases: targetPatient.underlyingDiseases,
+    activeProblems: targetPatient.activeProblems,
+    hospitalCourseHighlights: reportLike || labLike ? "" : updateText.slice(0, 700),
+    importantRedFlags: "",
+    tasks: [],
+    antibioticsProceduresConsults: [],
+    dischargePlan: "",
+    disposition: "",
+    uncertainty: ["AI returned no draft; this is a target-patient fallback for clinician review."],
+    sourceExcerpt: updateText.slice(0, 700),
+  };
+}
+
+function sanitizePatientBatchOutput(
+  value: unknown,
+  rawText: string,
+  existingPatients: ExistingPatientForBatch[],
+  targetPatient?: ExistingPatientForBatch,
+) {
   const output = asPlainObject(value);
   const rawDrafts = Array.isArray(output.drafts) ? output.drafts : [];
-  return rawDrafts
+  const draftSource = rawDrafts.length > 0 ? rawDrafts : targetPatient ? [fallbackTargetImportDraft(rawText, targetPatient)] : [];
+  return draftSource
     .slice(0, 40)
-    .map((item, index) => sanitizeImportDraft(item, index, rawText, existingPatients))
+    .map((item, index) => sanitizeImportDraft(item, index, rawText, existingPatients, targetPatient))
     .filter((draft) => draft.bed || draft.patientCode || draft.primaryDiagnosis || draft.oneLiner || draft.admissionSummary);
 }
 
-function makeBatchImportPrompt(rawText: string, existingPatients: ExistingPatientForBatch[], importMode: PatientBatchImportMode) {
+function makeBatchImportPrompt(
+  rawText: string,
+  existingPatients: ExistingPatientForBatch[],
+  importMode: PatientBatchImportMode,
+  targetPatient?: ExistingPatientForBatch,
+) {
   const modeInstructions = importMode === "existingInpatient"
     ? [
         "Import mode: existing inpatient / transfer-in.",
@@ -713,10 +812,26 @@ function makeBatchImportPrompt(rawText: string, existingPatients: ExistingPatien
         "Import mode: new admissions / mixed list.",
         "- Prioritize why admitted, HPI/brief presentation, key PMH, initial active problems, initial A/P, immediate tasks, and disposition.",
       ];
+  const targetInstructions = targetPatient
+    ? [
+        "",
+        "Selected target patient:",
+        JSON.stringify(targetPatient, null, 2),
+        "",
+        "Target-patient update rules:",
+        "- The pasted clinical text belongs to this one selected existing patient.",
+        "- Return exactly one draft unless the text is unusable.",
+        "- Mark status updateCandidate and set matchPatientId to the selected target id.",
+        "- Reuse target bed, patientCode, age/sex, attending/service, Dx, PMH, and active problems unless the pasted text clearly updates them.",
+        "- Do not create a new patient because the pasted update lacks bed or patient code.",
+        "- If the text is only an imaging/lab/consult report, put it in imageText/labText/todayUpdates as appropriate and leave admissionSummary empty unless there is enough course context.",
+      ]
+    : [];
   return [
     "Task:",
     "Extract a pasted inpatient internal medicine service list, handover, or admission batch into patient review cards.",
     ...modeInstructions,
+    ...targetInstructions,
     "",
     "Existing active patients for duplicate matching:",
     JSON.stringify(existingPatients, null, 2),
@@ -1081,6 +1196,9 @@ export const analyzePatientBatchText = onCall(
     const deidentifiedConfirmed = data.deidentifiedConfirmed === true;
     const existingPatients = sanitizeExistingPatientsForBatch(data.existingPatients);
     const importMode = sanitizePatientBatchImportMode(data.importMode);
+    const targetPatient = importMode === "existingInpatient"
+      ? findTargetPatientForBatch(data.targetPatientId, existingPatients)
+      : undefined;
 
     if (!deidentifiedConfirmed) {
       throw new HttpsError("failed-precondition", "Confirm that the text is de-identified before batch analysis.");
@@ -1122,7 +1240,7 @@ export const analyzePatientBatchText = onCall(
           },
           {
             role: "user",
-            content: makeBatchImportPrompt(rawText, existingPatients, importMode),
+            content: makeBatchImportPrompt(rawText, existingPatients, importMode, targetPatient),
           },
         ],
         text: {
@@ -1161,7 +1279,7 @@ export const analyzePatientBatchText = onCall(
     }
 
     const rawTextPreview = rawText.slice(0, 700);
-    const drafts = sanitizePatientBatchOutput(parsedDraft, rawText, existingPatients);
+    const drafts = sanitizePatientBatchOutput(parsedDraft, rawText, existingPatients, targetPatient);
 
     return {
       draftId: admin.firestore().collection("_aiDraftIds").doc().id,
