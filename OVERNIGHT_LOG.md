@@ -2,6 +2,66 @@
 
 Run target: stable production-ready MVP for IM Rounding Tracker before 2026-05-15 08:00 Asia/Taipei.
 
+## 2026-05-17 AI Intake Status-Aware Sanitizer Hotfix
+
+Objective: fix the deeper AI/rule-layer failure where historical resolved shock and report prose could be promoted into current SOAP fields, red flags, PE, imaging, and SBAR-style generated briefs.
+
+### Changed Files
+
+- `src/aiDraftSanitizer.ts`
+  - Added a frontend review-gate sanitizer after AI extraction and Clinical Knowledge review.
+  - Separates current status from resolved course, suppressing resolved shock from current V/S, red flags, tasks, and A/P when later BP/recovery evidence is present.
+  - Routes CT/MRI/CXR/EGD/report text out of PE and keeps PE to bedside exam findings.
+  - Extracts latest meaningful lab table signals while dropping stale/low-yield values such as old Hb/eGFR-only summaries.
+  - Extracts image report impressions without copying HPI/admission narrative or report boilerplate.
+  - Compacts generated text with common clinical abbreviations and removes generic filler such as `monitor closely`.
+- `src/components/AiIntakePanel.tsx`
+  - Runs AI draft output through the sanitizer before review cards are built or preselected.
+- `src/clinicalKnowledge.ts`
+  - Added latest-BP/current-status helpers so rule packs do not use the lowest historical BP as today's hemodynamic state.
+  - Infection, cardio/HF, and GI/bleed rules now suppress resolved shock when latest BP/recovery context indicates stability.
+  - Infection A/P is more specific for bacteremia/infection instead of reflexively labeling everything `Infection / sepsis`.
+- `functions/src/index.ts`
+  - Tightened backend AI prompt instructions for current-vs-historical status, resolved shock, PE routing, image-report routing, and concise abbreviations.
+- `scripts/clinical-eval.mjs`
+  - Added regression coverage using a synthetic de-identified complex transfer case modeled after the provided test document.
+  - The regression confirms resolved shock does not enter current SOAP fields, CT/report text does not enter PE, HPI does not enter imaging, latest meaningful labs are retained, and active infection tasks/A/P are preserved.
+
+### Build Result
+
+- `npm run clinical:eval` passed: 26 clinical eval cases.
+- `npm run build` passed in the repository root.
+- `npm --prefix functions run build` passed.
+- Vite still reports the existing non-blocking large chunk warning.
+
+### Smoke Test Checklist
+
+- Demo Patient Board loads at `http://localhost:5174/?demo=1&smoke=sanitizer#/patients`: PASS.
+- Demo Patient Detail loads with Rounds/A/P/AI Docs tabs and no console errors: PASS.
+- Demo Print List loads with SOAP-style S/O/A/P/Tasks content and no console errors: PASS.
+- AI Intake source inspection confirms reviewed cards are sanitized before any accepted item can write to patient/daily-note fields: PASS.
+- The provided de-identified document was used only as local testing context; no docx or raw patient text was added to the repository: PASS.
+
+### Known Limitations
+
+- The sanitizer is a safety gate, not a complete clinical ontology. Unusual cases still require physician review before Apply/Save.
+- This run did not call the live OpenAI API; prompt behavior was validated through source changes plus deterministic regression tests.
+- The bundle-size warning remains deferred.
+- `vite-dev.log` remains a local modified log file and is intentionally excluded from commits.
+
+### Firebase Schema Safety
+
+- No Firestore collection path, field name, rules file, Firebase schema, or patient persistence service was destructively changed.
+- The change writes through the existing AI Intake review flow and existing patient/daily-note fields only after explicit clinician acceptance.
+- No patient-data persistence was added to `localStorage`.
+
+### Git Branch / Status Before Push
+
+- Working branch: `main`.
+- Intended commit files: `OVERNIGHT_LOG.md`, `functions/src/index.ts`, `scripts/clinical-eval.mjs`, `src/aiDraftSanitizer.ts`, `src/clinicalKnowledge.ts`, `src/components/AiIntakePanel.tsx`.
+- Intentionally excluded local file: `vite-dev.log`.
+- Expected final branch/status immediately before `git push origin main`: `main...origin/main [ahead 1]`, with only local `vite-dev.log` modified and intentionally uncommitted.
+
 ## What Changed
 
 - Added `AGENTS.md` with project rules for clinical safety, print usefulness, data preservation, explicit-save behavior, and safe main-branch pushes.

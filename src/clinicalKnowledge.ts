@@ -291,6 +291,13 @@ function maxBloodPressure(text: string) {
   return { maxSbp, maxDbp };
 }
 
+function latestBloodPressure(text: string) {
+  const matches = Array.from(text.matchAll(/\b(?:bp|b\/p|blood pressure)\s*:?\s*(\d{2,3})\s*\/\s*(\d{2,3})\b/gi));
+  const last = matches.length > 0 ? matches[matches.length - 1] : undefined;
+  if (!last) return null;
+  return { sbp: Number(last[1]), dbp: Number(last[2]) };
+}
+
 function maxNumberAfter(pattern: RegExp, text: string) {
   let max: number | null = null;
   for (const match of text.matchAll(pattern)) {
@@ -300,6 +307,15 @@ function maxNumberAfter(pattern: RegExp, text: string) {
   return max;
 }
 
+function latestNumberAfter(pattern: RegExp, text: string) {
+  let latest: number | null = null;
+  for (const match of text.matchAll(pattern)) {
+    const value = Number(match[1]);
+    if (Number.isFinite(value)) latest = value;
+  }
+  return latest;
+}
+
 function minNumberAfter(pattern: RegExp, text: string) {
   let min: number | null = null;
   for (const match of text.matchAll(pattern)) {
@@ -307,6 +323,18 @@ function minNumberAfter(pattern: RegExp, text: string) {
     if (Number.isFinite(value)) min = Math.min(min ?? value, value);
   }
   return min;
+}
+
+function hasResolvedHemodynamicShock(text: string) {
+  const latestBp = latestBloodPressure(text);
+  const currentBpStable = Boolean(latestBp && latestBp.sbp >= 90 && latestBp.dbp >= 50);
+  const recoveryPhrase =
+    /(after\s+fluid\s+challenge[\s\S]{0,180}(?:bp|blood pressure)\s+(?:recovered|improved)|(?:bp|blood pressure)\s+(?:recovered|improved)|shock\s+(?:resolved|improved)|(?:resolved|improved)[^.]{0,50}\bshock|off\s+(?:pressor|norepi)|pressor\s+off|norepi\s+(?:stopped|off)|fluid[- ]responsive|hypovolemia\s+(?:was\s+)?impressed|no\s+hypotension)/i.test(text);
+  return currentBpStable && recoveryPhrase;
+}
+
+function hasUnresolvedShockSignal(text: string) {
+  return /\b(shock|pressor|norepi|hypotension|septic shock)\b/i.test(text) && !hasResolvedHemodynamicShock(text);
 }
 
 function wbcValuesInK(text: string) {
@@ -529,18 +557,19 @@ function applyNeuroRules(plan: GeneratedClinicalPlan, text: string) {
 function applyInfectionRules(plan: GeneratedClinicalPlan, text: string) {
   if (!hasMatch(plan.ruleMatches, "infection-sepsis")) return;
   const refs = clinicalKnowledgePacks.find((pack) => pack.id === "infection-sepsis")?.sourceRefs ?? [sourceRefs.localInpatient];
-  const lactate = maxNumberAfter(/\blactate\s*[:=]?\s*(\d+(?:\.\d+)?)/gi, text);
-  const minSbp = minNumberAfter(/\bbp\s*[:=]?\s*(\d{2,3})\s*\/\s*\d{2,3}/gi, text);
+  const lactate = latestNumberAfter(/\blactate\s*[:=]?\s*(\d+(?:\.\d+)?)/gi, text);
+  const latestBp = latestBloodPressure(text);
   const hasRamsayEarInfection = /\b(ramsay|zoster|ear\s+swelling|ear\s+discharge|facial\s+weakness|cnvii|cn\s*vii)\b/i.test(text);
   const shockKeyword = /shock|pressor|norepi|hypotension|septic shock/i.test(text);
   const cultureSignal = /\b(?:b\/c|bcx|blood culture|sputum culture|urine culture|culture)\b/i.test(text);
   const bacteremiaSignal = /\b(bacteremia|blood culture.*positive|bcx.*positive|gram[- ](?:positive|negative)|gpc|gnb)\b/i.test(text);
   const sourceControlNeed = /\b(abscess|empyema|cholangitis|obstruct|obstruction|drain|source control|ercp|debridement)\b/i.test(text);
-  const resolvedShockContext = /\b(?:shock|sepsis|hypotension)[^.]{0,40}\b(?:resolved|improved)|\b(?:resolved|improved)[^.]{0,40}\b(?:shock|sepsis|hypotension)|\bnorepi\s+(?:stopped|off)|\boff\s+(?:pressor|norepi)|\bafebrile\s*\d{0,2}\s*h/i.test(text);
+  const resolvedShockContext = hasResolvedHemodynamicShock(text);
   const currentHemodynamicSignal =
-    (lactate !== null && lactate >= 4) ||
-    (minSbp !== null && minSbp < 90) ||
-    (lactate !== null && lactate >= 2 && minSbp !== null && minSbp <= 95);
+    !resolvedShockContext &&
+    ((lactate !== null && lactate >= 4) ||
+      (latestBp !== null && latestBp.sbp < 90) ||
+      (lactate !== null && lactate >= 2 && latestBp !== null && latestBp.sbp <= 95));
   const hasSepsisPhysiology = currentHemodynamicSignal || (shockKeyword && !resolvedShockContext);
   if (hasSepsisPhysiology) {
     appendRedFlag(plan, "Possible sepsis/shock physiology", "Infection trigger with shock, hypotension, vasopressor or high lactate signal.", "urgent", refs);
@@ -563,12 +592,14 @@ function applyInfectionRules(plan: GeneratedClinicalPlan, text: string) {
   );
   appendAp(
     plan,
-    hasRamsayEarInfection ? "Ramsay Hunt / ear infection" : "Infection / sepsis",
+    hasRamsayEarInfection ? "Ramsay Hunt / ear infection" : bacteremiaSignal ? "Bacteremia / infection" : "Infection / sepsis",
     hasRamsayEarInfection
       ? "Ear/zoster infection with cranial nerve involvement; clarify antiviral/Abx duration, fever trend, hearing/eye care, and ENT/ID follow-up."
       : sourceControlNeed
         ? "Infection with source-control issue; track Cx, Abx response, fever/WBC, hemodynamics and drainage/procedure status."
-        : "Infection concern; verify source, culture status, Abx coverage/de-escalation, fever/WBC, lactate and hemodynamics.",
+        : bacteremiaSignal
+          ? "Bacteremia/infx; f/u Cx clearance/susceptibility, source, Abx duration/de-escalation and fever/WBC."
+          : "Infection concern; verify source, Cx status, Abx coverage/de-escalation, fever/WBC and hemodynamics if unstable.",
     [...plan.facts.objectiveFacts, ...plan.facts.antibiotics, ...plan.facts.consults],
     hasRamsayEarInfection
       ? ["confirm antiviral/Abx duration", "f/u fever curve/culture if obtained", "clarify ENT/ID follow-up", "eye care/hearing follow-up if facial palsy or hearing deficit"]
@@ -585,15 +616,15 @@ function applyInfectionRules(plan: GeneratedClinicalPlan, text: string) {
 function applyCardioRules(plan: GeneratedClinicalPlan, text: string) {
   if (!hasMatch(plan.ruleMatches, "cardio-hf-acs-af")) return;
   const refs = clinicalKnowledgePacks.find((pack) => pack.id === "cardio-hf-acs-af")?.sourceRefs ?? [sourceRefs.localInpatient];
-  const unresolvedShockSignal = /shock/i.test(text) && !/\b(?:shock|sepsis|hypotension)[^.]{0,40}\b(?:resolved|improved)|\b(?:resolved|improved)[^.]{0,40}\b(?:shock|sepsis|hypotension)|\bnorepi\s+(?:stopped|off)|\boff\s+(?:pressor|norepi)/i.test(text);
+  const unresolvedShockSignal = hasUnresolvedShockSignal(text);
   const ef = minNumberAfter(/\b(?:ef|lvef)\s*[:=]?\s*(\d{1,2})\s*%?/gi, text);
   const hasHfrEf =
     /\b(hfref|heart failure with reduced ef|reduced ef|systolic hf)\b/i.test(text) ||
     (/\b(hf|heart failure|chf)\b/i.test(text) && ef !== null && ef <= 40);
-  const minSbp = minNumberAfter(/\bbp\s*[:=]?\s*(\d{2,3})\s*\/\s*\d{2,3}/gi, text);
+  const currentBp = latestBloodPressure(text);
   const potassium = maxNumberAfter(/\bk\s*[:=]?\s*(\d+(?:\.\d+)?)/gi, text);
   const creatinine = maxNumberAfter(/\b(?:cr|creatinine)\s*[:=]?\s*(\d+(?:\.\d+)?)/gi, text);
-  const gdmtCaution = unresolvedShockSignal || (minSbp !== null && minSbp < 95) || (potassium !== null && potassium >= 5.5) || (creatinine !== null && creatinine >= 2.5);
+  const gdmtCaution = unresolvedShockSignal || (currentBp !== null && currentBp.sbp < 95) || (potassium !== null && potassium >= 5.5) || (creatinine !== null && creatinine >= 2.5);
   const gdmtPlan = hasHfrEf
     ? gdmtCaution
       ? "review HFrEF GDMT readiness/contraindications before DC; defer or adjust ACEi/ARB/ARNI, BB, SGLT2i, MRA if hypotension, AKI, hyperK or shock"
@@ -713,7 +744,7 @@ function applyGiRules(plan: GeneratedClinicalPlan, text: string) {
   if (!hasMatch(plan.ruleMatches, "gi-bleed-anemia")) return;
   const refs = clinicalKnowledgePacks.find((pack) => pack.id === "gi-bleed-anemia")?.sourceRefs ?? [sourceRefs.localInpatient];
   const hb = minNumberAfter(/\b(?:hb|hgb)\s*[:=]?\s*(\d+(?:\.\d+)?)/gi, text);
-  const resolvedHemodynamicContext = /\b(?:shock|sepsis|hypotension)[^.]{0,40}\b(?:resolved|improved)|\b(?:resolved|improved)[^.]{0,40}\b(?:shock|sepsis|hypotension)|\bnorepi\s+(?:stopped|off)|\boff\s+(?:pressor|norepi)/i.test(text);
+  const resolvedHemodynamicContext = hasResolvedHemodynamicShock(text);
   const upperGiSignal = /\b(hematemesis|coffee ground|melena|ugib|upper gi|duodenal ulcer|gastric ulcer|ppi|pantoprazole|egd)\b/i.test(text);
   const antithromboticSignal = /\b(anticoag|doac|warfarin|heparin|apixaban|rivaroxaban|aspirin|clopidogrel|antiplatelet)\b/i.test(text);
   const activeBleedingSignal = /\b(active bleed|gi bleed|melena|hematemesis|hematochezia|transfusion|endoscopy|egd|colonoscopy|hold anticoag|brbpr|rectal bleeding)\b/i.test(text);

@@ -19,6 +19,7 @@ const {
 const { emptyPatient, getLabFocusSummary, parseLabText, textToItems, todayKey, nowIso, createId } = await server.ssrLoadModule("/src/utils.ts");
 const { getRoundingDigest } = await server.ssrLoadModule("/src/roundingDigest.ts");
 const { buildConcisePatientClinicalUpdate } = await server.ssrLoadModule("/src/clinicalPatientPolish.ts");
+const { sanitizeAiSoapDraftForReview } = await server.ssrLoadModule("/src/aiDraftSanitizer.ts");
 
 function haystack(plan) {
   return [
@@ -514,6 +515,131 @@ try {
 } catch (error) {
   failures.push({ name: "ICU transfer existing inpatient import creates concise board/SBAR", error: error instanceof Error ? error.message : String(error) });
   console.error(`FAIL ICU transfer existing inpatient import creates concise board/SBAR: ${failures[failures.length - 1].error}`);
+}
+
+try {
+  const rawTransferText = [
+    "51M with hypopharyngeal/esophageal SCC, admitted after syncope and conscious disturbance.",
+    "ED course: vital signs revealed shock with BP 54/29 mmHg. After fluid challenge, BP recovered and hypovolemia was impressed.",
+    "2026-05-15 progress: no fever, weak.",
+    "2026-05-15 Vital signs: Temperature 37.0 C, BP: 100/69 mmHg, Pulse: 99/min, RR: 16/min, SpO2: 100%.",
+    "Physical Examination: cachexia, weak; clear consciousness; breathing smooth; abdomen soft; extremities no edema.",
+    "Lab data",
+    "Test WBC Neu Hb Plt CRE GFR Na K ALT Mg",
+    "2026-05-12 8.0 70 10.2 220 0.50 133.33 139 3.8 30 1.9",
+    "2026-05-15 12.7* 88.9* 9.4* 259 0.46* 125.85 139 3.8 36 1.8",
+    "A long report history says the patient had dysphagia, vomiting, weight loss, and was sent to ED.",
+    "2026-05-13 Neck/chest CT",
+    "Impression:",
+    "1. Persistent middle/lower esophageal wall thickening.",
+    "2. Stable enlarged necrotic lymph nodes, c/f metastatic lymphadenopathy.",
+    "3. RUL/RML ground-glass opacity/inflammation.",
+    "For other findings see report.",
+    "2026-05-07 Brain CT",
+    "Impression:",
+    "Aged brain atrophy.",
+    "No evidence of hemorrhage or edema.",
+    "A/P: bacteremia; peripheral B/C MRSA then S. haemolyticus; Port-A Enterococcus faecalis; Teicoplanin started 5/13; f/u neck/chest CT.",
+  ].join("\n");
+  const badDraft = {
+    oneLiner: "51M SCC with current shock and bacteremia.",
+    admissionSummary:
+      "Vital signs revealed shock with BP: 54/29 mmHg. The patient has esophageal SCC and bacteremia. Continue current management.",
+    isbarHandoff:
+      "Situation: active shock with BP 54/29.\nBackground: SCC.\nAssessment: shock.\nRecommendation: monitor closely.",
+    subjective: {
+      chiefConcern: "shock",
+      symptoms: ["weak", "no fever"],
+      overnightEvents: [],
+      importantSymptoms: [],
+      importantOvernightEvents: [],
+    },
+    objective: {
+      vitals: [
+        { date: "", name: "V/S", value: "BP 54/29 mmHg", interpretation: "shock", isAbnormal: true, isImportant: true },
+        { date: "2026-05-15", name: "V/S", value: "BP 100/69, PR 99, RR 16, SpO2 100%", interpretation: "stable", isAbnormal: false, isImportant: true },
+      ],
+      bloodSugars: [],
+      physicalExam: [
+        {
+          system: "PE",
+          finding: "Due to conscious change, brain CT was arranged, which showed aged brain atrophy without hemorrhage.",
+          isImportant: true,
+        },
+        { system: "General", finding: "cachexia, weak", isImportant: true },
+      ],
+      labs: [
+        { date: "2026-05-12", group: "Latest labs", name: "Hb", value: "10.2", unit: "", previousValue: "", isAbnormal: true, isImportant: true, interpretation: "anemia" },
+        { date: "2026-05-12", group: "Latest labs", name: "GFR", value: "133.33", unit: "", previousValue: "", isAbnormal: false, isImportant: true, interpretation: "fair renal function" },
+      ],
+      images: [
+        {
+          date: "",
+          studyType: "Latest imaging",
+          finding: "",
+          impression:
+            "This 51-year-old male with cancer was admitted via ED. He reported dysphagia since last year and lost body weight before admission.",
+          isImportant: true,
+        },
+      ],
+    },
+    assessmentPlan: [
+      {
+        problemTitle: "Shock",
+        assessmentSummary: "Current shock with BP 54/29.",
+        evidenceOrCourseItems: ["BP 54/29"],
+        planItems: ["monitor BP for shock"],
+        isImportant: true,
+      },
+      {
+        problemTitle: "Bacteremia",
+        assessmentSummary: "MRSA/S. haemolyticus/Enterococcus bacteremia.",
+        evidenceOrCourseItems: ["B/C positive", "Teicoplanin 5/13"],
+        planItems: ["f/u Cx", "review Abx duration"],
+        isImportant: true,
+      },
+    ],
+    redFlags: [{ text: "Shock", reason: "BP 54/29" }],
+    tasks: [
+      { text: "monitor closely for shock", priority: "urgent", dueDate: "", category: "order" },
+      { text: "f/u B/C and Abx duration", priority: "normal", dueDate: "", category: "order" },
+    ],
+    dischargeIssues: [],
+    thinkingPrompts: [],
+    uncertainty: [],
+  };
+  const clean = sanitizeAiSoapDraftForReview(badDraft, rawTransferText, "mixed");
+  const vitalsText = JSON.stringify(clean.objective.vitals);
+  const peText = JSON.stringify(clean.objective.physicalExam);
+  const labText = JSON.stringify(clean.objective.labs);
+  const imageText = JSON.stringify(clean.objective.images);
+  const currentFields = JSON.stringify([clean.objective.vitals, clean.redFlags, clean.tasks, clean.assessmentPlan]);
+  if (/54\/29|shock/i.test(vitalsText) || !/100\/69/.test(vitalsText)) {
+    throw new Error(`current V/S did not suppress resolved shock: ${vitalsText}`);
+  }
+  if (/CT|hemorrhage|edema|atrophy/i.test(peText) || !/cachexia|weak/i.test(peText)) {
+    throw new Error(`image report leaked into PE or bedside PE lost: ${peText}`);
+  }
+  if (/10\.2|133\.33|125\.85/.test(labText) || !/WBC|12\.7|Neu|88\.9|Hb|9\.4/i.test(labText)) {
+    throw new Error(`lab sanitizer did not keep latest meaningful labs: ${labText}`);
+  }
+  if (/51-year-old|dysphagia since|sent to ED|vital signs revealed shock/i.test(imageText) || !/esophageal wall|lymph|ground-glass/i.test(imageText)) {
+    throw new Error(`HPI/report narrative leaked into image summary: ${imageText}`);
+  }
+  if (/\bshock\b|54\/29/i.test(currentFields)) {
+    throw new Error(`resolved shock leaked into current redFlag/task/AP/V/S: ${currentFields}`);
+  }
+  if (!/B\/C|Abx|Bacteremia/i.test(currentFields)) {
+    throw new Error(`active infection tasks/AP were lost: ${currentFields}`);
+  }
+  if (/active shock|current shock|54\/29|monitor closely|continue current management/i.test(`${clean.oneLiner}\n${clean.admissionSummary}\n${clean.isbarHandoff}`)) {
+    throw new Error(`generated briefs retained stale shock/generic filler: ${clean.isbarHandoff}`);
+  }
+  console.log("PASS AI draft sanitizer separates current status from resolved shock and report text");
+  supplementalPasses += 1;
+} catch (error) {
+  failures.push({ name: "AI draft sanitizer separates current status from resolved shock and report text", error: error instanceof Error ? error.message : String(error) });
+  console.error(`FAIL AI draft sanitizer separates current status from resolved shock and report text: ${failures[failures.length - 1].error}`);
 }
 
 await server.close();

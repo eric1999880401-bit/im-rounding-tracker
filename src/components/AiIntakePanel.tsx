@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { analyzeClinicalText } from "../firebase/aiService";
 import { applyClinicalKnowledgeToAiSoapDraft } from "../clinicalKnowledge";
+import { sanitizeAiSoapDraftForReview } from "../aiDraftSanitizer";
 import type {
   AiClinicalSourceType,
   AiSoapDraft,
@@ -842,7 +843,8 @@ function AiIntakePanel({ patient, selectedDate, onApplyPatient }: AiIntakePanelP
         activeProblems: getActiveProblemItems(patient),
         today: selectedDate,
       });
-      const nextCards = buildCards(knowledgeDraft, effectiveSourceType);
+      const reviewDraft = sanitizeAiSoapDraftForReview(knowledgeDraft, rawText, effectiveSourceType);
+      const nextCards = buildCards(reviewDraft, effectiveSourceType);
       const preselectedCount = nextCards.filter((card) => card.status === "accepted").length;
       setReviewCards(nextCards);
       setStatusMessage(
