@@ -642,6 +642,47 @@ try {
   console.error(`FAIL AI draft sanitizer separates current status from resolved shock and report text: ${failures[failures.length - 1].error}`);
 }
 
+try {
+  const patient = buildConcisePatientClinicalUpdate(
+    {
+      ...emptyPatient(),
+      id: "demo-heme-onc-style",
+      bed: "H5-113",
+      patientCode: "TEST-STYLE",
+      age: 51,
+      sex: "M",
+      primaryDiagnosis: "esophageal SCC",
+      underlyingDiseases: "hypopharyngeal SCC s/p chemotherapy",
+      activeProblems: "esophageal SCC; bacteremia; anemia",
+      hospitalCourseHighlights:
+        "Biopsy confirmed esophageal SCC. CT neck/chest showed mid-lower esophageal wall thickening with metastatic LN concern.",
+      rawLabText: "WBC 12.7, Hb 9.4, Plt 259, Cr 0.46. B/C MRSA then Enterococcus; Teicoplanin 5/13.",
+      newImaging: "CT neck/chest: esophageal wall thickening; necrotic LNs c/f metastasis.",
+      tasks: [],
+      updatedAt: nowIso(),
+    },
+    [],
+    todayKey(),
+  );
+  const apText = patient.assessmentPlanItems
+    .map((item) => [item.problemTitle, item.assessmentSummary, ...item.evidenceOrCourseItems, ...item.planItems].join("\n"))
+    .join("\n");
+  if (/Heme\/onc safety context|verify fever\/ANC or immunosuppression|thrombosis\/bleeding tradeoff/i.test(apText)) {
+    throw new Error(`heme/onc A/P still uses verbose template wording: ${apText}`);
+  }
+  if (/\b(if|and|or|with|for|to)$/im.test(apText) || /\bwith done\b/i.test(apText)) {
+    throw new Error(`A/P contains clipped sentence tail: ${apText}`);
+  }
+  if (!/Cancer\/infx risk|f\/u pathology\/staging|VTE\/bleed/i.test(apText)) {
+    throw new Error(`heme/onc A/P lost concise clinical content: ${apText}`);
+  }
+  console.log("PASS Heme/onc A/P is concise and has no clipped tails");
+  supplementalPasses += 1;
+} catch (error) {
+  failures.push({ name: "Heme/onc A/P is concise and has no clipped tails", error: error instanceof Error ? error.message : String(error) });
+  console.error(`FAIL Heme/onc A/P is concise and has no clipped tails: ${failures[failures.length - 1].error}`);
+}
+
 await server.close();
 
 if (failures.length > 0) {

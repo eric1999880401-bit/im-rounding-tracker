@@ -5,16 +5,27 @@ import { nowIso, textToItems } from "./utils";
 function cleanLine(value: string, maxChars = 220) {
   const clean = value
     .replace(/\[\[(?:red|yellow|green):([^\]]+)\]\]/gi, "$1")
+    .replace(/\bwith done\b/gi, "")
+    .replace(/\bmonitor closely\b/gi, "")
+    .replace(/\bcontinue current management\b/gi, "")
     .replace(/\s+/g, " ")
     .trim();
-  if (clean.length <= maxChars) return clean;
+  if (clean.length <= maxChars) return cleanTail(clean);
   const words = clean.split(" ");
   const kept: string[] = [];
   words.forEach((word) => {
     const next = [...kept, word].join(" ");
     if (next.length <= maxChars) kept.push(word);
   });
-  return kept.join(" ") || clean.slice(0, maxChars).trim();
+  return cleanTail(kept.join(" ") || clean.slice(0, maxChars).trim());
+}
+
+function cleanTail(value: string) {
+  let clean = value.replace(/\s+[+,;:/-]\s*$/g, "").trim();
+  for (let index = 0; index < 3; index += 1) {
+    clean = clean.replace(/\s+\b(?:if|and|or|with|without|w\/|for|to|from|of|the|a|an|when|as|in|on|by)\b\.?$/i, "").trim();
+  }
+  return clean;
 }
 
 function extractToken(text: string, pattern: RegExp) {
@@ -51,9 +62,11 @@ function isNfLeukopeniaTitle(value: string) {
 
 function compactEvidenceLines(lines: string[], problemTitle: string) {
   const lowerTitle = problemTitle.toLowerCase();
-  const cleaned = lines.map((line) => cleanLine(line, 100)).filter(Boolean);
+  const cleaned = lines.map((line) => cleanLine(line, 110)).filter(Boolean);
   const filtered = cleaned.filter((line) => {
     const lower = line.toLowerCase();
+    if (/^(verify|confirm|clarify|review|f\/u|follow|call|contact|trend|monitor|order|arrange)\b/i.test(line)) return false;
+    if (/\b(?:if|and|or|with|for|to)$/i.test(line)) return false;
     if (lowerTitle.includes("ramsay") && /(neutropenic|nf\/|leukopen|wbc|anc|afebrile|temp|\bbp\b|\brr\b|low-normal|normal)/i.test(lower)) return false;
     if (isNfLeukopeniaTitle(lowerTitle) && /^(neutropenic fever|nf\b|nf\/leukopenia)/i.test(lower)) return false;
     return true;
@@ -68,6 +81,9 @@ function compactPlanLines(lines: string[], problemTitle: string) {
   }
   if (lowerTitle.includes("ramsay")) {
     return ["confirm antiviral/Abx duration", "ENT/ID f/u", "eye/hearing care PRN"];
+  }
+  if (lowerTitle.includes("heme/onc") || lowerTitle.includes("cancer") || lowerTitle.includes("onc")) {
+    return ["f/u pathology/staging", "review VTE/bleed risk", "Onc/ID if fever/neutro"];
   }
   return dedupeByKey(lines.map(compactTaskText).filter(Boolean), (line) => line).slice(0, 3);
 }
@@ -148,6 +164,8 @@ function ruleApToAssessmentPlanItem(item: GeneratedClinicalPlan["problemBasedAP"
           ? "O2/aspiration; CXR/CT, wean/escalation threshold."
         : /bleed|anemia/i.test(lowerTitle)
           ? `${hb ? `Hb ${hb}; ` : ""}trend Hb/Plt/V/S; bleeding/anticoag plan.`
+        : /heme\/onc|onc safety|cancer|malign/i.test(lowerTitle)
+          ? "Cancer/infx risk; staging/path pending; review VTE/bleed."
         : cleanLine(item.assessmentSummary, 120);
   return {
     id: `rule-ap-${index}-${item.problemTitle.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}`,
@@ -227,6 +245,16 @@ function finalSanitizeApItem(item: AssessmentPlanItem, index: number): Assessmen
       ...item,
       problemTitle: title,
       assessmentSummary: "Comorbidity context for infx risk/meds.",
+      evidenceOrCourseItems: compactEvidenceLines(item.evidenceOrCourseItems, title),
+      planItems: compactPlanLines(item.planItems, title),
+      order: index,
+    };
+  }
+  if (lowerTitle.includes("heme/onc") || lowerTitle.includes("cancer") || lowerTitle.includes("onc")) {
+    return {
+      ...item,
+      problemTitle: title.replace(/^Heme\/Onc safety$/i, "Heme/Onc"),
+      assessmentSummary: "Cancer/infx risk; staging/path pending; review VTE/bleed.",
       evidenceOrCourseItems: compactEvidenceLines(item.evidenceOrCourseItems, title),
       planItems: compactPlanLines(item.planItems, title),
       order: index,

@@ -883,7 +883,7 @@ function applyHemeOncRules(plan: GeneratedClinicalPlan, text: string) {
       ? "trend TLS labs: K/Phos/Ca/uric acid/Cr; verify hydration/rasburicase-allopurinol and heme plan"
       : thrombocytopeniaSignal
         ? "trend Plt/Hb; review bleeding, procedure and anticoag/antiplatelet plan"
-        : "verify ANC/WBC recovery, fever curve, cultures/Abx need, isolation and ID/primary-team contact if immunosuppressed",
+        : "f/u CBC diff/ANC, fever curve, Cx/Abx, isolation need",
     tlsSignal || hasCancerWorkup ? "consult" : "lab",
     tlsSignal
       ? "Oncology handoff must keep TLS metabolic/renal risk visible."
@@ -894,7 +894,7 @@ function applyHemeOncRules(plan: GeneratedClinicalPlan, text: string) {
     tlsSignal || (hasNeutropenicFeverContext && !currentlyAfebrile(text)) ? "urgent" : "normal",
   );
   if (hasCancerWorkup) {
-    appendTask(plan, "f/u pathology/staging/biopsy and thrombosis/bleeding plan if cancer workup active", "other", "Cancer workups often hinge on pending pathology/staging and anticoagulation tradeoffs.", refs, "normal");
+    appendTask(plan, "f/u pathology/staging; review VTE/bleed risk", "other", "Cancer workups often hinge on pathology/staging and anticoagulation tradeoffs.", refs, "normal");
   }
   appendAp(
     plan,
@@ -904,7 +904,7 @@ function applyHemeOncRules(plan: GeneratedClinicalPlan, text: string) {
       : thrombocytopeniaSignal
         ? `Thrombocytopenia${plateletMin ? `, Plt ${plateletMin}` : ""}; verify bleeding/procedure/anticoag tradeoff and platelet trend.`
         : hasCancerWorkup
-      ? "Heme/onc safety context; verify fever/ANC or immunosuppression risk, pathology/staging status, and thrombosis/bleeding tradeoff."
+      ? "Cancer/infx risk; staging/path pending; review ANC/fever and VTE/bleed."
       : `Immunosuppressed or leukopenic host${wbcText ? `, WBC ${wbcText}` : ""}${anc ? `, ANC ${anc}` : ""}; verify fever status, ANC/WBC recovery, infection source and Abx/isolation threshold.`,
     [...plan.facts.immunocompromisedSignals, ...plan.facts.pendingItems],
     tlsSignal
@@ -912,8 +912,8 @@ function applyHemeOncRules(plan: GeneratedClinicalPlan, text: string) {
       : thrombocytopeniaSignal
         ? ["trend Plt/Hb", "check bleeding/procedure plan", "review anticoag/antiplatelet hold-resume", "clarify transfusion threshold if needed"]
         : hasCancerWorkup
-      ? ["verify ANC/fever and isolation status", "f/u cultures/Abx/onc-ID plan if febrile", "f/u pathology/staging", "review VTE/bleeding tradeoff"]
-      : ["verify ANC/WBC recovery and fever curve", "clarify infection source and culture need", "review Abx/isolation threshold", "contact ID/primary team if unstable or febrile"],
+      ? ["f/u pathology/staging", "review ANC/fever if immunosupp", "review VTE/bleed risk"]
+      : ["f/u ANC/WBC + fever curve", "clarify infection source/Cx", "review Abx/isolation threshold"],
     refs,
   );
 }
