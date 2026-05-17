@@ -1,4 +1,5 @@
 import { applyClinicalKnowledgeToText, formatRuleBasedSbar, formatRuleBasedWeeklySummary } from "./clinicalKnowledge";
+import { cleanAssessmentPlanItems, specificAntibioticPlan } from "./clinicalFieldRouter";
 import type { AssessmentPlanItem, DailyNote, GeneratedClinicalPlan, Patient, PatientTask, TaskCategory, TaskPriority } from "./types";
 import { nowIso, textToItems } from "./utils";
 
@@ -44,6 +45,8 @@ function compactRiskLabel(value: string) {
 
 function compactTaskText(value: string) {
   const clean = cleanLine(value, 170);
+  const antibioticPlan = specificAntibioticPlan(clean);
+  if (antibioticPlan) return antibioticPlan;
   if (/anc\/wbc|wbc recovery|fever curve|cultures\/abx|isolation/i.test(clean)) {
     return "f/u CBC diff/ANC, fever, Cx/Abx, isolation";
   }
@@ -76,14 +79,21 @@ function compactEvidenceLines(lines: string[], problemTitle: string) {
 
 function compactPlanLines(lines: string[], problemTitle: string) {
   const lowerTitle = problemTitle.toLowerCase();
+  const joined = lines.join("\n");
+  const antibioticPlan = specificAntibioticPlan(joined);
   if (lowerTitle.includes("neutropenic") || lowerTitle.includes("leukopen")) {
-    return ["f/u CBC diff/ANC", "Cx/Abx + isolation", "call if fever/unstable VS"];
+    return ["f/u CBC diff/ANC", antibioticPlan || "Cx/Abx + isolation", "call if fever/unstable VS"];
+  }
+  if (/infection|bacteremia|sepsis/.test(lowerTitle)) {
+    return dedupeByKey([antibioticPlan, ...lines.map(compactTaskText)].filter(Boolean), (line) => line).slice(0, 3);
   }
   if (lowerTitle.includes("ramsay")) {
     return ["confirm antiviral/Abx duration", "ENT/ID f/u", "eye/hearing care PRN"];
   }
   if (lowerTitle.includes("heme/onc") || lowerTitle.includes("cancer") || lowerTitle.includes("onc")) {
-    return ["f/u pathology/staging", "review VTE/bleed risk", "Onc/ID if fever/neutro"];
+    return dedupeByKey(lines.map(compactTaskText).filter(Boolean), (line) => line)
+      .filter((line) => !/review VTE\/bleed risk/i.test(line))
+      .slice(0, 3);
   }
   return dedupeByKey(lines.map(compactTaskText).filter(Boolean), (line) => line).slice(0, 3);
 }
@@ -140,6 +150,7 @@ function ruleApToAssessmentPlanItem(item: GeneratedClinicalPlan["problemBasedAP"
     .replace(/^Bil leg numbness\s*\/\s*weakness$/i, "B/L leg numb/weak");
   const lowerTitle = title.toLowerCase();
   const summaryText = [item.assessmentSummary, ...item.evidenceOrCourseItems].join(" ");
+  const antibioticPlan = specificAntibioticPlan([summaryText, ...item.planItems].join("\n"));
   const wbc = extractToken(summaryText, /\bWBC\s*([0-9.]+\s*k?)/i);
   const anc = extractToken(summaryText, /\bANC\s*([0-9]+)/i);
   const cr = extractToken(summaryText, /\bCr\s*(?:up to\s*)?([0-9.]+)/i);
@@ -153,7 +164,7 @@ function ruleApToAssessmentPlanItem(item: GeneratedClinicalPlan["problemBasedAP"
       : lowerTitle.includes("b/l leg")
         ? "NCV: sensorimotor polyneuropathy; ABI pending."
         : /infection|sepsis/i.test(lowerTitle)
-          ? "source/Cx/Abx; trend fever/WBC/lactate."
+          ? antibioticPlan || "source/Cx/Abx; trend fever/WBC/lactate."
         : /cardio|hf|rhythm/i.test(lowerTitle)
           ? /gdmt/i.test(summaryText)
             ? "volume/rhythm; Cr/K + HFrEF GDMT readiness."
@@ -310,9 +321,9 @@ export function buildConcisePatientClinicalUpdate(patient: Patient, notes: Daily
   const existingItems = patient.assessmentPlanItems
     .map(cleanExistingApItem)
     .filter((item) => item.problemTitle && !isDuplicateOfRule(item, ruleItems));
-  const nextAssessmentPlanItems = dedupeByKey([...ruleItems, ...existingItems], (item) => item.problemTitle)
+  const nextAssessmentPlanItems = cleanAssessmentPlanItems(dedupeByKey([...ruleItems, ...existingItems], (item) => item.problemTitle)
     .slice(0, 6)
-    .map(finalSanitizeApItem);
+    .map(finalSanitizeApItem), contextText);
   const redFlagLines = conciseRedFlagLines(plan);
   const ruleTasks = plan.todayTasks
     .sort((left, right) => ruleTaskPriorityScore(right.text) - ruleTaskPriorityScore(left.text))

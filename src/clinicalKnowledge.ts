@@ -10,6 +10,7 @@ import type {
   TaskCategory,
   TaskPriority,
 } from "./types";
+import { specificAntibioticPlan } from "./clinicalFieldRouter";
 
 type KnowledgeScope =
   | "neuro-stroke"
@@ -482,7 +483,7 @@ export function buildClinicalFactBundle(sourceText: string, context?: RuleContex
   ]).slice(0, 14);
   facts.objectiveFacts = dedupe(linesMatching(lines, /\b(bp|hr|spo2|o2|fio2|rr|bt|temp|fever|wbc|anc|hb|hgb|plt|cr|creatinine|k\s*[0-9]|na|lactate|troponin|bnp|glucose|ketone|ph|hco3|bicarb|anion gap|ag\b|uric acid|phos|phosphate|ldh|d-dimer|ddimer|abg|vbg|pco2|co2|cxr|ctpa|ct|mri|echo|ecg)\b/i, 24));
   facts.medications = dedupe(linesMatching(lines, /\b(insulin|heparin|doac|warfarin|apixaban|rivaroxaban|enoxaparin|aspirin|clopidogrel|statin|diuretic|lasix|furosemide|acei|arb|arni|sacubitril|valsartan|beta[- ]?blocker|\bbb\b|bisoprolol|carvedilol|metoprolol|sglt2|dapagliflozin|empagliflozin|mra|spironolactone|eplerenone|steroid|methylpred|prednisolone|vasopressor|norepi|ppi|pantoprazole|rasburicase|allopurinol)\b/i, 16));
-  facts.antibiotics = dedupe(linesMatching(lines, /\b(abx|antibiotic|cef|pip\/tazo|tazocin|zosyn|vanco|vancomycin|mero|imipenem|ertapenem|levo|azithro|ampicillin|sulbactam|metronidazole)\b/i, 16));
+  facts.antibiotics = dedupe(linesMatching(lines, /\b(abx|antibiotic|cef|pip\/tazo|tazocin|zosyn|vanco|vancomycin|teicoplanin|mero|meropenem|imipenem|ertapenem|levo|azithro|ampicillin|sulbactam|metronidazole|linezolid|daptomycin)\b/i, 16));
   facts.procedures = dedupe(linesMatching(lines, /\b(procedure|operation|op|biopsy|scope|egd|colonoscopy|cath|pci|intubat|extubat|drain|thoracentesis|paracentesis|bronchoscopy|ctpa)\b/i, 10));
   facts.consults = dedupe(linesMatching(lines, /\b(consult|neuro|cardio|renal|nephro|pulm|gi|hema|onco|onc|id|infectious|surgery|rehab)\b/i, 10));
   facts.hospitalCourse = dedupe(linesMatching(lines, /\b(hospital course|course|s\/p|started|stopped|treated|improved|worse|complicated|transferred|icu|ward)\b/i, 12));
@@ -587,6 +588,7 @@ function applyInfectionRules(plan: GeneratedClinicalPlan, text: string) {
   const cultureSignal = /\b(?:b\/c|bcx|blood culture|sputum culture|urine culture|culture)\b/i.test(text);
   const bacteremiaSignal = /\b(bacteremia|blood culture.*positive|bcx.*positive|gram[- ](?:positive|negative)|gpc|gnb)\b/i.test(text);
   const sourceControlNeed = /\b(abscess|empyema|cholangitis|obstruct|obstruction|drain|source control|ercp|debridement)\b/i.test(text);
+  const antibioticPlan = specificAntibioticPlan(text);
   const resolvedShockContext = hasResolvedHemodynamicShock(text);
   const currentHemodynamicSignal =
     !resolvedShockContext &&
@@ -603,6 +605,8 @@ function applyInfectionRules(plan: GeneratedClinicalPlan, text: string) {
     plan,
     hasRamsayEarInfection
       ? "confirm antiviral/antibiotic duration, fever trend, ENT/ID follow-up and culture results if obtained"
+      : antibioticPlan
+        ? antibioticPlan
       : sourceControlNeed
         ? "f/u cultures/Abx response and source control/drainage status"
         : cultureSignal
@@ -621,17 +625,18 @@ function applyInfectionRules(plan: GeneratedClinicalPlan, text: string) {
       : sourceControlNeed
         ? "Infection with source-control issue; track Cx, Abx response, fever/WBC, hemodynamics and drainage/procedure status."
         : bacteremiaSignal
-          ? "Bacteremia/infx; f/u Cx clearance/susceptibility, source, Abx duration/de-escalation and fever/WBC."
-          : "Infection concern; verify source, Cx status, Abx coverage/de-escalation, fever/WBC and hemodynamics if unstable.",
+          ? `Bacteremia/infx; ${antibioticPlan || "f/u Cx clearance/susceptibility, source, Abx duration/de-escalation"} and fever/WBC.`
+          : `Infection concern; ${antibioticPlan || "verify source, Cx status, Abx coverage/de-escalation"}, fever/WBC and hemodynamics if unstable.`,
     [...plan.facts.objectiveFacts, ...plan.facts.antibiotics, ...plan.facts.consults],
     hasRamsayEarInfection
       ? ["confirm antiviral/Abx duration", "f/u fever curve/culture if obtained", "clarify ENT/ID follow-up", "eye care/hearing follow-up if facial palsy or hearing deficit"]
       : [
+          antibioticPlan || "",
           "confirm source",
           cultureSignal || bacteremiaSignal ? "f/u cultures/susceptibility" : "f/u Cx only if obtained/indicated",
-          "review Abx/de-escalation",
+          antibioticPlan ? "" : "review Abx/de-escalation",
           sourceControlNeed ? "verify source control/procedure response" : "trend fever/WBC/lactate if relevant",
-        ],
+        ].filter(Boolean),
     refs,
   );
 }
@@ -874,6 +879,7 @@ function applyHemeOncRules(plan: GeneratedClinicalPlan, text: string) {
   const uricAcid = maxNumberAfter(/\buric acid\s*[:=]?\s*(\d+(?:\.\d+)?)/gi, text);
   const phosphorus = maxNumberAfter(/\b(?:phos|phosphate|p)\s*[:=]?\s*(\d+(?:\.\d+)?)/gi, text);
   const feedingAccessSignal = /\b(j-?tube|jejunostomy|feeding tube|tube feeding|malnutrition|po intolerance|dysphagia)\b/i.test(text);
+  const vteBleedRelevant = /\b(vte|pe\b|dvt|anticoag|heparin|doac|warfarin|apixaban|rivaroxaban|bleed|plt|platelet|procedure|biopsy|egd|surgery)\b/i.test(text);
   const tlsSignal =
     /\b(tls|tumor lysis|rasburicase|allopurinol)\b/i.test(text) ||
     (/\b(lymphoma|leukemia|chemo|chemotherapy|bulky tumor)\b/i.test(text) &&
@@ -925,7 +931,14 @@ function applyHemeOncRules(plan: GeneratedClinicalPlan, text: string) {
     tlsSignal || (hasNeutropenicFeverContext && !currentlyAfebrile(text)) ? "urgent" : "normal",
   );
   if (hasCancerWorkup) {
-    appendTask(plan, "f/u pathology/staging; review VTE/bleed risk", "other", "Cancer workups often hinge on pathology/staging and anticoagulation tradeoffs.", refs, "normal");
+    appendTask(
+      plan,
+      vteBleedRelevant ? "f/u pathology/staging; review VTE/bleed risk if procedure/anticoag issue" : "f/u pathology/staging and Onc plan",
+      "other",
+      "Cancer workups should preserve staging, nutrition route and concrete Onc follow-up.",
+      refs,
+      "normal",
+    );
   }
   appendAp(
     plan,
@@ -942,8 +955,12 @@ function applyHemeOncRules(plan: GeneratedClinicalPlan, text: string) {
       ? ["trend K/Phos/Ca/UA/Cr", "verify hydration/urate-lowering plan", "review renal/I/O status", "contact heme/onc if worsening"]
       : thrombocytopeniaSignal
         ? ["trend Plt/Hb", "check bleeding/procedure plan", "review anticoag/antiplatelet hold-resume", "clarify transfusion threshold if needed"]
-        : hasCancerWorkup
-      ? [feedingAccessSignal ? "f/u J-tube/nutrition tolerance" : "f/u pathology/staging", "Onc follow-up", "review VTE/bleed risk"]
+      : hasCancerWorkup
+      ? [
+          feedingAccessSignal ? "f/u J-tube/nutrition tolerance" : "f/u pathology/staging",
+          "Onc follow-up",
+          vteBleedRelevant ? "review VTE/bleed risk if procedure/anticoag issue" : "",
+        ].filter(Boolean)
       : ["f/u ANC/WBC + fever curve", "clarify infection source/Cx", "review Abx/isolation threshold"],
     refs,
   );

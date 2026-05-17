@@ -11,6 +11,7 @@ import { ClinicalText } from "../components/ClinicalText";
 import LabHistoryPanel from "../components/LabHistoryPanel";
 import ActiveProblemEditor from "../components/ActiveProblemEditor";
 import { buildConcisePatientClinicalUpdate } from "../clinicalPatientPolish";
+import { routePatientClinicalFields, type ClinicalFieldCleanupChange } from "../clinicalFieldRouter";
 import {
   IconAiIntake,
   IconAssessment,
@@ -195,6 +196,8 @@ function PatientDetailPage({
   const [activeTab, setActiveTab] = useState<DetailTab>("rounds");
   const [selectedDittoDate, setSelectedDittoDate] = useState("");
   const [quickVsOrder, setQuickVsOrder] = useState("");
+  const [cleanupPreview, setCleanupPreview] = useState<{ patient: Patient; changes: ClinicalFieldCleanupChange[] } | null>(null);
+  const [cleanupStatus, setCleanupStatus] = useState("");
   const draftRef = useRef<Patient | null>(initialDraft);
   const isDirtyRef = useRef(false);
   const isComposingRef = useRef(false);
@@ -215,6 +218,8 @@ function PatientDetailPage({
       setDraftPatient(nextPatient);
       setIsDirty(false);
       isDirtyRef.current = false;
+      setCleanupPreview(null);
+      setCleanupStatus("");
     }
   }, [sourcePatient, selectedDate, selectedNote, patientNotes.length, dailyNotesByPatient]);
 
@@ -247,6 +252,8 @@ function PatientDetailPage({
   }
 
   const currentPatient = draftPatient;
+  const cleanupSignal = routePatientClinicalFields(currentPatient);
+  const visibleCleanupChanges = cleanupPreview?.changes ?? cleanupSignal.changes;
 
   function updateDraft(nextPatient: Patient) {
     draftRef.current = nextPatient;
@@ -504,6 +511,30 @@ function PatientDetailPage({
     updateDraft(buildConcisePatientClinicalUpdate(currentPatient, patientNotes, selectedDate));
   }
 
+  function previewClinicalFieldCleanup() {
+    const preview = routePatientClinicalFields(draftRef.current ?? currentPatient);
+    setCleanupPreview(preview);
+    setCleanupStatus(
+      preview.changes.length > 0
+        ? `${preview.changes.length} field(s) can be cleaned. Review below, then apply to local draft.`
+        : "No obvious AI field pollution found.",
+    );
+  }
+
+  function applyClinicalFieldCleanup() {
+    if (!cleanupPreview || cleanupPreview.changes.length === 0) return;
+    updateDraft({ ...cleanupPreview.patient, updatedAt: nowIso() });
+    setCleanupStatus("Cleaned version applied to local draft. Use Save to write it to Firestore.");
+    setActiveTab("assessmentPlan");
+  }
+
+  function shortCleanupText(value: string) {
+    const text = value.trim();
+    if (!text) return "(empty)";
+    const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    return lines.slice(0, 4).join("\n") + (lines.length > 4 ? "\n..." : "");
+  }
+
   function renderSoapHistory() {
     return (
       <section className="panel soap-history">
@@ -682,6 +713,48 @@ function PatientDetailPage({
           <p className="muted">Today note is empty. Showing latest saved data.</p>
         )}
       </section>
+
+      {(visibleCleanupChanges.length > 0 || cleanupStatus) && (
+        <section className="panel ai-cleanup-panel">
+          <div className="section-heading">
+            <div>
+              <h3>Clean AI Draft</h3>
+              <p className="muted">Preview-only cleanup for V/S-in-S, report-in-PE, rule labels, and generic A/P.</p>
+            </div>
+            <div className="form-actions">
+              <button type="button" className="secondary" onClick={previewClinicalFieldCleanup}>
+                Preview cleanup
+              </button>
+              <button type="button" disabled={!cleanupPreview || cleanupPreview.changes.length === 0} onClick={applyClinicalFieldCleanup}>
+                Apply to local draft
+              </button>
+            </div>
+          </div>
+          {cleanupStatus && <p className="status-message">{cleanupStatus}</p>}
+          {visibleCleanupChanges.length > 0 && (
+            <div className="cleanup-change-grid">
+              {visibleCleanupChanges.map((change) => (
+                <article className="cleanup-change-card" key={`${change.field}-${change.reason}`}>
+                  <div className="cleanup-change-header">
+                    <strong>{change.label}</strong>
+                    <span>{change.reason}</span>
+                  </div>
+                  <div className="cleanup-before-after">
+                    <div>
+                      <span>Current</span>
+                      <pre>{shortCleanupText(change.before)}</pre>
+                    </div>
+                    <div>
+                      <span>Cleaned</span>
+                      <pre>{shortCleanupText(change.after)}</pre>
+                    </div>
+                  </div>
+                </article>
+              ))}
+            </div>
+          )}
+        </section>
+      )}
 
       <section className="panel detail-tabs-shell">
         <div className="detail-tabs" role="tablist" aria-label="Patient detail sections">

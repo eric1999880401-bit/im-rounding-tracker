@@ -19,6 +19,7 @@ import {
 import { analyzePatientBatchText } from "../firebase/aiService";
 import { applyClinicalKnowledgeToPatientImportDraft } from "../clinicalKnowledge";
 import { buildConcisePatientClinicalUpdate } from "../clinicalPatientPolish";
+import { routePatientImportDraft } from "../clinicalFieldRouter";
 import PatientForm from "../components/PatientForm";
 import { ClinicalText } from "../components/ClinicalText";
 import { BoardSignalPanel } from "../components/BoardSignalPanel";
@@ -123,7 +124,8 @@ function mergeTasks(existingTasks: Patient["tasks"], draftTasks: PatientImportDr
   return [...existingTasks, ...importedTasks];
 }
 
-function importDraftToPatient(draft: PatientImportDraft, existingPatient?: Patient, importMode: BulkImportMode = "newAdmission"): Patient {
+function importDraftToPatient(sourceDraft: PatientImportDraft, existingPatient?: Patient, importMode: BulkImportMode = "newAdmission"): Patient {
+  const draft = routePatientImportDraft(sourceDraft);
   const now = nowIso();
   const base = existingPatient ?? emptyPatient();
   const isExistingInpatientImport = importMode === "existingInpatient";
@@ -581,7 +583,8 @@ function PatientBoardPage({
     const prepareDrafts = (drafts: PatientImportDraft[]) =>
       drafts
         .map((draft) => applyTargetPatientToDraft(draft, targetPatient))
-        .map((draft) => applyClinicalKnowledgeToPatientImportDraft(draft, { targetUpdate: targetUpdateOnly }));
+        .map((draft) => applyClinicalKnowledgeToPatientImportDraft(draft, { targetUpdate: targetUpdateOnly }))
+        .map(routePatientImportDraft);
 
     try {
       const result = isDemoMode
@@ -1040,24 +1043,38 @@ function PatientBoardPage({
                     />
                   </label>
                   <label>
-                    Today / V/S / PE
+                    Today update
                     <textarea
-                      value={uniqueLines(draft.todayUpdates, draft.vitalSigns, draft.physicalExam)}
-                      onChange={(event) => {
-                        const [todayUpdates = "", vitalSigns = "", ...rest] = event.target.value.split(/\r?\n/);
-                        updateBulkDraft(draft.id, { todayUpdates, vitalSigns, physicalExam: rest.join("\n") });
-                      }}
+                      value={draft.todayUpdates}
+                      onChange={(event) => updateBulkDraft(draft.id, { todayUpdates: event.target.value })}
                     />
                   </label>
                   <label>
-                    Labs / images
+                    V/S
                     <textarea
-                      value={uniqueLines(draft.labText, draft.imageText)}
-                      onChange={(event) => {
-                        const value = event.target.value;
-                        const [labPart = "", imagePart = ""] = value.split(/\n\s*(?:image|img|imaging)\s*:\s*/i);
-                        updateBulkDraft(draft.id, { labText: labPart, imageText: imagePart });
-                      }}
+                      value={draft.vitalSigns}
+                      onChange={(event) => updateBulkDraft(draft.id, { vitalSigns: event.target.value })}
+                    />
+                  </label>
+                  <label>
+                    PE
+                    <textarea
+                      value={draft.physicalExam}
+                      onChange={(event) => updateBulkDraft(draft.id, { physicalExam: event.target.value })}
+                    />
+                  </label>
+                  <label>
+                    Labs
+                    <textarea
+                      value={draft.labText}
+                      onChange={(event) => updateBulkDraft(draft.id, { labText: event.target.value })}
+                    />
+                  </label>
+                  <label>
+                    Images
+                    <textarea
+                      value={draft.imageText}
+                      onChange={(event) => updateBulkDraft(draft.id, { imageText: event.target.value })}
                     />
                   </label>
                   <label>
@@ -1113,6 +1130,10 @@ function PatientBoardPage({
                     />
                     <span className="muted">One task per line. Optional metadata: [urgent, lab, YYYY-MM-DD].</span>
                   </label>
+                  <details className="bulk-import-source span-2">
+                    <summary>Original extracted text</summary>
+                    <pre>{draft.sourceExcerpt || "No source excerpt available."}</pre>
+                  </details>
                 </div>
               </article>
             ))}

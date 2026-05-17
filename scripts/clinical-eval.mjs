@@ -22,6 +22,7 @@ const { emptyPatient, getLabFocusSummary, parseLabText, textToItems, todayKey, n
 const { getRoundingDigest } = await server.ssrLoadModule("/src/roundingDigest.ts");
 const { buildConcisePatientClinicalUpdate } = await server.ssrLoadModule("/src/clinicalPatientPolish.ts");
 const { sanitizeAiSoapDraftForReview } = await server.ssrLoadModule("/src/aiDraftSanitizer.ts");
+const { routePatientImportDraft, routePatientClinicalFields } = await server.ssrLoadModule("/src/clinicalFieldRouter.ts");
 
 function haystack(plan) {
   return [
@@ -641,7 +642,7 @@ try {
     oneLiner: "Esophageal SCC w/ shock syncope\nMRSA + Enterococcus bacteremia\nmalnutrition/J-tube\nanemia\nprior neuro change r/o ICH",
     chiefComplaint: "syncope, bacteremia",
     todayUpdates: "weak, no fever; DNR/all refused documented",
-    vitalSigns: "5/15 T 37.0, BP 100/69, P 99, RR 16, SpO2 100%",
+    vitalSigns: "5/15: afebrile, weak, no fever. BP 100/69, P 99, RR 16, SpO2 100%",
     physicalExam: "Cachectic, weak; alert/clear; BS clear; abd soft, NT, J-tube feeding tolerated; no edema",
     labText: "5/15 WBC 12.7, Neu 88.9, Hb 9.4, Hct 27.7, Plt 259, Cr 0.46, eGFR 125.85",
     imageText: "Brain CT no ICH/edema/major infarct. CT neck/chest persistent esophageal wall thickening, metastatic LAD, tiny lung nodules.",
@@ -668,7 +669,7 @@ try {
     uncertainty: [],
     sourceExcerpt: rawCancerTransfer,
   };
-  const reviewed = applyClinicalKnowledgeToPatientImportDraft(draft, { targetUpdate: true });
+  const reviewed = routePatientImportDraft(applyClinicalKnowledgeToPatientImportDraft(draft, { targetUpdate: true }));
   const noisyText = `${reviewed.activeProblems}\n${reviewed.importantRedFlags}\n${reviewed.tasks.map((task) => task.text).join("\n")}`;
   if (/Stroke \/ neuro deficit|UGIB \/ anemia|Cardio \/ HF \/ rhythm|Hypovolemia\/shock|Heme\/Onc safety|Possible sepsis\/shock|High-risk cardiac|Active bleeding|Febrile neutropenia|transfusion\/T&S|antithrombotic\/statin/i.test(noisyText)) {
     throw new Error(`messy rule labels leaked into reviewed import draft:\n${noisyText}`);
@@ -681,11 +682,79 @@ try {
   if (reviewed.tasks.length > 8) {
     throw new Error(`reviewed import kept too many tasks: ${reviewed.tasks.length}`);
   }
+  if (/BP 100\/69|SpO2|RR 16|T 37\.0/i.test(reviewed.todayUpdates) || !/BP 100\/69|SpO2 100/i.test(reviewed.vitalSigns) || /weak|DNR/i.test(reviewed.vitalSigns)) {
+    throw new Error(`V/S was not routed out of today update:\nS=${reviewed.todayUpdates}\nVS=${reviewed.vitalSigns}`);
+  }
+  if (/Brain CT|CT neck|hemorrhage|LAD|nodule/i.test(reviewed.physicalExam) || !/Cachectic|J-tube/i.test(reviewed.physicalExam)) {
+    throw new Error(`image text leaked into PE or bedside PE was lost:\nPE=${reviewed.physicalExam}`);
+  }
+  if (!/esophageal wall|metastatic LAD|nodule/i.test(reviewed.imageText) || /no pleural effusion|chemoport/i.test(reviewed.imageText)) {
+    throw new Error(`image summary was not high-yield:\n${reviewed.imageText}`);
+  }
+  if (!/Teicoplanin/i.test(reviewed.hospitalCourseHighlights)) {
+    throw new Error(`specific antibiotic was lost from course:\n${reviewed.hospitalCourseHighlights}`);
+  }
   console.log("PASS Cancer transfer import suppresses stale shock/no-ICH false rule clutter");
   supplementalPasses += 1;
 } catch (error) {
   failures.push({ name: "Cancer transfer import suppresses stale shock/no-ICH false rule clutter", error: error instanceof Error ? error.message : String(error) });
   console.error(`FAIL Cancer transfer import suppresses stale shock/no-ICH false rule clutter: ${failures[failures.length - 1].error}`);
+}
+
+try {
+  const dirtyPatient = {
+    ...emptyPatient(),
+    id: "dirty-ai-fields",
+    bed: "H5-113",
+    patientCode: "DEMO-DIRTY",
+    age: 51,
+    sex: "M",
+    primaryDiagnosis: "esophageal SCC",
+    subjectiveOrChiefConcern: "5/15: afebrile, weak, no fever. BP 100/69, HR 99, SpO2 100%. DNR/refused all. B/C pending from 5/15.",
+    vitalSigns: "",
+    physicalExam:
+      "stable enlarged LN at bilateral paratracheal/right paraesophageal/left gastric chain/liver hilum, metastatic LN possible. Brain CT 5/7: aged brain with atrophy, no hemorrhage/edema.",
+    rawLabText: "Hb 9.4, WBC 12.7",
+    newImaging: "",
+    activeProblems: "Bacteremia / infection Heme/Onc safety Stroke / neuro deficit UGIB / anemia Cardio / HF / rhythm",
+    hospitalCourseHighlights: "B/C peripheral MRSA, Port-A Enterococcus faecalis. Teicoplanin 5/13-. ED shock responded to IV fluids.",
+    assessmentPlanItems: [
+      {
+        id: "dirty-ap-1",
+        problemTitle: "Heme/Onc safety",
+        assessmentSummary: "Cancer/infx risk; staging/path pending; review VTE/bleed.",
+        evidenceOrCourseItems: ["hypovolemic shock improved after IV fluids", "B/C MRSA and Enterococcus"],
+        planItems: ["f/u pathology/staging", "review VTE/bleed risk", "Onc/ID if fever/neutro"],
+        category: "activeProblem",
+        isImportant: true,
+        color: "",
+        order: 0,
+      },
+    ],
+  };
+  const preview = routePatientClinicalFields(dirtyPatient);
+  const cleaned = preview.patient;
+  const changedLabels = preview.changes.map((change) => change.label).join("\n");
+  if (!/Subjective|V\/S|Physical exam|Images|Active problems|A\/P/i.test(changedLabels)) {
+    throw new Error(`cleanup preview did not identify expected dirty fields: ${changedLabels}`);
+  }
+  if (/BP 100\/69|SpO2/i.test(cleaned.subjectiveOrChiefConcern) || !/BP 100\/69|SpO2 100/i.test(cleaned.vitalSigns)) {
+    throw new Error(`cleanup did not move V/S out of S:\nS=${cleaned.subjectiveOrChiefConcern}\nVS=${cleaned.vitalSigns}`);
+  }
+  if (/Brain CT|metastatic LN|hemorrhage|edema/i.test(cleaned.physicalExam) || !/metastatic LN|Brain CT/i.test(cleaned.newImaging)) {
+    throw new Error(`cleanup did not move image/report text out of PE:\nPE=${cleaned.physicalExam}\nIMG=${cleaned.newImaging}`);
+  }
+  const cleanedAp = cleaned.assessmentPlanItems
+    .map((item) => [item.problemTitle, item.assessmentSummary, ...item.planItems].join("\n"))
+    .join("\n");
+  if (!/Teicoplanin/i.test(cleanedAp) || /review VTE\/bleed risk|UGIB|Cardio \/ HF \/ rhythm|Stroke \/ neuro/i.test(`${cleaned.activeProblems}\n${cleanedAp}`)) {
+    throw new Error(`cleanup A/P still noisy or missing Abx:\n${cleaned.activeProblems}\n${cleanedAp}`);
+  }
+  console.log("PASS Detail cleanup preview routes polluted fields without saving");
+  supplementalPasses += 1;
+} catch (error) {
+  failures.push({ name: "Detail cleanup preview routes polluted fields without saving", error: error instanceof Error ? error.message : String(error) });
+  console.error(`FAIL Detail cleanup preview routes polluted fields without saving: ${failures[failures.length - 1].error}`);
 }
 
 try {
@@ -841,10 +910,19 @@ try {
   if (/Heme\/onc safety context|verify fever\/ANC or immunosuppression|thrombosis\/bleeding tradeoff/i.test(apText)) {
     throw new Error(`heme/onc A/P still uses verbose template wording: ${apText}`);
   }
+  if (!/Teicoplanin/i.test(apText)) {
+    throw new Error(`infection A/P lost concrete antibiotic plan: ${apText}`);
+  }
+  if (/review VTE\/bleed risk/i.test(apText)) {
+    throw new Error(`unsupported generic VTE/bleed plan survived: ${apText}`);
+  }
+  if (/UGIB|transfusion|EGD|T&S/i.test(apText)) {
+    throw new Error(`stable anemia created false GI bleed plan: ${apText}`);
+  }
   if (/\b(if|and|or|with|for|to)$/im.test(apText) || /\bwith done\b/i.test(apText)) {
     throw new Error(`A/P contains clipped sentence tail: ${apText}`);
   }
-  if (!/Cancer\/infx risk|f\/u pathology\/staging|VTE\/bleed/i.test(apText)) {
+  if (!/MRSA\/Enterococcus bacteremia|SCC with J-tube|Onc/i.test(apText)) {
     throw new Error(`heme/onc A/P lost concise clinical content: ${apText}`);
   }
   console.log("PASS Heme/onc A/P is concise and has no clipped tails");

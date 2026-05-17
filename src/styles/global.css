@@ -867,6 +867,59 @@ input[type="checkbox"] {
   color: var(--warning-text);
 }
 
+.ai-cleanup-panel {
+  display: grid;
+  gap: 10px;
+}
+
+.cleanup-change-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.cleanup-change-card {
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+}
+
+.cleanup-change-header {
+  display: grid;
+  gap: 2px;
+}
+
+.cleanup-change-header strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.cleanup-change-header span,
+.cleanup-before-after span {
+  color: var(--text-subtle);
+  font-size: 10.5px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.cleanup-before-after {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.cleanup-before-after > div {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  display: grid;
+  gap: 4px;
+  padding: 8px;
+}
+
 .detail-scan-strip {
   display: grid;
   gap: 8px;
@@ -1664,6 +1717,33 @@ tbody tr:last-child td {
 
 .bulk-import-card textarea {
   min-height: 74px;
+}
+
+.bulk-import-source {
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+}
+
+.bulk-import-source summary {
+  color: var(--text-subtle);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.bulk-import-source pre,
+.cleanup-change-card pre {
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 12.5px;
+  line-height: 1.45;
+  margin: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
 }
 
 .morning-cockpit {

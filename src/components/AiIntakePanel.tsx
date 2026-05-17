@@ -2,6 +2,14 @@ import { useMemo, useState } from "react";
 import { analyzeClinicalText } from "../firebase/aiService";
 import { applyClinicalKnowledgeToAiSoapDraft } from "../clinicalKnowledge";
 import { sanitizeAiSoapDraftForReview } from "../aiDraftSanitizer";
+import {
+  cleanAssessmentPlanItems,
+  cleanImageSummary,
+  isBedsidePhysicalExamLine,
+  isImageLine,
+  isLabLine,
+  isVitalLine,
+} from "../clinicalFieldRouter";
 import type {
   AiClinicalSourceType,
   AiSoapDraft,
@@ -987,16 +995,25 @@ function AiIntakePanel({ patient, selectedDate, onApplyPatient }: AiIntakePanelP
 
       if (card.kind === "physicalExam") {
         const exam = value as AiSoapDraft["objective"]["physicalExam"][number];
-        physicalExamLines.push(`${exam.isImportant ? "!" : ""}${[exam.system, exam.finding].filter(hasText).join(": ")}`);
-        physicalExamEntries.push({
-          id: createId("pe"),
-          date: selectedDate,
-          system: String(exam.system ?? ""),
-          finding: String(exam.finding ?? ""),
-          isImportant: Boolean(exam.isImportant),
-          color: "",
-          note: "AI Intake draft",
-        });
+        const examLine = `${exam.isImportant ? "!" : ""}${[exam.system, exam.finding].filter(hasText).join(": ")}`;
+        if (isImageLine(examLine)) {
+          imageSummaryLines.push(examLine);
+        } else if (isVitalLine(examLine)) {
+          vitalLines.push(examLine);
+        } else if (isLabLine(examLine)) {
+          labSummaryLines.push(examLine);
+        } else {
+          physicalExamLines.push(examLine);
+          physicalExamEntries.push({
+            id: createId("pe"),
+            date: selectedDate,
+            system: String(exam.system ?? ""),
+            finding: String(exam.finding ?? ""),
+            isImportant: Boolean(exam.isImportant),
+            color: "",
+            note: "AI Intake draft",
+          });
+        }
       }
 
       if (card.kind === "lab") {
@@ -1106,6 +1123,78 @@ function AiIntakePanel({ patient, selectedDate, onApplyPatient }: AiIntakePanelP
 
     const acceptedAdmissionSummary = admissionSummaries.map(String).map((line) => line.trim()).filter(Boolean).slice(-1)[0] ?? "";
     const acceptedIsbarHandoff = isbarHandoffs.map(String).map((line) => line.trim()).filter(Boolean).slice(-1)[0] ?? "";
+    const routedSubjectiveLines: string[] = [];
+    const routedOvernightLines: string[] = [];
+    const routedVitalLines = [...vitalLines];
+    const routedPhysicalExamLines: string[] = [];
+    const routedLabSummaryLines: string[] = [];
+    const routedImageSummaryLines: string[] = [];
+
+    const routeAcceptedText = (line: string, fallback: "subjective" | "overnight" | "physicalExam" | "lab" | "image") => {
+      const bareLine = line.replace(/^!+/, "").trim();
+      if (!bareLine) return;
+      if (isVitalLine(bareLine)) {
+        routedVitalLines.push(line);
+        return;
+      }
+      if (isImageLine(bareLine)) {
+        routedImageSummaryLines.push(line);
+        return;
+      }
+      if (isLabLine(bareLine)) {
+        routedLabSummaryLines.push(line);
+        return;
+      }
+      if (fallback === "physicalExam" || isBedsidePhysicalExamLine(bareLine)) {
+        routedPhysicalExamLines.push(line);
+        return;
+      }
+      if (fallback === "overnight") {
+        routedOvernightLines.push(line);
+        return;
+      }
+      if (fallback === "lab") {
+        routedLabSummaryLines.push(line);
+        return;
+      }
+      if (fallback === "image") {
+        routedImageSummaryLines.push(line);
+        return;
+      }
+      routedSubjectiveLines.push(line);
+    };
+
+    subjectiveLines.forEach((line) => routeAcceptedText(line, "subjective"));
+    overnightLines.forEach((line) => routeAcceptedText(line, "overnight"));
+    physicalExamLines.forEach((line) => routeAcceptedText(line, "physicalExam"));
+    labSummaryLines.forEach((line) => routeAcceptedText(line, "lab"));
+    imageSummaryLines.forEach((line) => routeAcceptedText(line, "image"));
+
+    const cleanedImageSummaryLines = cleanImageSummary(
+      appendUniqueLines("", routedImageSummaryLines),
+      [
+        patient.primaryDiagnosis,
+        patient.activeProblems,
+        patient.hospitalCourseHighlights,
+        patient.importantRedFlags,
+        appendUniqueLines("", routedSubjectiveLines),
+      ].join("\n"),
+    ).split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    const cleanedAssessmentPlanItems = cleanAssessmentPlanItems(
+      assessmentPlanItems,
+      [
+        patient.primaryDiagnosis,
+        patient.activeProblems,
+        patient.hospitalCourseHighlights,
+        patient.rawLabText,
+        patient.newLabs,
+        patient.newImaging,
+        appendUniqueLines("", routedLabSummaryLines),
+        appendUniqueLines("", cleanedImageSummaryLines),
+        appendUniqueLines("", routedVitalLines),
+        tasks.map((task) => task.text).join("\n"),
+      ].join("\n"),
+    );
 
     const nextPatient: Patient = {
       ...patient,
@@ -1113,21 +1202,21 @@ function AiIntakePanel({ patient, selectedDate, onApplyPatient }: AiIntakePanelP
       admissionBriefFreeText: acceptedAdmissionSummary || patient.admissionBriefFreeText,
       generatedAdmissionSummary: acceptedAdmissionSummary || patient.generatedAdmissionSummary,
       generatedSbarNote: acceptedIsbarHandoff || patient.generatedSbarNote,
-      subjectiveOrChiefConcern: appendUniqueLines(patient.subjectiveOrChiefConcern, subjectiveLines),
-      overnightEvent: appendUniqueLines(patient.overnightEvent, overnightLines),
-      vitalSigns: appendUniqueLines(patient.vitalSigns, vitalLines),
+      subjectiveOrChiefConcern: appendUniqueLines(patient.subjectiveOrChiefConcern, routedSubjectiveLines),
+      overnightEvent: appendUniqueLines(patient.overnightEvent, routedOvernightLines),
+      vitalSigns: appendUniqueLines(patient.vitalSigns, routedVitalLines),
       bloodSugar: appendUniqueLines(patient.bloodSugar, bloodSugarLines),
-      physicalExam: appendUniqueLines(patient.physicalExam, physicalExamLines),
-      newLabs: appendUniqueLines(patient.newLabs, labSummaryLines),
-      rawLabText: appendUniqueLines(patient.rawLabText, labSummaryLines),
-      newImaging: appendUniqueLines(patient.newImaging, imageSummaryLines),
+      physicalExam: appendUniqueLines(patient.physicalExam, routedPhysicalExamLines),
+      newLabs: appendUniqueLines(patient.newLabs, routedLabSummaryLines),
+      rawLabText: appendUniqueLines(patient.rawLabText, routedLabSummaryLines),
+      newImaging: appendUniqueLines(patient.newImaging, cleanedImageSummaryLines),
       importantRedFlags: appendUniqueLines(patient.importantRedFlags, redFlagLines),
       dischargeBarriers: appendUniqueLines(patient.dischargeBarriers, dischargeIssueLines),
       labReports: mergeLabReportsByDateTitle([...safeArray(patient.labReports), ...labReports]),
       parsedLabItems: uniqueParsedLabItems([...safeArray(patient.parsedLabItems), ...parsedLabItems]),
       physicalExamEntries: mergePhysicalExamEntries(safeArray(patient.physicalExamEntries), physicalExamEntries),
       imageStudyEntries: mergeImageStudyEntries(safeArray(patient.imageStudyEntries), imageStudyEntries),
-      assessmentPlanItems: mergeAssessmentPlanItems(safeArray(patient.assessmentPlanItems), assessmentPlanItems),
+      assessmentPlanItems: mergeAssessmentPlanItems(safeArray(patient.assessmentPlanItems), cleanedAssessmentPlanItems),
       tasks: mergeTasks(safeArray(patient.tasks), tasks.filter((task) => task.text.trim())),
       aiThinkingPrompts: mergeThinkingPrompts(safeArray(patient.aiThinkingPrompts), aiThinkingPrompts),
       updatedAt: now,
@@ -1155,14 +1244,14 @@ function AiIntakePanel({ patient, selectedDate, onApplyPatient }: AiIntakePanelP
     };
 
     setTextPatch("importantRedFlags", redFlagLines);
-    setTextPatch("overnightEvents", overnightLines);
-    setTextPatch("subjectiveOrChiefConcern", subjectiveLines);
-    setTextPatch("vitalSigns", vitalLines);
+    setTextPatch("overnightEvents", routedOvernightLines);
+    setTextPatch("subjectiveOrChiefConcern", routedSubjectiveLines);
+    setTextPatch("vitalSigns", routedVitalLines);
     setTextPatch("bloodSugar", bloodSugarLines);
-    setTextPatch("physicalExam", physicalExamLines);
-    setTextPatch("labSummary", labSummaryLines);
-    setTextPatch("rawLabText", labSummaryLines);
-    setTextPatch("imageSummary", imageSummaryLines);
+    setTextPatch("physicalExam", routedPhysicalExamLines);
+    setTextPatch("labSummary", routedLabSummaryLines);
+    setTextPatch("rawLabText", routedLabSummaryLines);
+    setTextPatch("imageSummary", cleanedImageSummaryLines);
     if (labReports.length > 0) {
       acceptedNotePatch.labDate = selectedDate;
       acceptedNotePatch.labReportTitle = "AI Intake";
@@ -1175,8 +1264,8 @@ function AiIntakePanel({ patient, selectedDate, onApplyPatient }: AiIntakePanelP
     if (imageStudyEntries.length > 0) {
       acceptedNotePatch.imageStudyEntries = imageStudyEntries;
     }
-    if (assessmentPlanItems.length > 0) {
-      acceptedNotePatch.assessmentPlanItems = assessmentPlanItems;
+    if (cleanedAssessmentPlanItems.length > 0) {
+      acceptedNotePatch.assessmentPlanItems = cleanedAssessmentPlanItems;
     }
 
     try {
