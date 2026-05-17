@@ -6,12 +6,11 @@ import AdmissionBriefForm from "../components/AdmissionBriefForm";
 import DailyNoteForm from "../components/DailyNoteForm";
 import TaskList from "../components/TaskList";
 import AiIntakePanel from "../components/AiIntakePanel";
-import { AiHighlightsPanel } from "../components/AiHighlightsPanel";
-import { BoardSignalPanel } from "../components/BoardSignalPanel";
 import ClinicalDocumentQuickActions from "../components/ClinicalDocumentQuickActions";
 import { ClinicalText } from "../components/ClinicalText";
 import LabHistoryPanel from "../components/LabHistoryPanel";
 import ActiveProblemEditor from "../components/ActiveProblemEditor";
+import { buildConcisePatientClinicalUpdate } from "../clinicalPatientPolish";
 import {
   IconAiIntake,
   IconAssessment,
@@ -24,6 +23,7 @@ import {
 import { useT } from "../i18n";
 import {
   dailyNoteFromPatient,
+  dischargePrepText,
   emptyDailyNote,
   getLatestNonEmptyDailyNote,
   getPatientDisplaySummary,
@@ -69,6 +69,54 @@ function appendUniqueClinicalText(existing: string, additions: string[]) {
       return true;
     });
   return lines.join("\n");
+}
+
+function simpleDetailRedFlags(value: string) {
+  return value
+    .split(/\r?\n|;/)
+    .map((line) =>
+      line
+        .replace(/^!+/, "")
+        .replace(/\s+-\s*Reason:\s*.*$/i, "")
+        .replace(/:\s*(?:f\/u|follow|trend|verify|confirm|clarify|review|call|repeat|check|order|consult|start|stop|hold|resume|Cx|Abx|CBC|ANC).*/i, "")
+        .replace(/\s+/g, " ")
+        .trim(),
+    )
+    .filter(Boolean)
+    .join("\n");
+}
+
+function mergeNoteWithFallback(note: DailyNote, fallbackPatient: Patient, date: string): DailyNote {
+  const fallbackNote = dailyNoteFromPatient(fallbackPatient, date);
+  const textOrFallback = (value: string, fallback: string) => (value.trim() ? value : fallback);
+  const arrayOrFallback = <T,>(value: T[], fallback: T[]) => (value.length > 0 ? value : fallback);
+
+  return {
+    ...fallbackNote,
+    ...note,
+    importantRedFlags: textOrFallback(note.importantRedFlags, fallbackNote.importantRedFlags),
+    overnightEvents: textOrFallback(note.overnightEvents, fallbackNote.overnightEvents),
+    subjectiveOrChiefConcern: textOrFallback(note.subjectiveOrChiefConcern, fallbackNote.subjectiveOrChiefConcern),
+    vitalSigns: textOrFallback(note.vitalSigns, fallbackNote.vitalSigns),
+    bloodSugar: textOrFallback(note.bloodSugar, fallbackNote.bloodSugar),
+    physicalExam: textOrFallback(note.physicalExam, fallbackNote.physicalExam),
+    labSummary: textOrFallback(note.labSummary, fallbackNote.labSummary),
+    imageSummary: textOrFallback(note.imageSummary, fallbackNote.imageSummary),
+    assessment: textOrFallback(note.assessment, fallbackNote.assessment),
+    plan: textOrFallback(note.plan, fallbackNote.plan),
+    dischargePlan: textOrFallback(note.dischargePlan, fallbackNote.dischargePlan),
+    vsOrder: textOrFallback(note.vsOrder, fallbackNote.vsOrder),
+    rawLabText: textOrFallback(note.rawLabText, fallbackNote.rawLabText),
+    labDate: note.labDate || fallbackNote.labDate,
+    labReportTitle: note.labReportTitle || fallbackNote.labReportTitle,
+    labReports: arrayOrFallback(note.labReports, fallbackNote.labReports),
+    parsedLabItems: arrayOrFallback(note.parsedLabItems, fallbackNote.parsedLabItems),
+    physicalExamEntries: arrayOrFallback(note.physicalExamEntries, fallbackNote.physicalExamEntries),
+    imageStudyEntries: arrayOrFallback(note.imageStudyEntries, fallbackNote.imageStudyEntries),
+    assessmentPlanItems: arrayOrFallback(note.assessmentPlanItems, fallbackNote.assessmentPlanItems),
+    createdAt: note.createdAt || fallbackNote.createdAt,
+    updatedAt: note.updatedAt || fallbackNote.updatedAt,
+  };
 }
 
 function crisisCarryForwardScore(value: string) {
@@ -135,7 +183,12 @@ function PatientDetailPage({
   const selectedNote = patientNotes.find((note) => note.date === selectedDate);
   const displayFallbackPatient = sourcePatient ? patientForDate(sourcePatient, dailyNotesByPatient, selectedDate) : null;
   const displaySummary = sourcePatient ? getPatientDisplaySummary(sourcePatient, dailyNotesByPatient, selectedDate) : null;
-  const selectedDraftNote = selectedNote ?? (displayFallbackPatient ? dailyNoteFromPatient(displayFallbackPatient, selectedDate) : emptyDailyNote(selectedDate));
+  const selectedDraftNote =
+    selectedNote && displayFallbackPatient
+      ? mergeNoteWithFallback(selectedNote, displayFallbackPatient, selectedDate)
+      : displayFallbackPatient
+        ? dailyNoteFromPatient(displayFallbackPatient, selectedDate)
+        : emptyDailyNote(selectedDate);
   const initialDraft = displayFallbackPatient ? patientWithDailyNote(displayFallbackPatient, selectedDraftNote) : null;
   const [draftPatient, setDraftPatient] = useState<Patient | null>(initialDraft);
   const [isDirty, setIsDirty] = useState(false);
@@ -154,7 +207,9 @@ function PatientDetailPage({
 
     if (canAcceptSnapshot) {
       const nextDisplayPatient = patientForDate(sourcePatient, dailyNotesByPatient, selectedDate);
-      const nextNote = selectedNote ?? dailyNoteFromPatient(nextDisplayPatient, selectedDate);
+      const nextNote = selectedNote
+        ? mergeNoteWithFallback(selectedNote, nextDisplayPatient, selectedDate)
+        : dailyNoteFromPatient(nextDisplayPatient, selectedDate);
       const nextPatient = patientWithDailyNote(nextDisplayPatient, nextNote);
       draftRef.current = nextPatient;
       setDraftPatient(nextPatient);
@@ -445,6 +500,10 @@ function PatientDetailPage({
     });
   }
 
+  function refineAssessmentPlanFromClinicalFacts() {
+    updateDraft(buildConcisePatientClinicalUpdate(currentPatient, patientNotes, selectedDate));
+  }
+
   function renderSoapHistory() {
     return (
       <section className="panel soap-history">
@@ -490,74 +549,69 @@ function PatientDetailPage({
       mode: "rounds",
       hideCompletedTasks: true,
     });
-    const critical = digest.urgentLines.map((line) => `!${line}`).join("\n");
+    const redFlags = simpleDetailRedFlags(digest.redFlags);
+    const prepText = dischargePrepText(roundsSummary);
+    const taskDcText = [
+      digest.tasks,
+      digest.discharge ? `DC: ${digest.discharge}` : "",
+      prepText ? `Prep: ${prepText}` : "",
+    ].filter(Boolean).join("\n");
 
     return (
       <section className="panel rounds-mode-panel">
         <div className="section-heading">
-          <h2>Rounds Mode</h2>
+          <h2>SOAP</h2>
           <span className="muted">{selectedDate}</span>
         </div>
 
-        <div className="rounds-focus-grid">
-          <section className="rounds-focus-block rounds-critical-block">
-            <span className="board-label">See first</span>
-            <ClinicalText value={critical} fallback="No urgent signal" maxCharsPerLine={58} importantDefault />
+        {redFlags && (
+          <section className="detail-soap-redflag">
+            <span className="board-label">Red flags</span>
+            <ClinicalText value={redFlags} maxLines={3} maxCharsPerLine={90} importantDefault />
           </section>
-          <section className="rounds-focus-block">
-            <span className="board-label">Tell attending</span>
-            <ClinicalText value={digest.attendingSummary} fallback="No summary yet" maxLines={5} maxCharsPerLine={66} />
-          </section>
-          <section className="rounds-focus-block">
-            <span className="board-label">Do today</span>
-            <ClinicalText value={digest.tasks} fallback="No pending tasks" maxLines={5} maxCharsPerLine={58} />
-          </section>
-        </div>
+        )}
 
-        <section className="rounds-quick-order">
-          <label>
-            Post-round orders / VS note
-            <textarea
-              value={quickVsOrder}
-              onChange={(event) => setQuickVsOrder(event.target.value)}
-              onCompositionStart={handleCompositionStart}
-              onCompositionEnd={handleCompositionEnd}
-              placeholder="BP q4h; repeat CBC tomorrow; hold antiplatelet if Hb drops"
-              rows={2}
-            />
-          </label>
-          <button type="button" disabled={!quickVsOrder.trim()} onClick={() => void appendQuickVsOrder()}>
-            Add to today's SOAP
-          </button>
-        </section>
-
-        <div className="rounds-detail-grid">
-          <section className="rounds-block">
-            <span className="board-label">S / Overnight</span>
-            <ClinicalText value={digest.subjective} fallback="-" maxLines={3} maxCharsPerLine={58} />
+        <div className="detail-soap-grid">
+          <section className="detail-soap-block">
+            <span className="board-label">S</span>
+            <ClinicalText value={digest.subjective} fallback="-" maxLines={4} maxCharsPerLine={90} />
           </section>
 
-          <section className="rounds-block">
-            <span className="board-label">V/S / Sugar / PE</span>
-            <BoardSignalPanel value={digest.objective} fallback="-" kind="objective" maxItems={4} />
+          <section className="detail-soap-block">
+            <span className="board-label">O</span>
+            <ClinicalText value={[digest.objective, digest.lab, digest.image].filter(Boolean).join("\n")} fallback="-" maxLines={6} maxCharsPerLine={90} />
           </section>
 
-          <section className="rounds-block">
-            <span className="board-label">Lab / Image</span>
-            <BoardSignalPanel value={digest.lab} fallback="No lab signal" kind="lab" maxItems={4} />
-            <BoardSignalPanel value={digest.image} fallback="-" kind="image" maxItems={2} />
-          </section>
-
-          <section className="rounds-block rounds-ap-block">
+          <section className="detail-soap-block detail-soap-ap">
             <span className="board-label">A/P</span>
-            <ClinicalText value={digest.assessmentPlan} fallback="-" maxLines={4} maxCharsPerLine={66} />
+            <ClinicalText value={digest.assessmentPlan} fallback="-" maxLines={6} maxCharsPerLine={92} />
           </section>
 
-          <section className="rounds-block">
-            <span className="board-label">DC</span>
-            <ClinicalText value={digest.discharge} fallback="TBD" maxLines={4} maxCharsPerLine={64} />
+          <section className="detail-soap-block detail-soap-task">
+            <span className="board-label">Tasks / DC</span>
+            <ClinicalText value={taskDcText} fallback="No pending tasks" maxLines={6} maxCharsPerLine={88} />
           </section>
         </div>
+
+        <details className="rounds-quick-order-collapse">
+          <summary>Add post-round order / task</summary>
+          <section className="rounds-quick-order">
+            <label>
+              Post-round orders / VS note
+              <textarea
+                value={quickVsOrder}
+                onChange={(event) => setQuickVsOrder(event.target.value)}
+                onCompositionStart={handleCompositionStart}
+                onCompositionEnd={handleCompositionEnd}
+                placeholder="BP q4h; repeat CBC tomorrow; hold antiplatelet if Hb drops"
+                rows={2}
+              />
+            </label>
+            <button type="button" disabled={!quickVsOrder.trim()} onClick={() => void appendQuickVsOrder()}>
+              Add to today's SOAP
+            </button>
+          </section>
+        </details>
       </section>
     );
   }
@@ -566,6 +620,7 @@ function PatientDetailPage({
     mode: "rounds",
     hideCompletedTasks: true,
   });
+  const headerRedFlags = simpleDetailRedFlags(headerDigest.redFlags);
 
   return (
     <div className="page">
@@ -574,9 +629,12 @@ function PatientDetailPage({
           <h2>
             {currentPatient.bed} - {currentPatient.patientCode}
           </h2>
-          {isDirty && <p className="muted">Unsaved edits are local until you click Save.</p>}
+          <p className="muted">{selectedDate} / {selectedNote ? "Editing saved daily note" : "No note for this date yet"}</p>
         </div>
         <div className="form-actions">
+          <span className={`save-state-pill ${isDirty ? "save-state-dirty" : "save-state-clean"}`}>
+            {isDirty ? "Unsaved local edits" : "No unsaved edits"}
+          </span>
           <button type="button" disabled={!isDirty} onClick={() => void commitDraft()}>
             Save
           </button>
@@ -599,14 +657,12 @@ function PatientDetailPage({
           {headerDigest.risks && <div><strong>Risk:</strong> {headerDigest.risks}</div>}
           {headerDigest.issues && <div><strong>Issues:</strong> {headerDigest.issues}</div>}
         </div>
-        {headerDigest.redFlags && (
+        {headerRedFlags && (
           <div className="detail-header-red-flags">
-            <strong>Red Flags:</strong> <ClinicalText value={headerDigest.redFlags} maxLines={3} maxCharsPerLine={72} importantDefault />
+            <strong>Red Flags:</strong> <ClinicalText value={headerRedFlags} maxLines={3} maxCharsPerLine={72} importantDefault />
           </div>
         )}
       </section>
-
-      <AiHighlightsPanel patient={currentPatient} notes={patientNotes} className="detail-ai-highlights" />
 
       <section className="panel detail-date-bar">
         <label>
@@ -698,7 +754,12 @@ function PatientDetailPage({
       {activeTab === "assessmentPlan" && (
         <>
           <section className="panel">
-            <h2>Diagnosis / Problems</h2>
+            <div className="section-heading">
+              <h2>Diagnosis / Problems</h2>
+              <button type="button" className="secondary" onClick={refineAssessmentPlanFromClinicalFacts}>
+                Refine A/P
+              </button>
+            </div>
             <div className="form-grid">
               <label className="span-2">
                 Primary Diagnosis

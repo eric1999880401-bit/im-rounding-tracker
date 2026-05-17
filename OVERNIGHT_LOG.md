@@ -101,6 +101,55 @@ Objective: simplify the printed rounding list by removing unnecessary crowded co
 - Main pre-push verification: `main` was fast-forwarded with the print-list commit and `npm run build` passed on `main`.
 - Final expected branch/status immediately before `git push origin main`: `main...origin/main [ahead 2]`, with only local `vite-dev.log` modified and intentionally uncommitted.
 
+## 2026-05-17 Clinical Knowledge Layer + ICU Transfer Demo Verification
+
+Objective: make the clinical rule layer more useful beyond HF, add a complex fictional ICU-transfer patient, verify Board/Detail/Print output reads like concise clinician SOAP, then push only after safety checks pass.
+
+### Changed Files Summary
+
+- Added `src/clinicalKnowledge.ts` as the central Clinical Knowledge / Rule Layer for fact-first review.
+- Added `src/clinicalPatientPolish.ts` for concise patient update cleanup.
+- Added `scripts/clinical-eval.mjs` with fake-case clinical regression tests.
+- Updated AI document/detail/board/print flows to use concise rule/template output and preserve review-before-save behavior.
+- Updated `src/data/mockPatients.ts` with fictional complex ICU-transfer demo patient `DEMO-ICU02`.
+- Updated `src/roundingDigest.ts`, `src/components/ClinicalText.tsx`, and `src/pages/PrintRoundingListPage.tsx` to avoid false no-ICH/neuro tags and remove visible `...` truncation from clinical summaries.
+
+### Build Result
+
+- `npm run clinical:eval`: PASS, 25 fake clinical regression cases passed.
+- `npm run build`: PASS. Vite chunk-size warning remains non-blocking.
+- `npm --prefix functions run build`: PASS.
+
+### Browser Smoke Test Checklist
+
+- Demo mode opens with fictional data only and does not read/write Firestore: PASS.
+- Patient Board renders `DEMO-ICU02` with concise scanline: cholangitis sepsis/PNA, AKI/anemia/PNA issues, red flags, tasks, labs, and no `...`: PASS.
+- Patient Detail renders simple SOAP with red flags, S/O/A/P/tasks/DC: PASS.
+- Detail does not turn `Head CT no ICH` into an ICH warning: PASS.
+- Detail does not label generalized post-ICU weakness as active `neuro deficit`: PASS.
+- Print List includes ICU patient identifiers, Dx/PMH/issues, red flags, S/O/A/P/tasks/DC, important labs, and complete DC wording: PASS.
+- Print List has no visible `...` in the ICU patient block: PASS.
+
+### Known Limitations
+
+- This is still a starter knowledge layer, not a full medical-center specialty encyclopedia.
+- Rule output is clinical decision-support draft only; clinician review remains required before saving or acting.
+- Browser smoke used local demo mode only; no real Firebase login or real patient data was used.
+- Vite bundle-size warning remains deferred.
+- `vite-dev.log` remains a local modified log and is intentionally excluded from commit.
+
+### Firebase Schema Safety
+
+- No destructive Firebase schema, collection path, patient document shape, or Firestore rules migration was introduced.
+- Accepted AI output still maps into existing patient/daily-note fields and existing aiDraft-style flows.
+- No patient-data persistence was added to `localStorage`.
+
+### Final Git Branch / Status
+
+- Working branch before commit: `main`.
+- Intended commit excludes `vite-dev.log`.
+- Push target after final verification: `origin main`.
+
 ## 2026-05-15 AI Document Format Simplification
 
 Objective: reduce unnecessary AI-generated document choices and make the iSBAR handoff concise, high-yield, and complete for internal medicine handover.

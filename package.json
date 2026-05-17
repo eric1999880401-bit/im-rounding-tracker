@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.node.json --noEmit && vite build",
+    "clinical:eval": "node scripts/clinical-eval.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

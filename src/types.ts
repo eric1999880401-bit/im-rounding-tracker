@@ -37,10 +37,32 @@ export type AiDocumentType =
   | "weeklySummary"
   | "isbar";
 
+export interface ClinicalReasoningBundle {
+  currentClinicalState: string;
+  primaryRisk: string;
+  whyThisMatters: Array<{
+    fact: string;
+    source: string;
+    implication: string;
+  }>;
+  activeProblemsRanked: Array<{
+    problem: string;
+    status: "active" | "improving" | "resolved" | "uncertain";
+    whyImportant: string;
+    evidence: string[];
+    todayPlan: string[];
+    callThresholds: string[];
+  }>;
+  resolvedOrLessImportant: string[];
+  missingDataNeeded: string[];
+  noiseToIgnore: string[];
+}
+
 export interface AiSoapDraft {
   oneLiner: string;
   admissionSummary: string;
   isbarHandoff: string;
+  clinicalReasoning?: ClinicalReasoningBundle;
   subjective: {
     chiefConcern: string;
     symptoms: string[];
@@ -118,6 +140,7 @@ export interface AiDocumentDraft {
   documentType: AiDocumentType;
   title: string;
   conciseSummary: string;
+  clinicalReasoning?: ClinicalReasoningBundle;
   sections: Array<{
     heading: string;
     content: string;
@@ -154,6 +177,137 @@ export interface AnalyzeClinicalTextResult {
   draft: AiSoapDraft;
   model: string;
   rawTextPreview: string;
+}
+
+export type PatientImportDraftStatus = "new" | "updateCandidate";
+
+export interface PatientImportDraft {
+  id: string;
+  status: PatientImportDraftStatus;
+  matchPatientId: string;
+  sourceIndex: number;
+  bed: string;
+  patientCode: string;
+  age: string;
+  sex: PatientSex | "";
+  attending: string;
+  teamOrService: string;
+  primaryDiagnosis: string;
+  oneLiner: string;
+  chiefComplaint: string;
+  todayUpdates: string;
+  vitalSigns: string;
+  physicalExam: string;
+  labText: string;
+  imageText: string;
+  admissionSummary: string;
+  underlyingDiseases: string;
+  activeProblems: string;
+  hospitalCourseHighlights: string;
+  importantRedFlags: string;
+  tasks: Array<{
+    text: string;
+    priority: TaskPriority;
+    dueDate: string;
+    category: TaskCategory;
+  }>;
+  antibioticsProceduresConsults: string[];
+  dischargePlan: string;
+  disposition: string;
+  uncertainty: string[];
+  sourceExcerpt: string;
+}
+
+export interface AnalyzePatientBatchTextInput {
+  rawText: string;
+  deidentifiedConfirmed: boolean;
+  importMode?: "newAdmission" | "existingInpatient";
+  existingPatients?: Array<{
+    id: string;
+    bed: string;
+    patientCode: string;
+    primaryDiagnosis?: string;
+  }>;
+}
+
+export interface AnalyzePatientBatchTextResult {
+  draftId: string;
+  drafts: PatientImportDraft[];
+  model: string;
+  rawTextPreview: string;
+}
+
+export type ClinicalSourceLevel = "A" | "B" | "C" | "D" | "E";
+
+export type ClinicalRuleSeverity = "urgent" | "today" | "routine" | "review";
+
+export interface ClinicalSourceRef {
+  id: string;
+  level: ClinicalSourceLevel;
+  title: string;
+  url: string;
+  note: string;
+  lastReviewed: string;
+  owner: string;
+  uncertainty?: string;
+}
+
+export interface ClinicalFactBundle {
+  sourceText: string;
+  diagnoses: string[];
+  pmh: string[];
+  activeProblems: string[];
+  objectiveFacts: string[];
+  medications: string[];
+  antibiotics: string[];
+  procedures: string[];
+  consults: string[];
+  hospitalCourse: string[];
+  todayUpdates: string[];
+  pendingItems: string[];
+  dischargeDisposition: string[];
+  immunocompromisedSignals: string[];
+  uncertainty: string[];
+}
+
+export interface ClinicalRuleMatch {
+  id: string;
+  scope: string;
+  title: string;
+  severity: ClinicalRuleSeverity;
+  matchedTriggers: string[];
+  sourceRefs: ClinicalSourceRef[];
+  needsReview: boolean;
+}
+
+export interface GeneratedClinicalPlan {
+  facts: ClinicalFactBundle;
+  ruleMatches: ClinicalRuleMatch[];
+  redFlags: Array<{
+    text: string;
+    reason: string;
+    severity: ClinicalRuleSeverity;
+    sourceRefs: ClinicalSourceRef[];
+  }>;
+  todayTasks: Array<{
+    text: string;
+    priority: TaskPriority;
+    category: TaskCategory;
+    reason: string;
+    sourceRefs: ClinicalSourceRef[];
+  }>;
+  problemBasedAP: Array<{
+    problemTitle: string;
+    assessmentSummary: string;
+    evidenceOrCourseItems: string[];
+    planItems: string[];
+    isImportant: boolean;
+    sourceRefs: ClinicalSourceRef[];
+  }>;
+  handoffWarnings: string[];
+  printSummary: string;
+  sbarRecommendation: string;
+  needsReview: boolean;
 }
 
 export interface GenerateClinicalDocumentInput {

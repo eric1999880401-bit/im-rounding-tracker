@@ -1,8 +1,14 @@
 import { useMemo, useState } from "react";
+import {
+  applyClinicalKnowledgeToText,
+  formatRuleBasedSbar,
+  formatRuleBasedWeeklySummary,
+  hasClinicalReasoning,
+} from "../clinicalKnowledge";
 import { formatClinicalDocumentDraft } from "../clinicalDocumentFormat";
 import { generateClinicalDocument } from "../firebase/aiService";
-import type { AiDocumentDraft, AiDocumentType, DailyNote, Patient } from "../types";
-import { nowIso } from "../utils";
+import type { AiDocumentDraft, AiDocumentType, DailyNote, GeneratedClinicalPlan, Patient } from "../types";
+import { getAdmissionSummaryText, nowIso } from "../utils";
 
 interface ClinicalDocumentQuickActionsProps {
   patient: Patient;
@@ -38,6 +44,74 @@ function saveDocumentToPatient(patient: Patient, documentType: QuickDocumentType
   return { ...patient, generatedSbarNote: editableText, updatedAt: now };
 }
 
+function hasClinicalRuleSignal(plan: GeneratedClinicalPlan) {
+  return plan.ruleMatches.length > 0 || plan.redFlags.length > 0 || plan.todayTasks.length > 0 || plan.problemBasedAP.length > 0;
+}
+
+function notesForDocument(notes: DailyNote[], documentType: QuickDocumentType, dateFrom: string, selectedDate: string) {
+  if (documentType !== "weeklySummary") {
+    return notes.filter((note) => note.date <= selectedDate).slice(-2);
+  }
+  return notes.filter((note) => (!dateFrom || note.date >= dateFrom) && note.date <= selectedDate);
+}
+
+function patientRuleContext(patient: Patient, selectedNotes: DailyNote[]) {
+  return [
+    patient.primaryDiagnosis,
+    patient.oneLiner,
+    getAdmissionSummaryText(patient),
+    patient.underlyingDiseases,
+    patient.admissionPMH,
+    patient.activeProblems,
+    patient.hospitalCourseHighlights,
+    patient.importantRedFlags,
+    patient.vitalSigns,
+    patient.bloodSugar,
+    patient.newLabs,
+    patient.newImaging,
+    patient.assessment,
+    patient.plan,
+    patient.dischargePlan,
+    patient.tasks.map((task) => task.text).join("\n"),
+    selectedNotes
+      .map((note) =>
+        [
+          note.date,
+          note.importantRedFlags,
+          note.overnightEvents,
+          note.subjectiveOrChiefConcern,
+          note.vitalSigns,
+          note.bloodSugar,
+          note.labSummary,
+          note.imageSummary,
+          note.assessment,
+          note.plan,
+          note.dischargePlan,
+        ].filter(Boolean).join(" "),
+      )
+      .join("\n"),
+  ].filter(Boolean).join("\n");
+}
+
+function formatRuleReviewedDocument(documentType: QuickDocumentType, plan: GeneratedClinicalPlan) {
+  if (!hasClinicalRuleSignal(plan)) return "";
+  return documentType === "weeklySummary" ? formatRuleBasedWeeklySummary(plan) : formatRuleBasedSbar(plan);
+}
+
+function localClinicalDraft(documentType: QuickDocumentType, formatted: string, plan: GeneratedClinicalPlan): AiDocumentDraft {
+  return {
+    documentType,
+    title: documentType === "weeklySummary" ? "Clinical Knowledge Weekly Summary" : "Clinical Knowledge SBAR",
+    conciseSummary: formatted.split(/\r?\n/).find((line) => line.trim())?.trim() ?? "",
+    sections: [{ heading: "Clinical Knowledge Review", content: formatted }],
+    followUpItems: plan.todayTasks.map((task) => task.text),
+    uncertainty: [
+      ...(plan.needsReview ? ["Clinician review required before saving."] : []),
+      ...plan.facts.uncertainty,
+    ],
+  };
+}
+
 function ClinicalDocumentQuickActions({
   patient,
   notes = [],
@@ -69,6 +143,12 @@ function ClinicalDocumentQuickActions({
 
     setLoadingType(documentType);
     try {
+      const selectedNotes = notesForDocument(notes, documentType, dateFrom, selectedDate);
+      const rulePlan = applyClinicalKnowledgeToText(patientRuleContext(patient, selectedNotes), {
+        pmh: [patient.underlyingDiseases, patient.admissionPMH].filter(Boolean),
+        activeProblems: [patient.activeProblems, patient.primaryDiagnosis].filter(Boolean),
+      });
+      const ruleFormatted = formatRuleReviewedDocument(documentType, rulePlan);
       const result = await generateClinicalDocument({
         patientId: patient.id,
         documentType,
@@ -78,12 +158,31 @@ function ClinicalDocumentQuickActions({
         deidentifiedConfirmed: true,
         storeRawText: false,
       });
-      const formatted = formatClinicalDocumentDraft(result.draft);
+      const aiHasReasoning = hasClinicalReasoning(result.draft.clinicalReasoning);
+      const formatted = !aiHasReasoning && ruleFormatted ? ruleFormatted : formatClinicalDocumentDraft(result.draft);
       setDraft(result.draft);
       setEditableText(formatted);
-      setStatusMessage(`${documentLabel(documentType)} generated. Review, edit, then save. Draft: ${result.draftId}`);
+      setStatusMessage(
+        aiHasReasoning
+          ? `${documentLabel(documentType)} generated with AI clinical reasoning and local rule review. Review, edit, then save. Draft: ${result.draftId}`
+          : `${documentLabel(documentType)} drafted with local Clinical Knowledge review. Review, edit, then save.`,
+      );
     } catch (nextError) {
-      setError(getErrorMessage(nextError));
+      const selectedNotes = notesForDocument(notes, documentType, dateFrom, selectedDate);
+      const rulePlan = applyClinicalKnowledgeToText(patientRuleContext(patient, selectedNotes), {
+        pmh: [patient.underlyingDiseases, patient.admissionPMH].filter(Boolean),
+        activeProblems: [patient.activeProblems, patient.primaryDiagnosis].filter(Boolean),
+      });
+      const ruleFormatted = formatRuleReviewedDocument(documentType, rulePlan);
+      if (ruleFormatted) {
+        setDraft(localClinicalDraft(documentType, ruleFormatted, rulePlan));
+        setEditableText(ruleFormatted);
+        setStatusMessage(
+          `${documentLabel(documentType)} drafted locally because AI generation was unavailable. Review, edit, then save.`,
+        );
+      } else {
+        setError(getErrorMessage(nextError));
+      }
     } finally {
       setLoadingType("");
     }

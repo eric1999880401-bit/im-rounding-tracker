@@ -8,6 +8,8 @@ interface AppLayoutProps {
   userName: string;
   syncError: string;
   preferences: UserPreferences;
+  isDemoMode?: boolean;
+  onExitDemo?: () => void;
 }
 
 const SIDEBAR_STORAGE_KEY = "im-rounding-sidebar-collapsed";
@@ -115,7 +117,7 @@ function IconChevron({ collapsed }: { collapsed: boolean }) {
   );
 }
 
-function AppLayout({ userName, syncError }: AppLayoutProps) {
+function AppLayout({ userName, syncError, isDemoMode = false, onExitDemo }: AppLayoutProps) {
   const t = useT();
   const [collapsed, setCollapsed] = useState<boolean>(readInitialCollapsed);
 
@@ -136,6 +138,9 @@ function AppLayout({ userName, syncError }: AppLayoutProps) {
     { to: "/utilities", labelKey: "nav.utilities", icon: IconUtilities },
     { to: "/settings", labelKey: "nav.settings", icon: IconSettings },
   ];
+
+  const sessionActionLabel = isDemoMode ? "Exit demo" : t("action.switchUser");
+  const handleSessionAction = isDemoMode && onExitDemo ? onExitDemo : signOutCurrentUser;
 
   return (
     <div className={`app-shell${collapsed ? " app-shell-collapsed" : ""}`}>
@@ -182,19 +187,25 @@ function AppLayout({ userName, syncError }: AppLayoutProps) {
           <button
             type="button"
             className="secondary sign-out-button"
-            onClick={signOutCurrentUser}
-            title={t("action.switchUser")}
+            onClick={handleSessionAction}
+            title={sessionActionLabel}
           >
             <span className="nav-icon">
               <IconSignOut />
             </span>
-            <span className="nav-label">{t("action.switchUser")}</span>
+            <span className="nav-label">{sessionActionLabel}</span>
           </button>
           <p className="sidebar-privacy">{t("app.privacyShort")}</p>
         </div>
       </aside>
 
       <main className="main-content">
+        {isDemoMode && (
+          <div className="demo-mode-banner no-print">
+            <strong>Local demo mode</strong>
+            <span>Fictional patients only. Edits stay in this browser session and do not read or write Firestore.</span>
+          </div>
+        )}
         {syncError && <p className="error-message no-print">{syncError}</p>}
         <Outlet />
       </main>

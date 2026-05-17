@@ -25,6 +25,7 @@ import {
   subscribeToStudyTopics,
 } from "./firebase/userUtilityService";
 import { I18nProvider } from "./i18n";
+import { mockPatients } from "./data/mockPatients";
 
 const defaultPreferences: UserPreferences = { theme: "system", language: "en" };
 
@@ -36,9 +37,43 @@ function loadPreferences() {
   }
 }
 
+function readDemoMode() {
+  if (!import.meta.env.DEV || typeof window === "undefined") return false;
+
+  const pageQuery = new URLSearchParams(window.location.search);
+  const hash = window.location.hash;
+  const hashQuery = hash.includes("?") ? hash.slice(hash.indexOf("?")) : "";
+
+  return pageQuery.get("demo") === "1" || new URLSearchParams(hashQuery).get("demo") === "1";
+}
+
+function cloneDemoPatients(): Patient[] {
+  return mockPatients.map((patient) => ({
+    ...patient,
+    underlyingDiseaseItems: [...patient.underlyingDiseaseItems],
+    activeProblemItems: [...patient.activeProblemItems],
+    activeProblemStructuredItems: patient.activeProblemStructuredItems.map((item) => ({ ...item })),
+    labReports: patient.labReports.map((report) => ({
+      ...report,
+      items: report.items.map((item) => ({ ...item })),
+    })),
+    parsedLabItems: patient.parsedLabItems.map((item) => ({ ...item })),
+    physicalExamEntries: patient.physicalExamEntries.map((item) => ({ ...item })),
+    imageStudyEntries: patient.imageStudyEntries.map((item) => ({ ...item })),
+    assessmentPlanItems: patient.assessmentPlanItems.map((item) => ({
+      ...item,
+      evidenceOrCourseItems: [...item.evidenceOrCourseItems],
+      planItems: [...item.planItems],
+    })),
+    tasks: patient.tasks.map((task) => ({ ...task })),
+    aiThinkingPrompts: patient.aiThinkingPrompts.map((prompt) => ({ ...prompt })),
+  }));
+}
+
 function App() {
   const { user, authLoading } = useAuthUser();
-  const [patients, setPatients] = useState<Patient[]>([]);
+  const [isDemoMode, setIsDemoMode] = useState(readDemoMode);
+  const [patients, setPatients] = useState<Patient[]>(() => (isDemoMode ? cloneDemoPatients() : []));
   const [dailyNotesByPatient, setDailyNotesByPatient] = useState<DailyNotesByPatient>({});
   const [preferences, setPreferences] = useState<UserPreferences>(loadPreferences);
   const [phonebook, setPhonebook] = useState<PhonebookContact[]>([]);
@@ -59,6 +94,17 @@ function App() {
   }, [preferences]);
 
   useEffect(() => {
+    if (isDemoMode) {
+      setPatients(cloneDemoPatients());
+      setDailyNotesByPatient({});
+      setPhonebook([]);
+      setMiscTasks([]);
+      setStudyTopics([]);
+      setDataLoading(false);
+      setDataError("");
+      return;
+    }
+
     if (!user) {
       setPatients([]);
       setDailyNotesByPatient({});
@@ -84,9 +130,10 @@ function App() {
     );
 
     return unsubscribe;
-  }, [user]);
+  }, [isDemoMode, user]);
 
   useEffect(() => {
+    if (isDemoMode) return;
     if (!user) return;
     const unsubscribes = [
       subscribeToPhonebook(user.uid, setPhonebook, (error) => setDataError(formatSyncError("Loading phonebook", error))),
@@ -94,9 +141,10 @@ function App() {
       subscribeToStudyTopics(user.uid, setStudyTopics, (error) => setDataError(formatSyncError("Loading study topics", error))),
     ];
     return () => unsubscribes.forEach((unsubscribe) => unsubscribe());
-  }, [user]);
+  }, [isDemoMode, user]);
 
   useEffect(() => {
+    if (isDemoMode) return;
     if (!user || patients.length === 0) {
       setDailyNotesByPatient({});
       return;
@@ -118,7 +166,49 @@ function App() {
     return () => {
       unsubscribes.forEach((unsubscribe) => unsubscribe());
     };
-  }, [user, patients]);
+  }, [isDemoMode, user, patients]);
+
+  function enterDemoMode() {
+    if (typeof window !== "undefined") {
+      window.location.hash = "/patients?demo=1";
+    }
+    setIsDemoMode(true);
+  }
+
+  function exitDemoMode() {
+    if (typeof window !== "undefined") {
+      window.location.hash = "/";
+    }
+    setIsDemoMode(false);
+    setPatients([]);
+    setDailyNotesByPatient({});
+  }
+
+  async function createDemoPatient(patient: Patient) {
+    setPatients((current) => [...current, patient]);
+  }
+
+  async function updateDemoPatient(patient: Patient) {
+    setPatients((current) => current.map((item) => (item.id === patient.id ? patient : item)));
+  }
+
+  async function deleteDemoPatient(patientId: string) {
+    setPatients((current) => current.filter((patient) => patient.id !== patientId));
+    setDailyNotesByPatient((current) => {
+      const { [patientId]: _removed, ...rest } = current;
+      return rest;
+    });
+  }
+
+  async function saveDemoDailyNote(patientId: string, note: DailyNote) {
+    setDailyNotesByPatient((current) => {
+      const notes = current[patientId] ?? [];
+      const nextNotes = [note, ...notes.filter((item) => item.date !== note.date)].sort((a, b) =>
+        b.date.localeCompare(a.date),
+      );
+      return { ...current, [patientId]: nextNotes };
+    });
+  }
 
   async function createSyncedPatient(patient: Patient) {
     if (!user) {
@@ -189,18 +279,34 @@ function App() {
     }
   }
 
-  if (authLoading) {
+  const createPatientHandler = isDemoMode ? createDemoPatient : createSyncedPatient;
+  const savePatientHandler = isDemoMode ? updateDemoPatient : saveSyncedPatient;
+  const deletePatientHandler = isDemoMode ? deleteDemoPatient : deleteSyncedPatient;
+  const saveDailyNoteHandler = isDemoMode ? saveDemoDailyNote : saveSyncedDailyNote;
+  const sessionUserName = isDemoMode ? "Demo User" : user ? getUserName(user) : "";
+
+  if (!isDemoMode && authLoading) {
     return <div className="loading-screen">Checking login...</div>;
   }
 
-  if (!user) {
-    return <AuthPage />;
+  if (!isDemoMode && !user) {
+    return <AuthPage onStartDemo={enterDemoMode} />;
   }
 
   return (
     <I18nProvider language={preferences.language}>
       <Routes>
-        <Route element={<AppLayout userName={getUserName(user)} syncError={dataError} preferences={preferences} />}>
+        <Route
+          element={
+            <AppLayout
+              userName={sessionUserName}
+              syncError={dataError}
+              preferences={preferences}
+              isDemoMode={isDemoMode}
+              onExitDemo={exitDemoMode}
+            />
+          }
+        >
         <Route path="/" element={<Navigate to="/patients" replace />} />
         <Route
           path="/patients"
@@ -210,8 +316,9 @@ function App() {
               dailyNotesByPatient={dailyNotesByPatient}
               dataLoading={dataLoading}
               dataError={dataError}
-              onCreatePatient={createSyncedPatient}
-              onSavePatient={saveSyncedPatient}
+              isDemoMode={isDemoMode}
+              onCreatePatient={createPatientHandler}
+              onSavePatient={savePatientHandler}
             />
           }
         />
@@ -222,18 +329,18 @@ function App() {
               patients={patients}
               dailyNotesByPatient={dailyNotesByPatient}
               dataLoading={dataLoading}
-              onSavePatient={saveSyncedPatient}
-              onSaveDailyNote={saveSyncedDailyNote}
+              onSavePatient={savePatientHandler}
+              onSaveDailyNote={saveDailyNoteHandler}
             />
           }
         />
         <Route
           path="/tasks"
-          element={<TodayTasksPage patients={patients} onSavePatient={saveSyncedPatient} />}
+          element={<TodayTasksPage patients={patients} onSavePatient={savePatientHandler} />}
         />
         <Route
           path="/archive"
-          element={<ArchivePage patients={patients} onSavePatient={saveSyncedPatient} onDeletePatient={deleteSyncedPatient} />}
+          element={<ArchivePage patients={patients} onSavePatient={savePatientHandler} onDeletePatient={deletePatientHandler} />}
         />
         <Route
           path="/print"
@@ -253,7 +360,7 @@ function App() {
             <AiDocumentsPage
               patients={patients}
               dailyNotesByPatient={dailyNotesByPatient}
-              onSavePatient={saveSyncedPatient}
+              onSavePatient={savePatientHandler}
             />
           }
         />
@@ -262,9 +369,9 @@ function App() {
           element={
             <SettingsPage
               preferences={preferences}
-              userName={getUserName(user)}
+              userName={sessionUserName}
               onChange={setPreferences}
-              onSwitchUser={signOutCurrentUser}
+              onSwitchUser={isDemoMode ? exitDemoMode : signOutCurrentUser}
             />
           }
         />

@@ -78,6 +78,14 @@ function cleanDigestLine(value: string) {
     .trim();
 }
 
+function cleanShortTail(value: string) {
+  let clean = value.replace(/\s+[+,;:-]\s*$/g, "").trim();
+  for (let index = 0; index < 2; index += 1) {
+    clean = clean.replace(/\s+\b(?:if|and|or|with|without|w\/|for|to|from|of|the|a|an|when|as)\b\.?$/i, "").trim();
+  }
+  return clean;
+}
+
 export function shortDigestText(value: string, maxChars = 52) {
   const clean = cleanDigestLine(value)
     .replace(/\bright\b/gi, "R")
@@ -98,10 +106,9 @@ export function shortDigestText(value: string, maxChars = 52) {
     .replace(/\s+/g, " ")
     .trim();
 
-  if (clean.length <= maxChars) return clean;
+  if (clean.length <= maxChars) return cleanShortTail(clean);
 
-  const suffix = "...";
-  const limit = Math.max(8, maxChars - suffix.length);
+  const limit = Math.max(8, maxChars);
   const firstClause = clean.split(/[;\n]/)[0]?.trim() || clean;
   if (firstClause.length <= maxChars) return firstClause;
 
@@ -112,8 +119,7 @@ export function shortDigestText(value: string, maxChars = 52) {
     if (next.length <= limit) kept.push(word);
   });
 
-  const shortened = kept.join(" ") || firstClause.slice(0, limit).trim();
-  return `${shortened}${suffix}`;
+  return cleanShortTail(kept.join(" ") || firstClause.slice(0, limit).trim());
 }
 
 function uniqueLines(lines: string[]) {
@@ -122,11 +128,25 @@ function uniqueLines(lines: string[]) {
     .map(cleanDigestLine)
     .filter(Boolean)
     .filter((line) => {
-      const key = line.toLowerCase();
+      const key = digestDedupeKey(line);
       if (seen.has(key)) return false;
       seen.add(key);
       return true;
     });
+}
+
+function digestDedupeKey(value: string) {
+  const clean = cleanDigestLine(value).toLowerCase();
+  if (/(neutropenic|leukopen|anc|wbc).*(fever|infection|risk)|(?:fever|infection|risk).*(neutropenic|leukopen|anc|wbc)/.test(clean)) {
+    return "neutropenic-infection-risk";
+  }
+  if (/(ramsay|zoster|ear swelling|ear discharge|cnvii|cn vii|facial weakness)/.test(clean)) {
+    return "ramsay-ear-cn";
+  }
+  if (/(bil|bilateral|b\/l).*(numbness|weakness|polyneuropathy|ncv|emg)|(?:numbness|weakness|polyneuropathy|ncv|emg).*(bil|bilateral|b\/l)/.test(clean)) {
+    return "bilateral-neuro-deficit";
+  }
+  return clinicalDedupeKey(value) || clean;
 }
 
 function clinicalDedupeKey(value: string) {
@@ -252,13 +272,13 @@ function topSubjectiveSignals(patient: Patient, maxItems: number, maxChars: numb
 function splitClinicalClauses(value: string) {
   return cleanDigestLine(value)
     .replace(/\b\d+\.\s*/g, "; ")
-    .split(/\s*(?:;|\n|, and | and )\s*/i)
+    .split(/\s*(?:;|\n|\.(?=\s+[A-Z])|, and | and )\s*/i)
     .map(cleanDigestLine)
     .filter(Boolean);
 }
 
 function lowValueClause(value: string) {
-  return /\b(unremarkable|normal|no acute|no definite|no evidence|negative for|within normal|stable|unchanged|mild atrophy|elderly|small vessel disease|degenerative|pulse \+|no cv angle|no cva)\b/i.test(
+  return /\b(unremarkable|normal|no acute|no definite|no evidence|negative for|within normal|stable|unchanged|mild atrophy|elderly|small vessel disease|degenerative|pulse \+|no cv angle|no cva|no ich|no hemorrhage|no intracranial hemorrhage)\b/i.test(
     value,
   );
 }
@@ -269,7 +289,7 @@ function clinicalSignalScore(value: string, kind: "image" | "pe") {
   if (/!|critical|urgent|pending|new|acute|worsen|progress/.test(text)) score += 5;
   if (
     kind === "image" &&
-    /infarct|stroke|ich|hemorrhage|bleed|hypodense|stenosis|occlusion|aneurysm|mass|tumou?r|abscess|pneumonia|edema|effusion|pe\b|dvt|fracture|hematoma|obstruction|pending|unelicitable/.test(
+    /infarct|stroke|ich|hemorrhage|bleed|hypodense|stenosis|occlusion|aneurysm|mass|tumou?r|abscess|pneumonia|\bpna\b|edema|effusion|pe\b|dvt|fracture|hematoma|obstruction|pending|unelicitable/.test(
       text,
     )
   ) {
@@ -390,6 +410,8 @@ function problemLabel(value: string, maxChars: number) {
   if (/urinary tract infection|\buti\b/.test(lower)) return "UTI";
   if (/postmenopausal bleeding|vaginal bleeding|\bpmb\b/.test(lower)) return "PMB";
   if (/diabetes|dm/.test(lower) && /poor|uncontrol|hypergly/.test(lower)) return "DM poor ctrl";
+  if (/cholangitis/.test(lower) && /sepsis|septic|shock/.test(lower)) return "cholangitis sepsis";
+  if (/sepsis|septic/.test(lower)) return "sepsis";
   if (/pneumonia|\bpna\b/.test(lower)) return "PNA";
   if (/acute kidney|\baki\b/.test(lower)) return "AKI";
   if (/dysphag|swallow/.test(lower)) return "dysphagia";
@@ -420,8 +442,9 @@ function diagnosisSummary(patient: Patient, maxItems: number, maxChars: number) 
   if (/a[\s-]*to[\s-]*a|artery[\s-]*to[\s-]*artery/.test(lower)) tags.push("r/o A-A");
   if (/ramsay/.test(lower)) tags.push("Ramsay Hunt");
   if (/parkinson/.test(lower)) tags.push("Parkinson");
+  if (/cholangitis/.test(lower) && /sepsis|septic|shock/.test(lower)) tags.push("cholangitis sepsis");
+  else if (/sepsis|septic/.test(lower)) tags.push("sepsis");
   if (/pneumonia|\bpna\b/.test(lower)) tags.push("PNA");
-  if (/sepsis/.test(lower)) tags.push("sepsis");
   if (/urinary tract infection|\buti\b/.test(lower)) tags.push("UTI");
   if (/postmenopausal bleeding|vaginal bleeding|\bpmb\b/.test(lower)) tags.push("PMB");
   if (/diabetes|dm/.test(lower) && /poor|uncontrol|hypergly/.test(lower)) tags.push("DM poor ctrl");
@@ -475,7 +498,10 @@ function issueSummary(patient: Patient, maxItems: number, maxChars: number) {
   if (/infection|sepsis|pneumonia|\bpna\b/.test(lower)) tags.push(/pneumonia|\bpna\b/.test(lower) ? "PNA" : "infection");
   if (/dysphag|swallow/.test(lower)) tags.push("dysphagia");
   if (/carotid|mca|ica/.test(lower) && /stenos/.test(lower)) tags.push("large-vessel stenosis");
-  if (/weak|paresis|palsy|numbness|sensory/.test(lower)) tags.push("neuro deficit");
+  const hasFocalNeuroDeficit =
+    /hemiparesis|hemiplegia|aphasia|dysarth|facial droop|cn\s*[ivx]+|palsy|numbness|sensory loss|focal deficit/.test(lower) ||
+    (/weak/.test(lower) && /\b(stroke|neuro|focal|hemip|cva|spinal|cord)\b/.test(lower));
+  if (hasFocalNeuroDeficit) tags.push("neuro deficit");
 
   return joinTags(tags, maxItems) || compactList(getActiveProblemItems(patient).map((item) => problemLabel(item, maxChars)), maxItems, maxChars);
 }
@@ -526,6 +552,7 @@ function imageFindingLabel(studyType: string, value: string, maxChars: number) {
   const lower = text.toLowerCase();
   const vascular = vascularStenosisLabel(text);
   if (vascular) return vascular;
+  const negativeBleedFinding = /\b(?:no|without|w\/o|negative for|no evidence of)\b.{0,30}\b(?:ich|intracranial hemorrhage|hemorrhage|bleed)\b/i.test(text);
 
   if (/hematoma/.test(lower)) {
     const side = sidePrefix(text);
@@ -543,7 +570,7 @@ function imageFindingLabel(studyType: string, value: string, maxChars: number) {
   }
   if (/cerebell/.test(lower)) return [sidePrefix(text), "cerebellar lesion"].filter(Boolean).join(" ");
   if (/mastoiditis/.test(lower)) return [sidePrefix(text), "mastoiditis"].filter(Boolean).join(" ");
-  if (/hemorrhage|bleed|ich/.test(lower)) return [sidePrefix(text), "ICH"].filter(Boolean).join(" ");
+  if (!negativeBleedFinding && /hemorrhage|bleed|ich/.test(lower)) return [sidePrefix(text), "ICH"].filter(Boolean).join(" ");
   if (/pneumonia|\bpna\b/.test(lower)) return "PNA";
   if (/effusion/.test(lower)) return "effusion";
   if (/peroneal|tibial|sural|unelicitable|cmap|snap/i.test(text)) return "peroneal/tibial/sural unelicitable";
@@ -571,6 +598,7 @@ function imageSummaryText(patient: Patient, maxItems: number, maxChars: number) 
     .filter((entry) => entry.score >= 7)
     .map((entry) => entry.text);
   const legacy = highlightedClinicalItems(patient.newImaging)
+    .flatMap((line) => splitClinicalClauses(line.text).map((text) => ({ ...line, text })))
     .map((line) => ({
       score: clinicalSignalScore(line.text, "image") + Number(line.important) * 10,
       text: imageFindingLabel("", line.text, maxChars),
@@ -579,7 +607,8 @@ function imageSummaryText(patient: Patient, maxItems: number, maxChars: number) 
     .map((entry) => entry.text);
   return uniqueClinicalLines([...structured, ...legacy])
     .slice(0, maxItems)
-    .join("\n");
+    .join("\n") ||
+    compactList(clinicalItems(patient.newImaging), maxItems, maxChars);
 }
 
 function peSummaryText(patient: Patient, maxItems: number, maxChars: number) {
@@ -636,6 +665,7 @@ function assessmentPlanSummaryText(patient: Patient, maxItems: number, maxChars:
     const lower = value.toLowerCase();
     let score = itemImportant ? 100 : 0;
     if (/stroke|ais|tia|infarct|ich|hemorrhage|bleed|anemia|hb drop|sepsis|shock|resp failure|hypox|desat|acs|mi|arrhythm|af\b/.test(lower)) score += 14;
+    if (/\b(?:aki|hyperk|oliguria|anuria|dialysis|cr\s*(?:up to\s*)?[2-9]|k\s*(?:up to\s*)?[5-9])\b/.test(lower)) score += 14;
     if (/cancer|carcinoma|tumou?r|\bca\b|mass|metasta|cervical|malign|biopsy|pathology/.test(lower)) score += 13;
     if (/aki|renal failure|hf|heart failure|pna|pneumonia|uti|infection|dysphag|aspirat|fracture|hematoma/.test(lower)) score += 10;
     if (/stenos|occlusion|aneurysm|thromb|embol|dvt|pe\b/.test(lower)) score += 9;
@@ -708,6 +738,9 @@ function assessmentPlanSummaryText(patient: Patient, maxItems: number, maxChars:
     const detailChars = Math.max(18, maxChars - label.length - 2);
     const detailText = shortDigestText(detail, detailChars);
     if (!detailText || clinicalDedupeKey(detailText) === labelKey) return label;
+    if (clinicalDedupeKey(detailText).startsWith(labelKey)) {
+      return shortDigestText(detailText, maxChars);
+    }
     return shortDigestText(`${label}: ${detailText}`, Math.max(maxChars, label.length + detailText.length + 2));
   }
 
@@ -775,7 +808,11 @@ function taskSummaryText(patient: Patient, hideCompleted: boolean, maxItems: num
 }
 
 function redFlagText(patient: Patient, maxItems: number, maxChars: number) {
-  return compactList(clinicalItems(patient.importantRedFlags), maxItems, maxChars);
+  return uniqueLines(clinicalItems(patient.importantRedFlags))
+    .slice(0, maxItems)
+    .map((item) => shortDigestText(item, maxChars))
+    .filter(Boolean)
+    .join("\n");
 }
 
 function subjectiveText(patient: Patient, maxItems: number, maxChars: number) {
@@ -831,12 +868,10 @@ export function getRoundingDigest(
     .map((line) => `A/P: ${line}`);
   const urgentLines = uniqueLines([
     ...clinicalItems(redFlags),
-    ...subjectiveSignals,
-    ...vitalSignals,
     ...urgentTasks,
     ...labSignals,
     ...urgentAssessmentLines,
-  ]).slice(0, limits.urgent);
+  ]).slice(0, Math.min(limits.urgent, mode === "rounds" ? 3 : 2));
   const attendingSummary = uniqueLines([
     aiPatientPicture ? `Summary: ${aiPatientPicture}` : "",
     diagnosis ? `Dx: ${diagnosis}` : "",

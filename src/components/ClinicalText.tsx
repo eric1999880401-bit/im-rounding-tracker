@@ -11,14 +11,20 @@ interface ClinicalTextProps {
 
 function shortenText(text: string, maxChars?: number) {
   if (!maxChars || text.length <= maxChars) return text;
-  const limit = Math.max(8, maxChars - 3);
+  const limit = Math.max(8, maxChars);
   const sliced = text.slice(0, limit).trimEnd();
   const lastSpace = sliced.lastIndexOf(" ");
-  const suffix = "...";
+  const cleanTail = (value: string) => {
+    let clean = value.replace(/\s+[+,;:-]\s*$/g, "").trim();
+    for (let index = 0; index < 2; index += 1) {
+      clean = clean.replace(/\s+\b(?:if|and|or|with|without|w\/|for|to|from|of|the|a|an|when|as|after|before|are|is)\b\.?$/i, "").trim();
+    }
+    return clean;
+  };
   if (lastSpace >= Math.min(16, maxChars - 1)) {
-    return `${sliced.slice(0, lastSpace).trimEnd()}${suffix}`;
+    return cleanTail(sliced.slice(0, lastSpace));
   }
-  return `${sliced}${suffix}`;
+  return cleanTail(sliced);
 }
 
 function groupLines(lines: HighlightLine[], maxCharsPerLine?: number) {
@@ -42,6 +48,19 @@ function arrowSymbol(text: string) {
 
 function stripArrow(text: string) {
   return text.replace(/^(->|=>|\u2192|\u21d2)\s*/, "");
+}
+
+function displayClinicalText(text: string) {
+  return text
+    .replace(/^!+/, "")
+    .replace(/^\s*(?:critical|urgent)\s*:\s*/i, "* ")
+    .replace(/\[\s*URGENT\s*\]\s*/gi, "* ")
+    .replace(/\bhigh-normal\b/gi, "\u2197 nl")
+    .replace(/\blow-normal\b/gi, "\u2198 nl")
+    .replace(/\bhigh\b/gi, "\u2191")
+    .replace(/\blow\b/gi, "\u2193")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 const colorClassNames: Record<string, string> = {
@@ -87,7 +106,8 @@ function renderLines(lines: HighlightLine[], fallback: string, importantDefault 
 
   return groupLines(lines, maxCharsPerLine).map((line, index) => {
     const numberMatch = line.text.match(/^(\d+)\.\s*(.*)$/);
-    const displayText = numberMatch ? numberMatch[2] : line.kind === "arrow" ? stripArrow(line.text) : line.text;
+    const rawDisplayText = numberMatch ? numberMatch[2] : line.kind === "arrow" ? stripArrow(line.text) : line.text;
+    const displayText = displayClinicalText(rawDisplayText);
     const isImportant = importantDefault || line.important;
 
     return (

@@ -29,8 +29,60 @@ const documentTypes = new Set([
   "isbar",
 ]);
 
+const taskCategories = new Set(["lab", "imaging", "consult", "discharge", "family", "order", "other"]);
+
 const stringSchema = { type: "string" } as const;
 const booleanSchema = { type: "boolean" } as const;
+
+const clinicalReasoningSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "currentClinicalState",
+    "primaryRisk",
+    "whyThisMatters",
+    "activeProblemsRanked",
+    "resolvedOrLessImportant",
+    "missingDataNeeded",
+    "noiseToIgnore",
+  ],
+  properties: {
+    currentClinicalState: stringSchema,
+    primaryRisk: stringSchema,
+    whyThisMatters: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["fact", "source", "implication"],
+        properties: {
+          fact: stringSchema,
+          source: stringSchema,
+          implication: stringSchema,
+        },
+      },
+    },
+    activeProblemsRanked: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["problem", "status", "whyImportant", "evidence", "todayPlan", "callThresholds"],
+        properties: {
+          problem: stringSchema,
+          status: { type: "string", enum: ["active", "improving", "resolved", "uncertain"] },
+          whyImportant: stringSchema,
+          evidence: { type: "array", items: stringSchema },
+          todayPlan: { type: "array", items: stringSchema },
+          callThresholds: { type: "array", items: stringSchema },
+        },
+      },
+    },
+    resolvedOrLessImportant: { type: "array", items: stringSchema },
+    missingDataNeeded: { type: "array", items: stringSchema },
+    noiseToIgnore: { type: "array", items: stringSchema },
+  },
+} as const;
 
 const aiSoapDraftSchema = {
   type: "object",
@@ -39,6 +91,7 @@ const aiSoapDraftSchema = {
     "oneLiner",
     "admissionSummary",
     "isbarHandoff",
+    "clinicalReasoning",
     "subjective",
     "objective",
     "assessmentPlan",
@@ -52,6 +105,7 @@ const aiSoapDraftSchema = {
     oneLiner: stringSchema,
     admissionSummary: stringSchema,
     isbarHandoff: stringSchema,
+    clinicalReasoning: clinicalReasoningSchema,
     subjective: {
       type: "object",
       additionalProperties: false,
@@ -221,7 +275,7 @@ const aiSoapDraftSchema = {
 const aiDocumentDraftSchema = {
   type: "object",
   additionalProperties: false,
-  required: ["documentType", "title", "conciseSummary", "sections", "followUpItems", "uncertainty"],
+  required: ["documentType", "title", "conciseSummary", "clinicalReasoning", "sections", "followUpItems", "uncertainty"],
   properties: {
     documentType: {
       type: "string",
@@ -229,6 +283,7 @@ const aiDocumentDraftSchema = {
     },
     title: stringSchema,
     conciseSummary: stringSchema,
+    clinicalReasoning: clinicalReasoningSchema,
     sections: {
       type: "array",
       items: {
@@ -243,6 +298,98 @@ const aiDocumentDraftSchema = {
     },
     followUpItems: { type: "array", items: stringSchema },
     uncertainty: { type: "array", items: stringSchema },
+  },
+} as const;
+
+const patientImportDraftSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "id",
+    "status",
+    "matchPatientId",
+    "sourceIndex",
+    "bed",
+    "patientCode",
+    "age",
+    "sex",
+    "attending",
+    "teamOrService",
+    "primaryDiagnosis",
+    "oneLiner",
+    "chiefComplaint",
+    "todayUpdates",
+    "vitalSigns",
+    "physicalExam",
+    "labText",
+    "imageText",
+    "admissionSummary",
+    "underlyingDiseases",
+    "activeProblems",
+    "hospitalCourseHighlights",
+    "importantRedFlags",
+    "tasks",
+    "antibioticsProceduresConsults",
+    "dischargePlan",
+    "disposition",
+    "uncertainty",
+    "sourceExcerpt",
+  ],
+  properties: {
+    id: stringSchema,
+    status: { type: "string", enum: ["new", "updateCandidate"] },
+    matchPatientId: stringSchema,
+    sourceIndex: { type: "number" },
+    bed: stringSchema,
+    patientCode: stringSchema,
+    age: stringSchema,
+    sex: { type: "string", enum: ["M", "F", "Other", ""] },
+    attending: stringSchema,
+    teamOrService: stringSchema,
+    primaryDiagnosis: stringSchema,
+    oneLiner: stringSchema,
+    chiefComplaint: stringSchema,
+    todayUpdates: stringSchema,
+    vitalSigns: stringSchema,
+    physicalExam: stringSchema,
+    labText: stringSchema,
+    imageText: stringSchema,
+    admissionSummary: stringSchema,
+    underlyingDiseases: stringSchema,
+    activeProblems: stringSchema,
+    hospitalCourseHighlights: stringSchema,
+    importantRedFlags: stringSchema,
+    tasks: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["text", "priority", "dueDate", "category"],
+        properties: {
+          text: stringSchema,
+          priority: { type: "string", enum: ["urgent", "normal", "low"] },
+          dueDate: stringSchema,
+          category: { type: "string", enum: ["lab", "imaging", "consult", "discharge", "family", "order", "other"] },
+        },
+      },
+    },
+    antibioticsProceduresConsults: { type: "array", items: stringSchema },
+    dischargePlan: stringSchema,
+    disposition: stringSchema,
+    uncertainty: { type: "array", items: stringSchema },
+    sourceExcerpt: stringSchema,
+  },
+} as const;
+
+const patientBatchImportSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["drafts"],
+  properties: {
+    drafts: {
+      type: "array",
+      items: patientImportDraftSchema,
+    },
   },
 } as const;
 
@@ -289,6 +436,22 @@ interface DocumentCallableInput {
   storeRawText?: unknown;
 }
 
+interface PatientBatchCallableInput {
+  rawText?: unknown;
+  deidentifiedConfirmed?: unknown;
+  importMode?: unknown;
+  existingPatients?: unknown;
+}
+
+type PatientBatchImportMode = "newAdmission" | "existingInpatient";
+
+interface ExistingPatientForBatch {
+  id: string;
+  bed: string;
+  patientCode: string;
+  primaryDiagnosis: string;
+}
+
 function getOpenAiApiKey() {
   try {
     const secretValue = OPENAI_API_KEY.value();
@@ -318,6 +481,283 @@ function sanitizePatientContext(input: CallableInput["patientContext"]) {
     activeProblems: asStringArray(input.activeProblems),
     currentAssessmentPlan: Array.isArray(input.currentAssessmentPlan) ? input.currentAssessmentPlan.slice(0, 20) : [],
   };
+}
+
+function truncateString(value: unknown, maxChars = 1200) {
+  return String(value ?? "").replace(/\r\n/g, "\n").trim().slice(0, maxChars);
+}
+
+function normalizeTextKey(value: string) {
+  return value.toLowerCase().replace(/[\s#_\-.]/g, "").trim();
+}
+
+function sanitizeExistingPatientsForBatch(value: unknown): ExistingPatientForBatch[] {
+  if (!Array.isArray(value)) return [];
+
+  return value
+    .slice(0, 200)
+    .map((item) => asPlainObject(item))
+    .map((item) => ({
+      id: truncateString(item.id, 120),
+      bed: truncateString(item.bed, 80),
+      patientCode: truncateString(item.patientCode, 120),
+      primaryDiagnosis: truncateString(item.primaryDiagnosis, 220),
+    }))
+    .filter((item) => item.id && (item.bed || item.patientCode));
+}
+
+function sanitizePatientBatchImportMode(value: unknown): PatientBatchImportMode {
+  return value === "newAdmission" ? "newAdmission" : "existingInpatient";
+}
+
+function isGenericClinicalFiller(value: string) {
+  const clean = value.toLowerCase().replace(/\s+/g, " ").trim();
+  if (!clean) return true;
+
+  const hasConcreteTrigger =
+    /\d|if\b|when\b|call\b|threshold|pending|f\/u|follow|repeat|hold|start|stop|resume|taper|consult|culture|lactate|troponin|\bk\b|\bcr\b|\bhb\b|o2|fio2|shock|bleed|fever|hypo|hyper|transfus/i.test(clean);
+  if (hasConcreteTrigger) return false;
+
+  return [
+    "monitor closely",
+    "continue to monitor",
+    "close monitoring",
+    "clinical correlation recommended",
+    "follow clinically",
+    "supportive care",
+    "continue current management",
+    "watch for deterioration",
+    "no acute issue",
+    "stable condition",
+  ].some((phrase) => clean === phrase || clean.includes(phrase));
+}
+
+function cleanClinicalLines(value: unknown, maxLines = 10, maxChars = 1400) {
+  return truncateString(value, maxChars * 2)
+    .split(/\r?\n|;(?=\s*[A-Z#]|\s*[\u4e00-\u9fff])/)
+    .map((line) => line.replace(/\s+/g, " ").trim())
+    .filter((line) => !isGenericClinicalFiller(line))
+    .slice(0, maxLines)
+    .join("\n")
+    .slice(0, maxChars);
+}
+
+function cleanClinicalArray(value: unknown, maxItems = 8, maxCharsPerItem = 180) {
+  return asStringArray(value)
+    .map((item) => item.replace(/\s+/g, " ").trim().slice(0, maxCharsPerItem))
+    .filter((item) => !isGenericClinicalFiller(item))
+    .slice(0, maxItems);
+}
+
+function maxBloodPressureInText(value: string) {
+  const matches = value.matchAll(/\b(?:bp|b\/p|sbp|blood pressure)?\s*(\d{2,3})\s*\/\s*(\d{2,3})\b/gi);
+  let maxSbp = 0;
+  let maxDbp = 0;
+  for (const match of matches) {
+    maxSbp = Math.max(maxSbp, Number(match[1] ?? 0));
+    maxDbp = Math.max(maxDbp, Number(match[2] ?? 0));
+  }
+
+  return { maxSbp, maxDbp };
+}
+
+function shouldSuppressStrokeBpRedFlag(value: string) {
+  const lower = value.toLowerCase();
+  const hasStrokeContext = /\b(ais|ischemic stroke|acute stroke|cva|tia|nihss|thrombectomy|evt)\b|中風|腦梗|缺血性腦/.test(lower);
+  if (!hasStrokeContext) return false;
+
+  const hasStrictBpException =
+    /\b(tpa|alteplase|thrombolysis|post[-\s]?tpa|ich|intracranial hemorrhage|hemorrhagic stroke|aortic dissection|stemi|nstemi|acs|mi)\b|腦出血|主動脈剝離/.test(
+      lower,
+    );
+  if (hasStrictBpException) return false;
+
+  const { maxSbp, maxDbp } = maxBloodPressureInText(value);
+  return maxSbp > 0 && maxSbp < 220 && maxDbp < 120;
+}
+
+function lineLooksLikeBpRedFlag(value: string) {
+  return /bp|b\/p|sbp|dbp|hypertension|htn|blood pressure|血壓/i.test(value) &&
+    /urgent|red flag|uncontrolled|severe|critical|call|高|危/i.test(value);
+}
+
+function filterStrokePermissiveBpRedFlags(redFlags: string, allText: string) {
+  if (!shouldSuppressStrokeBpRedFlag(allText)) return redFlags;
+
+  return redFlags
+    .split(/\r?\n|;/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .filter((line) => !lineLooksLikeBpRedFlag(line))
+    .join("\n");
+}
+
+function matchExistingPatient(
+  draft: { bed: string; patientCode: string; matchPatientId: string },
+  existingPatients: ExistingPatientForBatch[],
+) {
+  const modelMatch = existingPatients.find((patient) => patient.id && patient.id === draft.matchPatientId);
+  if (modelMatch) return modelMatch;
+
+  const bedKey = normalizeTextKey(draft.bed);
+  const codeKey = normalizeTextKey(draft.patientCode);
+  if (codeKey) {
+    const codeMatch = existingPatients.find((patient) => normalizeTextKey(patient.patientCode) === codeKey);
+    if (codeMatch) return codeMatch;
+  }
+
+  if (bedKey) {
+    return existingPatients.find((patient) => normalizeTextKey(patient.bed) === bedKey);
+  }
+
+  return undefined;
+}
+
+function sanitizeImportTask(value: unknown) {
+  const item = asPlainObject(value);
+  const text = truncateString(item.text, 180).replace(/\s+/g, " ").trim();
+  if (isGenericClinicalFiller(text)) return null;
+
+  const priority = item.priority === "urgent" || item.priority === "low" ? item.priority : "normal";
+  const category = taskCategories.has(String(item.category ?? "")) ? String(item.category) : "other";
+  return {
+    text,
+    priority,
+    dueDate: truncateString(item.dueDate, 20),
+    category,
+  };
+}
+
+function sanitizeImportDraft(value: unknown, index: number, rawText: string, existingPatients: ExistingPatientForBatch[]) {
+  const item = asPlainObject(value);
+  const tasks = Array.isArray(item.tasks)
+    ? item.tasks.map((task) => sanitizeImportTask(task)).filter((task): task is NonNullable<typeof task> => Boolean(task))
+    : [];
+  const baseDraft = {
+    id: truncateString(item.id, 120) || `import-${index + 1}`,
+    status: item.status === "updateCandidate" ? "updateCandidate" : "new",
+    matchPatientId: truncateString(item.matchPatientId, 120),
+    sourceIndex: typeof item.sourceIndex === "number" ? item.sourceIndex : index,
+    bed: truncateString(item.bed, 80),
+    patientCode: truncateString(item.patientCode, 120),
+    age: truncateString(item.age, 12),
+    sex: item.sex === "M" || item.sex === "F" || item.sex === "Other" ? item.sex : "",
+    attending: truncateString(item.attending, 120),
+    teamOrService: truncateString(item.teamOrService, 120),
+    primaryDiagnosis: truncateString(item.primaryDiagnosis, 240),
+    oneLiner: truncateString(item.oneLiner, 300),
+    chiefComplaint: truncateString(item.chiefComplaint, 240),
+    todayUpdates: cleanClinicalLines(item.todayUpdates, 5, 700),
+    vitalSigns: cleanClinicalLines(item.vitalSigns, 4, 500),
+    physicalExam: cleanClinicalLines(item.physicalExam, 5, 700),
+    labText: cleanClinicalLines(item.labText, 10, 1200),
+    imageText: cleanClinicalLines(item.imageText, 8, 1000),
+    admissionSummary: cleanClinicalLines(item.admissionSummary, 5, 900),
+    underlyingDiseases: cleanClinicalLines(item.underlyingDiseases, 8, 700),
+    activeProblems: cleanClinicalLines(item.activeProblems, 8, 900),
+    hospitalCourseHighlights: cleanClinicalLines(item.hospitalCourseHighlights, 8, 900),
+    importantRedFlags: cleanClinicalLines(item.importantRedFlags, 6, 700),
+    tasks,
+    antibioticsProceduresConsults: cleanClinicalArray(item.antibioticsProceduresConsults, 8, 160),
+    dischargePlan: truncateString(item.dischargePlan, 350),
+    disposition: truncateString(item.disposition, 220),
+    uncertainty: cleanClinicalArray(item.uncertainty, 5, 180),
+    sourceExcerpt: truncateString(item.sourceExcerpt, 700),
+  };
+  const allText = [
+    rawText,
+    baseDraft.primaryDiagnosis,
+    baseDraft.oneLiner,
+    baseDraft.todayUpdates,
+    baseDraft.vitalSigns,
+    baseDraft.physicalExam,
+    baseDraft.labText,
+    baseDraft.imageText,
+    baseDraft.activeProblems,
+    baseDraft.hospitalCourseHighlights,
+    baseDraft.importantRedFlags,
+  ].join("\n");
+  const matchedPatient = matchExistingPatient(baseDraft, existingPatients);
+
+  return {
+    ...baseDraft,
+    status: matchedPatient ? "updateCandidate" : baseDraft.status,
+    matchPatientId: matchedPatient?.id ?? "",
+    importantRedFlags: filterStrokePermissiveBpRedFlags(baseDraft.importantRedFlags, allText),
+    tasks: baseDraft.tasks.filter((task) => {
+      if (!shouldSuppressStrokeBpRedFlag(allText)) return true;
+      return !lineLooksLikeBpRedFlag(task.text);
+    }),
+  };
+}
+
+function sanitizePatientBatchOutput(value: unknown, rawText: string, existingPatients: ExistingPatientForBatch[]) {
+  const output = asPlainObject(value);
+  const rawDrafts = Array.isArray(output.drafts) ? output.drafts : [];
+  return rawDrafts
+    .slice(0, 40)
+    .map((item, index) => sanitizeImportDraft(item, index, rawText, existingPatients))
+    .filter((draft) => draft.bed || draft.patientCode || draft.primaryDiagnosis || draft.oneLiner || draft.admissionSummary);
+}
+
+function makeBatchImportPrompt(rawText: string, existingPatients: ExistingPatientForBatch[], importMode: PatientBatchImportMode) {
+  const modeInstructions = importMode === "existingInpatient"
+    ? [
+        "Import mode: existing inpatient / transfer-in.",
+        "- The pasted text may include old admission notes, two-week hospital course, weekly summaries, latest progress, labs, and image reports.",
+        "- Prioritize compressed major hospital course, current active problems, last 24h changes, meaningful labs/images, current A/P, tasks, discharge barriers, and disposition.",
+        "- admissionSummary should be a transfer-in course summary, not a full admission note. Avoid old resolved daily details unless they explain current risk or pending work.",
+        "- Do not frame the patient as a new admission unless the source clearly says this is a new admission today.",
+      ]
+    : [
+        "Import mode: new admissions / mixed list.",
+        "- Prioritize why admitted, HPI/brief presentation, key PMH, initial active problems, initial A/P, immediate tasks, and disposition.",
+      ];
+  return [
+    "Task:",
+    "Extract a pasted inpatient internal medicine service list, handover, or admission batch into patient review cards.",
+    ...modeInstructions,
+    "",
+    "Existing active patients for duplicate matching:",
+    JSON.stringify(existingPatients, null, 2),
+    "",
+    "Extraction rules:",
+    "- Split the pasted text into distinct patients. Use bed, patient code, service headers, diagnosis blocks, or admission separators when present.",
+    "- Never save or imply auto-save. These are review drafts only.",
+    "- If bed or patientCode exactly matches an existing active patient, mark status updateCandidate and set matchPatientId to that existing id. Otherwise status new and matchPatientId empty.",
+    "- Reuse existing IM Rounding Tracker fields: bed, patientCode, age, sex, attending, service, diagnosis, PMH, active problems, course, red flags, tasks, discharge/disposition.",
+    "- Do not invent missing facts. Use empty strings/arrays when absent. Put uncertainty only for real ambiguity that blocks safe review.",
+    "- admissionSummary: 2-4 compact attending-rounds sentences. Include why admitted, key PMH/context, major prior course, active issues, today/pending/disposition.",
+    "- oneLiner: one short diagnosis-oriented line.",
+    "- todayUpdates: last 24h subjective/overnight/transfer status only.",
+    "- vitalSigns: current meaningful V/S and O2 support.",
+    "- physicalExam: clinically relevant PE only.",
+    "- labText: latest meaningful lab panel/trends/cultures as compact raw lab text. Keep unusual but relevant labs, tumor markers, drug levels, cultures, coagulation, ABG/VBG, etc.",
+    "- imageText: latest meaningful imaging/procedure reports as compact raw text.",
+    "- underlyingDiseases: PMH/comorbidities only. activeProblems: current inpatient problems only. Do not duplicate PMH into active problems unless it is actively managed now.",
+    "- hospitalCourseHighlights: key prior events/treatments/procedures/consult decisions only, not every trivial daily note.",
+    "- importantRedFlags: immediate safety or call-threshold issues only. Include concrete trigger/threshold when available.",
+    "- tasks: concrete actions only, usually starting with f/u, repeat, call, consult, order, hold, resume, taper, arrange, educate, DC.",
+    "- antibioticsProceduresConsults: concise list of Abx/procedures/consults when available.",
+    "- dischargePlan and disposition should capture target, barriers, placement, OPD, home O2, meds/certificates, and reminders when available.",
+    "",
+    "Clinical rule starter pack:",
+    "- Stroke/neuro: include neuro deficit, dysphagia/NPO, antiplatelet/anticoag, statin, image pending, rehab/dispo. For acute ischemic stroke without tPA/EVT/ICH/ACS/aortic dissection, do not label BP as urgent uncontrolled if SBP <220 and DBP <120; instead note permissive HTN/BP goal only if useful.",
+    "- Infection/sepsis: prioritize fever, suspected source, cultures pending, antibiotics, lactate, shock/hypotension, source control.",
+    "- Cardio: prioritize HF volume status/O2/diuresis, ACS chest pain/troponin/ECG, AF/RVR rate/anticoag, BNP when useful.",
+    "- Renal: prioritize AKI/CKD, Cr trend, K, I/O, contrast exposure, ACEi/ARB/diuretic cautions, nephro tasks.",
+    "- Endocrine: prioritize hypo/hyperglycemia, DKA/HHS signals, insulin changes, glucose monitoring tasks.",
+    "- GI/anemia: prioritize active bleeding, Hb trend, transfusion, endoscopy, anticoag/antiplatelet decisions.",
+    "- Pulmonary: prioritize O2 requirement, pneumonia Abx, COPD/asthma exacerbation, PE concern, respiratory failure/escalation.",
+    "",
+    "Quality rules:",
+    "- Keep fragments short and clinically useful. Avoid copied full lab panels, copied PMH paragraphs, duplicated diagnoses, and boilerplate.",
+    "- Do not write generic filler such as monitor closely, continue current management, clinical correlation, or stable condition unless paired with a concrete trigger or action.",
+    "- Do not repeat patient names, full MRNs, birthdays, phone numbers, addresses, or identifiable details.",
+    "",
+    "Pasted de-identified text:",
+    rawText,
+  ].join("\n");
 }
 
 function extractOutputText(response: Record<string, unknown>) {
@@ -375,6 +815,7 @@ function makePrompt(sourceType: SourceType, rawText: string, patientContext: Rec
     "- A/P: active problems that change today's management or attending-level understanding. Each problem should have a short label, evidence/course, and concrete plan. Do not create A/P for stable routine values.",
     "- Tasks: actionable work for today or overnight, including f/u labs/images/cultures, consult calls, orders, family communication, discharge paperwork, and reminders.",
     "- Red flags: immediate safety or call-threshold items only, such as unstable V/S, active bleeding, sepsis/shock concern, ACS/stroke concern, worsening oxygenation, dangerous electrolyte/glucose/renal changes, or high-risk pending result.",
+    "- Stroke/neuro: for suspected acute ischemic stroke without tPA/EVT/ICH/ACS/aortic dissection context, permissive hypertension is expected; do not call BP urgently uncontrolled unless SBP >=220, DBP >=120, or another strict indication is present.",
     "- Discharge issues: barriers, target date, placement, home oxygen, OPD/follow-up, medications, certificates, or family/social issues affecting discharge.",
     "- Thinking prompts: questions for clinician review only when the text suggests a real diagnostic or management uncertainty; avoid generic textbook prompts.",
     "- Consult/nursing notes often become tasks, red flags, discharge issues, or overnight events; do not promote them to confirmed diagnoses unless supported by the source text or existing context.",
@@ -384,12 +825,19 @@ function makePrompt(sourceType: SourceType, rawText: string, patientContext: Rec
   ].join("\n");
   const intakeTargets = [
     "Messy chart extraction target:",
+    "- First fill clinicalReasoning before composing SOAP-facing text.",
+    "- clinicalReasoning.primaryRisk must answer: what would a covering IM physician need to know first, and what could deteriorate or change management today/overnight?",
+    "- clinicalReasoning.whyThisMatters must cite short source facts from the pasted text or allowed context; every important conclusion needs a visible basis.",
+    "- clinicalReasoning.activeProblemsRanked must rank problems by current clinical risk and management relevance, not by diagnosis order in the chart.",
+    "- clinicalReasoning.missingDataNeeded should list key facts needed for safe handoff, e.g. ANC when WBC is very low, culture status, fever curve, O2 requirement, I/O, Cr/K trend, anticoag plan, discharge blocker.",
+    "- clinicalReasoning.noiseToIgnore should list stable normals, duplicated history, boilerplate, and stale issues that should not appear in SOAP.",
     "- Treat pasted text as unordered chart fragments; remove duplicated, stale, administrative, and low-signal lines.",
     "- Surface only information that changes rounding, orders, handoff safety, discharge planning, or attending-level understanding.",
     "- Prioritize: why admitted, important PMH, active problems, major prior hospital course, today's meaningful updates, tasks/pending items/red flags, key labs/images/antibiotics/procedures/consults/disposition.",
     "- Keep all output concise and scannable. Use common IM abbreviations when unambiguous.",
     "- admissionSummary: 3-4 compact attending-rounds sentences. Include admission reason, PMH/context, major course, current active problems, today/pending/dispo. Leave empty only if the pasted text has no admission/course context.",
     "- isbarHandoff: concise SBAR with headings exactly Situation, Background, Assessment, Recommendation. Include red flags, pending tasks, contingency/call parameters, and disposition. Leave empty only if there is too little patient context.",
+    "- Remove boilerplate and generic phrases like monitor closely, continue current management, clinical correlation, and stable condition unless tied to a concrete trigger, action, or call threshold.",
     "- For vitals/lab/image-only source types, do not fabricate admissionSummary or isbarHandoff from isolated data; leave those fields empty unless the pasted text includes enough broader context.",
     "",
   ].join("\n");
@@ -527,6 +975,12 @@ function documentTypeLabel(documentType: DocumentType) {
 
 function documentInstructions(documentType: DocumentType) {
   const shared = [
+    "First fill clinicalReasoning before composing document sections.",
+    "clinicalReasoning.primaryRisk must state what a covering IM physician needs to know first, including partially improved but still unsafe states.",
+    "clinicalReasoning.activeProblemsRanked must rank by current clinical risk and management relevance, not by the order of source notes.",
+    "clinicalReasoning.whyThisMatters must cite short source facts and implications so the clinician can independently review the basis.",
+    "clinicalReasoning.noiseToIgnore should name stable normals, duplicated history, and boilerplate that should not enter the final note.",
+    "Final document text must be a concise projection of clinicalReasoning, not generic AI prose.",
     "Use concise inpatient IM style with common unambiguous medical abbreviations.",
     "Do not invent missing data; mark absent or unclear details in uncertainty.",
     "Preserve dates, lab values, units, medication names, image findings, and pending items exactly when available.",
@@ -561,8 +1015,8 @@ function documentInstructions(documentType: DocumentType) {
     ],
     weeklySummary: [
       "Return exactly three sections in this order: Weekly Summary, Problem-Based A/P, Pending / Disposition.",
-      "Weekly Summary content must start exactly with: During this week,",
-      "Weekly Summary is one compact paragraph summarizing the selected SOAP notes chronologically with key changes and response to treatment.",
+      "Weekly Summary content must start with the current clinical focus and primary risk, not a generic date phrase.",
+      "Weekly Summary is one compact paragraph summarizing the selected SOAP notes by clinical trajectory: active issue, response to treatment, unresolved risk, and why still admitted.",
       "Problem-Based A/P should follow progress-note/SOAP logic: active problems only, short assessment plus concrete plan; omit stable inactive problems.",
       "Pending / Disposition should include pending labs/images/consults, discharge barriers, target disposition, and follow-up needs.",
       "Exclude trivial normal daily updates and copied full lab panels unless they changed management.",
@@ -572,11 +1026,12 @@ function documentInstructions(documentType: DocumentType) {
       "Return exactly four sections in this exact order: Situation, Background, Assessment, Recommendation.",
       "Follow the standard SBAR pattern: current situation, pertinent background, clinical assessment, and requested/recommended action.",
       "Target total length: 8-12 short clinical lines, under 180 words when possible.",
-      "Situation: include bed/code if available, age/sex, attending/service if relevant, current working Dx, why handoff is needed now, and current status; never use name, full MRN, birthday, phone, address, or ID.",
+      "Situation: lead with clinicalReasoning.primaryRisk. Include bed/code if available, age/sex, attending/service if relevant, current working Dx, why handoff is needed now, and current status; never use name, full MRN, birthday, phone, address, or ID.",
       "Background: include only high-yield PMH, important prior hospital events, key procedures, antibiotics, consults, and major image/lab findings that matter for handoff.",
-      "Assessment: include active problems, severity, red flags, and key abnormal objective data requiring attention.",
-      "Recommendation: include overnight/today tasks, pending labs/images/consults, contingency plans, call thresholds, discharge/disposition plan, and what not to miss.",
+      "Assessment: use ranked active problems from clinicalReasoning with evidence and severity; avoid vague labels without source facts.",
+      "Recommendation: include today/overnight actions, pending labs/images/consults, contingency plans, call thresholds, discharge/disposition plan, and missing data from clinicalReasoning.",
       "Do not include routine normal data, duplicated diagnosis paragraphs, generic legal disclaimers, empty sections, long admission-note prose, copied full lab panels, or low-signal stable daily updates.",
+      "Do not use generic filler such as monitor closely unless paired with a specific trigger, call threshold, or action.",
       "Put pending tasks and uncertainty inside Recommendation when possible; use followUpItems or uncertainty only if a critical item does not fit in the four sections.",
     ],
   };
@@ -609,6 +1064,113 @@ function makeDocumentPrompt(params: {
     params.rawText || "(none)",
   ].join("\n");
 }
+
+export const analyzePatientBatchText = onCall(
+  {
+    secrets: [OPENAI_API_KEY],
+    timeoutSeconds: 120,
+    memory: "512MiB",
+  },
+  async (request) => {
+    if (!request.auth) {
+      throw new HttpsError("unauthenticated", "Sign in is required before using Bulk Patient Import.");
+    }
+
+    const data = request.data as PatientBatchCallableInput;
+    const rawText = String(data.rawText ?? "").trim();
+    const deidentifiedConfirmed = data.deidentifiedConfirmed === true;
+    const existingPatients = sanitizeExistingPatientsForBatch(data.existingPatients);
+    const importMode = sanitizePatientBatchImportMode(data.importMode);
+
+    if (!deidentifiedConfirmed) {
+      throw new HttpsError("failed-precondition", "Confirm that the text is de-identified before batch analysis.");
+    }
+
+    if (rawText.length < 40) {
+      throw new HttpsError("invalid-argument", "Paste a longer de-identified service list or handover batch.");
+    }
+
+    if (rawText.length > MAX_RAW_TEXT_CHARS) {
+      throw new HttpsError("invalid-argument", `Text is too long. Limit input to ${MAX_RAW_TEXT_CHARS} characters.`);
+    }
+
+    const apiKey = getOpenAiApiKey();
+    if (!apiKey) {
+      throw new HttpsError("failed-precondition", "Bulk Patient Import is not configured. Set OPENAI_API_KEY for Firebase Functions.");
+    }
+
+    const model = getModel();
+    const openAiResponse = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model,
+        input: [
+          {
+            role: "system",
+            content: [
+              "You extract de-identified inpatient internal medicine batch handover text into structured review drafts.",
+              "Return JSON only matching the supplied schema.",
+              "The output is draft only. A clinician must review each card before saving.",
+              "AI extracts and classifies facts into slots; deterministic rules and clinician review decide what is saved.",
+              "Do not invent missing facts, do not repeat identifying details, and do not produce freeform narrative outside the schema.",
+              "Use terse hospital-rounds language with common unambiguous abbreviations.",
+            ].join(" "),
+          },
+          {
+            role: "user",
+            content: makeBatchImportPrompt(rawText, existingPatients, importMode),
+          },
+        ],
+        text: {
+          format: {
+            type: "json_schema",
+            name: "patient_batch_import_draft",
+            description: "Bulk patient import draft cards for clinician review in IM Rounding Tracker.",
+            strict: true,
+            schema: patientBatchImportSchema,
+          },
+        },
+      }),
+    });
+
+    const responseBody = (await openAiResponse.json().catch(() => ({}))) as Record<string, unknown>;
+    if (!openAiResponse.ok) {
+      throw new HttpsError("internal", getOpenAiErrorMessage(openAiResponse.status, responseBody));
+    }
+
+    const refusal = extractRefusal(responseBody);
+    if (refusal) {
+      throw new HttpsError("failed-precondition", refusal);
+    }
+
+    const outputText = extractOutputText(responseBody);
+    if (!outputText) {
+      throw new HttpsError("internal", "OpenAI returned no patient import draft.");
+    }
+
+    let parsedDraft: unknown;
+    try {
+      parsedDraft = JSON.parse(outputText);
+    } catch (error) {
+      logger.error("Failed to parse OpenAI batch import JSON", { error });
+      throw new HttpsError("internal", "OpenAI returned malformed patient import JSON.");
+    }
+
+    const rawTextPreview = rawText.slice(0, 700);
+    const drafts = sanitizePatientBatchOutput(parsedDraft, rawText, existingPatients);
+
+    return {
+      draftId: admin.firestore().collection("_aiDraftIds").doc().id,
+      drafts,
+      model,
+      rawTextPreview,
+    };
+  },
+);
 
 export const analyzeClinicalText = onCall(
   {
@@ -679,6 +1241,9 @@ export const analyzeClinicalText = onCall(
             content: [
               "You organize de-identified internal medicine clinical text into a SOAP draft.",
               "Return JSON only matching the supplied schema.",
+              "Use AI clinical reasoning explicitly: identify the main current risk, evidence, ranked active problems, missing data, and noise before writing the SOAP-facing fields.",
+              "clinicalReasoning is the source of truth for what matters; SOAP-facing fields must be concise projections of that reasoning, not freeform prose.",
+              "If the patient's most important issue is risk after partial improvement, state it directly, e.g. resolved fever but persistent leukopenia, improving oxygenation but still on O2, AKI improving but K/Cr still unsafe.",
               "Do not invent missing data. Use empty strings or empty arrays when data is absent.",
               "Preserve dates, lab values, units, and abnormal findings exactly when available.",
               "Keep all SOAP-facing text concise and easy to scan for inpatient IM rounds.",
@@ -698,6 +1263,7 @@ export const analyzeClinicalText = onCall(
               "Do not convert normal stable V/S, unchanged chronic problems, routine negative imaging, or generic nursing status into A/P items.",
               "Consult recommendations usually belong in tasks or planItems; nursing notes usually belong in overnightEvents, tasks, redFlags, or dischargeIssues depending on urgency.",
               "Red flags must be actionable and specific enough for handoff; avoid vague warnings like 'monitor closely' unless a trigger or threshold is included.",
+              "For acute ischemic stroke without tPA/EVT/ICH/ACS/aortic dissection context, do not label BP as urgent uncontrolled if SBP <220 and DBP <120; use permissive HTN/BP-goal wording only when helpful.",
               "Tasks should start with an action verb when possible: f/u, repeat, call, consult, order, hold, resume, taper, DC, arrange, educate.",
               "For subjective.importantSymptoms and subjective.importantOvernightEvents, include only patient-reported or overnight items that should appear on the board/rounding list; otherwise return empty arrays.",
               "For S/O/A/P importance, be selective: mark isImportant true only when the item affects today's rounds, orders, handoff, discharge readiness, or safety.",

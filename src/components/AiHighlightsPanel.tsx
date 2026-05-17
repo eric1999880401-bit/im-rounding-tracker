@@ -41,11 +41,21 @@ function sectionPreview(value: string, maxSections = 3) {
 }
 
 function buildPlanText(...values: string[]) {
+  const seen = new Set<string>();
   return values
     .flatMap((value) => value.split(/\r?\n/))
     .map((line) => line.trim())
     .filter(Boolean)
-    .slice(0, 5)
+    .filter((line) => {
+      const clean = line.toLowerCase();
+      const key = /neutropenic|leukopen|anc|wbc/.test(clean)
+        ? "neutropenic-risk"
+        : clean.replace(/[^\p{L}\p{N}]+/gu, "");
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, 3)
     .join("\n");
 }
 
@@ -54,7 +64,7 @@ export function AiHighlightsPanel({
   notes = [],
   compact = false,
   className = "",
-  showSbar = true,
+  showSbar = false,
 }: AiHighlightsPanelProps) {
   const digest = getRoundingDigest(patient, notes, {
     mode: compact ? "board" : "rounds",
@@ -68,8 +78,8 @@ export function AiHighlightsPanel({
 
   if (!hasAiDocument) return null;
 
-  const seeFirst = digest.urgentLines.map((line) => `!${line}`).join("\n");
-  const planText = buildPlanText(digest.assessmentPlan, digest.tasks, digest.discharge);
+  const seeFirst = compact ? digest.urgentLines.slice(0, 1).map((line) => `!${line}`).join("\n") : "";
+  const planText = buildPlanText(digest.assessmentPlan);
   const showPlan = !compact && hasText(planText);
   const showCourse = !compact && hasText(hospitalCourse);
   const showSbarPreview = showSbar && hasText(sbarPreview);
@@ -86,7 +96,7 @@ export function AiHighlightsPanel({
         {seeFirst && (
           <div className="ai-highlight-block ai-highlight-critical">
             <span className="board-label">See first</span>
-            <ClinicalText value={seeFirst} maxLines={compact ? 2 : 4} maxCharsPerLine={compact ? 48 : 68} importantDefault />
+            <ClinicalText value={seeFirst} maxLines={compact ? 1 : 2} maxCharsPerLine={compact ? 48 : 68} importantDefault />
           </div>
         )}
         {aiSummary && (
@@ -98,7 +108,7 @@ export function AiHighlightsPanel({
         {showPlan && (
           <div className="ai-highlight-block">
             <span className="board-label">Active plan</span>
-            <ClinicalText value={planText} maxLines={compact ? 3 : 5} maxCharsPerLine={compact ? 48 : 70} />
+            <ClinicalText value={planText} maxLines={compact ? 2 : 3} maxCharsPerLine={compact ? 48 : 70} />
           </div>
         )}
         {showCourse && (

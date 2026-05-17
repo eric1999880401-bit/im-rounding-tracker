@@ -36,7 +36,7 @@ function PrintRoundingListPage({
 }: PageProps) {
   const t = useT();
   const [printMode, setPrintMode] = useState("all");
-  const [admissionBriefPrintMode, setAdmissionBriefPrintMode] = useState("newAdmissions");
+  const [admissionBriefPrintMode, setAdmissionBriefPrintMode] = useState("compact");
   const [selectedAttending, setSelectedAttending] = useState("");
   const [hideCompletedTasks, setHideCompletedTasks] = useState(true);
   const [density, setDensity] = useState<PrintDensity>("compact");
@@ -151,11 +151,78 @@ function PrintRoundingListPage({
       .trim();
   }
 
+  function removePrintEllipsis(value: string) {
+    return value
+      .replace(/\bClarify current and HBV if\.{3}/i, "Clarify immunosupp/HBV status")
+      .replace(/\bif\.{3}$/i, "")
+      .replace(/\s*\.{3,}\s*/g, " ")
+      .replace(/\s+(?:and|or|if|with|for|to|of)$/i, "")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function displayPrintLine(value: string) {
+    return removePrintEllipsis(cleanPrintLine(value)
+      .replace(/^!+/, "")
+      .replace(/^(\w[\w/ ]{0,12}:\s*)!?\s*(?:critical|urgent)\s*:\s*/i, "$1* ")
+      .replace(/^\s*(?:critical|urgent)\s*:\s*/i, "* ")
+      .replace(/\b(?:critical|urgent)\s*:\s*/gi, "* ")
+      .replace(/\[\s*URGENT\s*\]\s*/gi, "* ")
+      .replace(/\bhigh-normal\b/gi, "\u2197 nl")
+      .replace(/\blow-normal\b/gi, "\u2198 nl")
+      .replace(/\bhigh\b/gi, "\u2191")
+      .replace(/\blow\b/gi, "\u2193")
+      .trim());
+  }
+
+  function isImportantPrintLine(value: string) {
+    return /^!/.test(value.trim()) || /\bcritical\b|\burgent\b|\[URGENT\]|\bLab\s+\*/i.test(value);
+  }
+
+  function printListItems(value: string) {
+    const seen = new Set<string>();
+    return value
+      .split(/\r?\n|;\s*|\s+\|\s+/)
+      .map((line) => ({ raw: line, text: displayPrintLine(line) }))
+      .filter((item) => item.text)
+      .filter((item) => {
+        const key = item.text.toLowerCase();
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+  }
+
+  function printItemClassName(item: { raw: string; text: string }) {
+    return [
+      "print-soap-item",
+      isImportantPrintLine(item.raw) || item.text.startsWith("*") ? "print-soap-important" : "",
+      /^Lab \*/i.test(item.text) ? "print-lab-critical-line" : "",
+      /^Lab \u0394/i.test(item.text) ? "print-lab-trend-line" : "",
+      /^Lab Ref/i.test(item.text) ? "print-lab-ref-line" : "",
+    ].filter(Boolean).join(" ");
+  }
+
+  function simpleRedFlagText(value: string) {
+    return cleanPrintLine(value)
+      .replace(/^!+/, "")
+      .replace(/:\s*(?:f\/u|follow|trend|verify|confirm|clarify|review|call|repeat|check|order|consult|start|stop|hold|resume|Cx|Abx|CBC|ANC).*/i, "")
+      .trim();
+  }
+
   function shortText(value: string, maxChars = printLimits().detailChars) {
     const clean = cleanPrintLine(value);
     if (clean.length <= maxChars) return clean;
     const firstClause = clean.split(/[;\n\u3002\uFF1B]/)[0]?.trim() || clean;
     return toShortWords(firstClause, maxChars);
+  }
+
+  function cleanPrintTail(value: string) {
+    let clean = value.replace(/\s+[+,;:-]\s*$/g, "").trim();
+    for (let index = 0; index < 2; index += 1) {
+      clean = clean.replace(/\s+\b(?:if|and|or|with|without|w\/|for|to|from|of|the|a|an|when|as)\b\.?$/i, "").trim();
+    }
+    return clean;
   }
 
   function toShortWords(value: string, maxChars = printLimits().detailChars) {
@@ -179,16 +246,14 @@ function PrintRoundingListPage({
       .trim();
     if (clean.length <= maxChars) return clean;
 
-    const suffix = "...";
-    const limit = Math.max(8, maxChars - suffix.length);
+    const limit = Math.max(8, maxChars);
     const words = clean.split(" ");
     const kept: string[] = [];
     words.forEach((word) => {
       const next = [...kept, word].join(" ");
       if (next.length <= limit) kept.push(word);
     });
-    const shortened = kept.join(" ") || clean.slice(0, limit).trim();
-    return `${shortened}${suffix}`;
+    return cleanPrintTail(kept.join(" ") || clean.slice(0, limit).trim());
   }
 
   function splitClinicalClauses(value: string) {
@@ -200,14 +265,14 @@ function PrintRoundingListPage({
   }
 
   function lowValueClause(value: string) {
-    return /\b(unremarkable|normal|no acute|no definite|no evidence|negative for|within normal|stable|unchanged|mild atrophy|elderly|small vessel disease|degenerative|pulse \+|no cv angle|no cva)\b/i.test(value);
+    return /\b(unremarkable|normal|no acute|no definite|no evidence|negative for|within normal|stable|unchanged|mild atrophy|elderly|small vessel disease|degenerative|pulse \+|no cv angle|no cva|no ich|no hemorrhage|no intracranial hemorrhage)\b/i.test(value);
   }
 
   function clinicalSignalScore(value: string, kind: "image" | "pe") {
     const text = value.toLowerCase();
     let score = 0;
     if (/!|critical|urgent|pending|new|acute|worsen|progress/.test(text)) score += 5;
-    if (kind === "image" && /infarct|stroke|ich|hemorrhage|bleed|hypodense|stenosis|occlusion|aneurysm|mass|tumou?r|abscess|pneumonia|edema|effusion|pe\b|dvt|fracture|hematoma|obstruction|pending|unelicitable/.test(text)) score += 7;
+    if (kind === "image" && /infarct|stroke|ich|hemorrhage|bleed|hypodense|stenosis|occlusion|aneurysm|mass|tumou?r|abscess|pneumonia|\bpna\b|edema|effusion|pe\b|dvt|fracture|hematoma|obstruction|pending|unelicitable/.test(text)) score += 7;
     if (kind === "pe" && /weak|palsy|dysarth|aphasia|numb|sensory|motor|nystagmus|facial|pale|jaundice|crackle|wheeze|rales|murmur|jvp|edema|tender|guard|distend|melena|blood|cyanosis|rash|wound|pus|erythem|pooling|discharge/.test(text)) score += 7;
     if (/\b(r|l|rt|lt|right|left|bil|b\/l)\b/.test(text)) score += 1;
     if (/\d/.test(text)) score += 1;
@@ -284,8 +349,9 @@ function PrintRoundingListPage({
     if (/a[\s-]*to[\s-]*a|artery[\s-]*to[\s-]*artery/.test(lower)) tags.push("r/o A-A");
     if (/ramsay/.test(lower)) tags.push("Ramsay Hunt");
     if (/parkinson/.test(lower)) tags.push("Parkinson");
+    if (/cholangitis/.test(lower) && /sepsis|septic|shock/.test(lower)) tags.push("cholangitis sepsis");
+    else if (/sepsis|septic/.test(lower)) tags.push("sepsis");
     if (/pneumonia|\bpna\b/.test(lower)) tags.push("PNA");
-    if (/sepsis/.test(lower)) tags.push("sepsis");
     if (/urinary tract infection|\buti\b/.test(lower)) tags.push("UTI");
     if (/postmenopausal bleeding|vaginal bleeding|\bpmb\b/.test(lower)) tags.push("PMB");
     if (/diabetes|dm/.test(lower) && /poor|uncontrol|hypergly/.test(lower)) tags.push("DM poor ctrl");
@@ -344,7 +410,10 @@ function PrintRoundingListPage({
     if (/infection|sepsis|pneumonia|\bpna\b/.test(lower)) tags.push(/pneumonia|\bpna\b/.test(lower) ? "PNA" : "infection");
     if (/dysphag|swallow/.test(lower)) tags.push("dysphagia");
     if (/carotid|mca|ica/.test(lower) && /stenos/.test(lower)) tags.push("large-vessel stenosis");
-    if (/weak|paresis|palsy|numbness|sensory/.test(lower)) tags.push("neuro deficit");
+    const hasFocalNeuroDeficit =
+      /hemiparesis|hemiplegia|aphasia|dysarth|facial droop|cn\s*[ivx]+|palsy|numbness|sensory loss|focal deficit/.test(lower) ||
+      (/weak/.test(lower) && /\b(stroke|neuro|focal|hemip|cva|spinal|cord)\b/.test(lower));
+    if (hasFocalNeuroDeficit) tags.push("neuro deficit");
 
     const maxItems = density === "ultra-compact" ? 2 : 4;
     return joinTags(tags, maxItems);
@@ -401,8 +470,6 @@ function PrintRoundingListPage({
       [
         patient.hospitalCourseHighlights,
         patient.earlyHospitalCourse,
-        patient.generatedWeeklySummary,
-        patient.generatedDischargeSummary,
       ],
       density === "ultra-compact" ? 1 : 2,
       printLimits().detailChars,
@@ -419,7 +486,7 @@ function PrintRoundingListPage({
       }
       return importantPattern.test(item);
     });
-    return compactList(items, Math.max(items.length, maxItems), maxChars);
+    return compactList(items, maxItems, maxChars);
   }
 
   function shortDateSortValue(value: string) {
@@ -436,13 +503,38 @@ function PrintRoundingListPage({
     });
   }
 
-  function labFocusText(patient: Patient) {
-    return getLabFocusSummary(patient, dailyNotesByPatient[patient.id] ?? [], {
-      maxCritical: 99,
-      maxTrend: 99,
-      maxAnchors: 99,
+  function labFocusGroups(patient: Patient) {
+    const labFocus = getLabFocusSummary(patient, dailyNotesByPatient[patient.id] ?? [], {
+      maxCritical: 3,
+      maxTrend: 4,
+      maxAnchors: 3,
       separator: " | ",
-    }).text.replace(/\s*\|\s*\+\d+\s+labs\b/g, "").replace(/\n\+\d+\s+labs\b/g, "").trim();
+    });
+    return [
+      { label: "*", title: "Important labs", items: labFocus.critical.map((item) => displayPrintLine(item)), className: "print-lab-row-critical" },
+      { label: "\u0394", title: "Abnormal / trend labs", items: labFocus.trend.map((item) => displayPrintLine(item)), className: "print-lab-row-trend" },
+      { label: "Ref", title: "Reference labs", items: labFocus.anchors.map((item) => displayPrintLine(item)), className: "print-lab-row-ref" },
+    ].filter((group) => group.items.length > 0);
+  }
+
+  function renderLabMiniTable(patient: Patient) {
+    const groups = labFocusGroups(patient);
+    if (groups.length === 0) return null;
+
+    return (
+      <div className="print-lab-mini-table" aria-label="Lab focus" role="table">
+        {groups.map((group) => (
+          <div className={`print-lab-mini-row ${group.className}`} key={group.label} role="row">
+            <span className="print-lab-mini-label" role="rowheader" title={group.title}>
+              {group.label}
+            </span>
+            <span className="print-lab-mini-values" role="cell">
+              {group.items.join(", ")}
+            </span>
+          </div>
+        ))}
+      </div>
+    );
   }
 
   function renderPrintLabFocus(patient: Patient) {
@@ -458,7 +550,7 @@ function PrintRoundingListPage({
       { label: "Anchor", items: labFocus.anchors, important: false },
     ].filter((group) => group.items.length > 0);
 
-    if (groups.length === 0) return labFocusText(patient);
+    if (groups.length === 0) return null;
 
     return (
       <div className="print-lab-groups">
@@ -545,6 +637,52 @@ function PrintRoundingListPage({
     }).assessmentPlan.replace(/\n/g, "; ");
   }
 
+  function patientContextText(patient: Patient) {
+    return removePrintEllipsis([
+      diagnosisSummary(patient) ? `Dx ${diagnosisSummary(patient)}` : "",
+      riskSummary(patient) ? `PMH ${riskSummary(patient)}` : "",
+      issueSummary(patient) ? `Issues ${issueSummary(patient)}` : "",
+    ].filter(Boolean).join(" | "));
+  }
+
+  function subjectiveSoapText(patient: Patient) {
+    return compactList(
+      [
+        patient.subjectiveOrChiefConcern,
+        patient.overnightEvent,
+        patient.oneLiner || diagnosisSummary(patient),
+      ].flatMap(clinicalItems),
+      density === "ultra-compact" ? 2 : 3,
+      printLimits().detailChars,
+    );
+  }
+
+  function objectiveSoapText(patient: Patient) {
+    return [
+      importantObjectiveText(patient.vitalSigns, printLimits().chars, 1),
+      importantObjectiveText(patient.bloodSugar, printLimits().chars, 1),
+      peSummaryText(patient) ? `PE: ${peSummaryText(patient)}` : "",
+    ].filter(Boolean).join("; ");
+  }
+
+  function imageSoapText(patient: Patient) {
+    const images = imageLines(patient);
+    return images.length > 0 ? `Img: ${images.join("; ")}` : "";
+  }
+
+  function assessmentSoapText(patient: Patient) {
+    return assessmentPlanSummaryText(patient) || issueSummary(patient) || diagnosisSummary(patient);
+  }
+
+  function taskDcText(patient: Patient) {
+    const prep = dischargePrepText(patient);
+    return [
+      taskSummaryText(patient),
+      patient.dischargePlan ? `DC: ${compactText(patient.dischargePlan, printLimits().dcChars, 1)}` : "",
+      prep ? `Prep: ${prep}` : "",
+    ].filter(Boolean).join("; ");
+  }
+
   function blockField(label: string, value: ReactNode) {
     if (value === null || value === undefined || value === false) return null;
     if (typeof value === "string" && !value.trim()) return null;
@@ -555,14 +693,49 @@ function PrintRoundingListPage({
     );
   }
 
-  function sectionBox(title: string, items: ReactNode[]) {
-    const visibleItems = items.filter(Boolean);
-    if (visibleItems.length === 0) return null;
+  function sectionBox(title: string, value: string, extra?: ReactNode) {
+    const visibleItems = printListItems(value);
+    if (visibleItems.length === 0 && !extra) return null;
     return (
       <div className="print-section-box">
         <div className="print-section-title">{title}</div>
-        {visibleItems}
+        {visibleItems.length > 0 && (
+          <ul className="print-soap-list">
+            {visibleItems.map((item, index) => (
+              <li className={printItemClassName(item)} key={`${title}-${item.text}-${index}`}>
+                {item.text}
+              </li>
+            ))}
+          </ul>
+        )}
+        {extra}
       </div>
+    );
+  }
+
+  function renderPrintItems(value: string, keyPrefix: string) {
+    const visibleItems = printListItems(value);
+    if (visibleItems.length === 0) return null;
+    return (
+      <ul className="print-soap-list print-soap-list-extra">
+        {visibleItems.map((item, index) => (
+          <li className={printItemClassName(item)} key={`${keyPrefix}-${item.text}-${index}`}>
+            {item.text}
+          </li>
+        ))}
+      </ul>
+    );
+  }
+
+  function objectiveExtra(patient: Patient) {
+    const lab = renderLabMiniTable(patient);
+    const image = renderPrintItems(imageSoapText(patient), `${patient.id}-image`);
+    if (!lab && !image) return null;
+    return (
+      <>
+        {lab}
+        {image}
+      </>
     );
   }
 
@@ -622,26 +795,12 @@ function PrintRoundingListPage({
 
         <div className="print-patient-list">
           {sectionPatients.map((patient) => {
-            const images = imageLines(patient);
-            const redFlags = allClinicalText(patient.importantRedFlags, printLimits().detailChars);
-            const todayUpdate = compactList(
-              [patient.overnightEvent, patient.subjectiveOrChiefConcern].flatMap(clinicalItems),
-              printLimits().subjective,
+            const redFlags = compactList(
+              clinicalItems(patient.importantRedFlags).map(simpleRedFlagText),
+              printLimits().redFlags,
               printLimits().detailChars,
             );
-            const objectiveSignals = [
-              importantObjectiveText(patient.vitalSigns, printLimits().chars, 1),
-              importantObjectiveText(patient.bloodSugar, printLimits().chars, 1),
-            ]
-              .filter(Boolean)
-              .join("; ");
-            const dischargeSummary = [
-              patient.dischargeTargetDate ? `Target ${patient.dischargeTargetDate}` : "",
-              compactText(patient.dischargePlan, printLimits().dcChars, 1),
-              patient.dischargeBarriers ? `Barrier: ${shortText(patient.dischargeBarriers, printLimits().dcChars)}` : "",
-            ]
-              .filter(Boolean)
-              .join("; ");
+            const redFlagItems = printListItems(redFlags);
 
             return (
               <article className="print-patient-block" key={patient.id}>
@@ -654,35 +813,28 @@ function PrintRoundingListPage({
                   {patient.teamOrService && <span>Svc: {patient.teamOrService}</span>}
                 </div>
 
-                {redFlags && (
+                {patientContextText(patient) && (
+                  <div className="print-patient-context">{patientContextText(patient)}</div>
+                )}
+
+                {redFlagItems.length > 0 && (
                   <div className="print-red-flags">
-                    <strong>Red Flags:</strong> {redFlags}
+                    <strong>Red Flags:</strong>
+                    <ul className="print-soap-list print-red-flag-list">
+                      {redFlagItems.map((item, index) => (
+                        <li className="print-soap-item print-soap-important" key={`red-${patient.id}-${item.text}-${index}`}>
+                          {item.text}
+                        </li>
+                      ))}
+                    </ul>
                   </div>
                 )}
 
                 <div className="print-summary-grid">
-                  {sectionBox("Clinical Picture", [
-                    blockField("Dx", diagnosisSummary(patient)),
-                    blockField("Brief", presentationSummary(patient)),
-                    blockField("PMH", pmhSummary(patient) || riskSummary(patient)),
-                    blockField("Active", activeProblemSummary(patient) || issueSummary(patient)),
-                    blockField("Course", courseSummary(patient)),
-                  ])}
-                  {sectionBox("Today / Results", [
-                    blockField("Today", todayUpdate),
-                    blockField("VS/BS", objectiveSignals),
-                    blockField("PE", peSummaryText(patient)),
-                    blockField("Lab", renderPrintLabFocus(patient)),
-                    images.length > 0 ? blockField("Img", images.join("; ")) : null,
-                    blockField("Tx/Consult", careMilestoneText(patient)),
-                  ])}
-                  {sectionBox("Plan / Tasks / DC", [
-                    blockField("A/P", assessmentPlanSummaryText(patient)),
-                    blockField("Tasks", taskSummaryText(patient)),
-                    blockField("Orders", compactText(patient.vsOrder, printLimits().dcChars, 1)),
-                    blockField("DC", dischargeSummary),
-                    blockField("Prep", dischargeSummary ? dischargePrepText(patient) : ""),
-                  ])}
+                  {sectionBox("S", subjectiveSoapText(patient))}
+                  {sectionBox("O", objectiveSoapText(patient), objectiveExtra(patient))}
+                  {sectionBox("A/P", assessmentSoapText(patient))}
+                  {sectionBox("Tasks / DC", taskDcText(patient))}
                 </div>
               </article>
             );

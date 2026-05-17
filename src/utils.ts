@@ -579,15 +579,156 @@ function todayDate() {
 }
 
 const labValuePattern = "([<>]?[0-9]+(?:\\.[0-9]+)?%?\\+?)";
+const labFlagPattern = "(?:\\s*(?:\\[?([HL])\\]?|([↑↓↗↘])|\\b(high|low|elevated|decreased|positive|negative|pos|neg|reactive|nonreactive|detected|not detected)\\b))?";
+const labUnitPattern = "(ng\\/mL|ng\\/L|pg\\/mL|ug\\/mL|µg\\/mL|mcg\\/mL|mg\\/dL|g\\/dL|k\\/uL|10\\^3\\/uL|mmol\\/L|mEq\\/L|U\\/L|IU\\/L|%)";
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function unitAfterMatch(line: string, matchIndex: number | undefined, value: string) {
+  if (matchIndex === undefined || !value) return "";
+  const after = line.slice(matchIndex);
+  return after.match(new RegExp(`${escapeRegExp(value)}\\s*${labUnitPattern}`, "i"))?.[1] ?? "";
+}
+
+function normalizeLabNote(...values: Array<string | undefined>) {
+  const raw = values.find((value) => value && value.trim())?.trim() ?? "";
+  if (!raw) return "";
+  const lower = raw.toLowerCase();
+  if (raw === "↑" || raw === "↗" || lower === "h" || lower === "high" || lower === "elevated") return "H";
+  if (raw === "↓" || raw === "↘" || lower === "l" || lower === "low" || lower === "decreased") return "L";
+  if (lower === "pos") return "positive";
+  if (lower === "neg") return "negative";
+  return raw;
+}
+
+function normalizeGenericLabLabel(value: string) {
+  const clean = value
+    .replace(/^(?:lab|labs|latest|today|repeat|trend)\s+/i, "")
+    .replace(/\b(?:level|value|result)$/i, "")
+    .replace(/\s+/g, " ")
+    .replace(/^[,;:=-]+|[,;:=-]+$/g, "")
+    .trim();
+  const dictionary = findLabDictionaryItem(clean);
+  if (dictionary) return dictionary.displayName;
+  const canonical = canonicalLabKey(clean);
+  if (canonical && canonical.toLowerCase() !== clean.toLowerCase()) return canonical;
+  return /^[A-Za-z0-9+./-]{2,4}$/.test(clean) ? clean.replace(/[a-z]/g, (letter) => letter.toUpperCase()) : clean;
+}
+
+function shouldSkipGenericLabLabel(value: string) {
+  const clean = value.trim();
+  if (clean.length < 2 || clean.length > 30) return true;
+  if (findLabDictionaryItem(clean)) return true;
+  const compact = clean.toLowerCase().replace(/[^a-z0-9]+/g, "");
+  if (!compact || /^\d+$/.test(compact)) return true;
+  return /^(bp|hr|rr|bt|temp|spo2|sat|fio2|ef|pasp|day|date|age|bed|room|rm|pt|patient|code|dose|qd|bid|tid|qid|mg|kg|cm|min|hour|hr|afebrile|febrile|fever)$/i.test(compact);
+}
+
+function parsedLabItem(
+  label: string,
+  value: string,
+  previousValue: string,
+  important: boolean,
+  groupHint: string,
+  note = "",
+  unitOverride = "",
+): ParsedLabItem {
+  const dictionaryItem = findLabDictionaryItem(label);
+  const normalizedLabel = normalizeLabDisplayName(label);
+  const dictionaryGroup = dictionaryItem?.group ?? labGroupFor(normalizedLabel);
+  const group = groupHint || dictionaryGroup;
+  const commonUnit = dictionaryItem?.commonUnits[0] ?? "";
+  const unit = unitOverride || (/^Troponin(?:\s+[IT])?$/i.test(normalizedLabel) ? "" : commonUnit);
+
+  return {
+    label: normalizedLabel,
+    name: normalizedLabel,
+    value,
+    previousValue,
+    group,
+    important,
+    isImportant: important,
+    unit: unit === "%" && value.includes("%") ? "" : unit,
+    color: "",
+    note,
+  };
+}
 
 function parseLabItemsFromLine(line: string, important: boolean, groupHint = "") {
   const items: ParsedLabItem[] = [];
-  const pattern = new RegExp(`(?:^|\\b)(${labAliasPattern()})\\.?\\s*${labValuePattern}(?:\\s*\\(\\s*${labValuePattern}\\s*\\))?`, "gi");
+  const directionalKeys = new Set<string>();
+  const tumorMarkerPattern = new RegExp(
+    `\\b(CA\\s*19[-\\s]?9|CA\\s*125|CA\\s*15[-\\s]?3|AFP|CEA|SCC|PSA)\\s*${labValuePattern}(?:\\s*(?:\\(\\s*${labValuePattern}\\s*\\)|from(?:\\s+baseline)?\\s*${labValuePattern}))?${labFlagPattern}`,
+    "gi",
+  );
+  const drugLevelPattern = new RegExp(
+    `\\b(Vanco(?:mycin)?|Vancomycin|Digoxin|Phenytoin|Dilantin|Valproate|VPA)(?:\\s+(?:trough|level))?\\s*${labValuePattern}${labFlagPattern}`,
+    "gi",
+  );
+  const cultureStatusPattern = /\b(Blood culture|B\/C|BCx|Sputum culture|S\/C|SCx|Urine culture|U\/C|UCx)\s*(?:\d{1,2}\/\d{1,2})?\s*(?:[:=-])?\s*(pending|no growth|negative|positive|growth[^,;\n]*)/gi;
+  const directionalPattern = new RegExp(
+    `(?:^|\\b)(${labAliasPattern()})\\.?\\s*${labValuePattern}\\s*(?:->|→|to)\\s*${labValuePattern}${labFlagPattern}`,
+    "gi",
+  );
+  const genericDirectionalPattern = new RegExp(
+    `(?:^|[,;])\\s*([A-Za-z][A-Za-z0-9+./() -]{1,28}?)\\s*${labValuePattern}\\s*(?:->|→|to)\\s*${labValuePattern}${labFlagPattern}`,
+    "gi",
+  );
+  const pattern = new RegExp(
+    `(?:^|\\b)(${labAliasPattern()})\\.?\\s*${labValuePattern}(?:\\s*(?:\\(\\s*${labValuePattern}\\s*\\)|from(?:\\s+baseline)?\\s*${labValuePattern}))?${labFlagPattern}`,
+    "gi",
+  );
+  const genericPattern = new RegExp(
+    `(?:^|[,;])\\s*([A-Za-z][A-Za-z0-9+./() -]{1,28}?)\\s*(?:[:=])?\\s*${labValuePattern}(?:\\s*(?:\\(\\s*${labValuePattern}\\s*\\)|from(?:\\s+baseline)?\\s*${labValuePattern}))?${labFlagPattern}`,
+    "gi",
+  );
+  const qualitativePattern = new RegExp(
+    `(?:^|\\b)(${labAliasPattern()})\\.?\\s*(?::|=)?\\s*(positive|negative|pos|neg|reactive|nonreactive|detected|not detected|pending|no growth|growth[^,;\\n]*)`,
+    "gi",
+  );
+  const genericQualitativePattern = /(?:^|[,;])\s*([A-Za-z][A-Za-z0-9+./() -]{1,28}?)\s*(?::|=)\s*(positive|negative|pos|neg|reactive|nonreactive|detected|not detected|pending|no growth|growth[^,;\n]*)/gi;
   const uaContext = /\b(UA|urine|urinalysis)\b/i.test(groupHint) || /\b(UA|urine|urinalysis)\s*:?\b/i.test(line);
+
+  Array.from(line.matchAll(tumorMarkerPattern)).forEach((match) => {
+    const label = normalizeGenericLabLabel(match[1]);
+    directionalKeys.add(canonicalLabKey(label));
+    items.push(parsedLabItem(label, match[2], match[3] ?? match[4] ?? "", important, groupHint || "Tumor / Special common", normalizeLabNote(match[5], match[6], match[7]), unitAfterMatch(line, match.index, match[2])));
+  });
+
+  Array.from(line.matchAll(drugLevelPattern)).forEach((match) => {
+    const label = normalizeGenericLabLabel(match[1]);
+    directionalKeys.add(canonicalLabKey(label));
+    items.push(parsedLabItem(label, match[2], "", important, groupHint || "Drug levels", normalizeLabNote(match[3], match[4], match[5]), unitAfterMatch(line, match.index, match[2])));
+  });
+
+  Array.from(line.matchAll(cultureStatusPattern)).forEach((match) => {
+    const label = normalizeLabDisplayName(match[1]);
+    directionalKeys.add(canonicalLabKey(label));
+    items.push(parsedLabItem(label, normalizeLabNote(match[2]) || match[2], "", important, groupHint || "Inflammation / Infection", normalizeLabNote(match[2])));
+  });
+
+  Array.from(line.matchAll(directionalPattern)).forEach((match) => {
+    const label = normalizeLabDisplayName(match[1]);
+    directionalKeys.add(canonicalLabKey(label));
+    items.push(parsedLabItem(label, match[3], match[2], important, groupHint, normalizeLabNote(match[4], match[5], match[6]) || "trend", unitAfterMatch(line, match.index, match[3])));
+  });
+
+  Array.from(line.matchAll(genericDirectionalPattern)).forEach((match) => {
+    const label = normalizeGenericLabLabel(match[1]);
+    if (shouldSkipGenericLabLabel(label) || findLabDictionaryItem(label)) return;
+    directionalKeys.add(canonicalLabKey(label));
+    items.push(parsedLabItem(label, match[3], match[2], important, groupHint || "Other labs", normalizeLabNote(match[4], match[5], match[6]) || "trend", unitAfterMatch(line, match.index, match[3])));
+  });
 
   Array.from(line.matchAll(pattern)).forEach((match) => {
     const dictionaryItem = findLabDictionaryItem(match[1]);
     const normalizedLabel = normalizeLabDisplayName(match[1]);
+    if (dictionaryItem?.valueType === "culture") return;
+    const matchedText = line.slice(match.index ?? 0);
+    if (normalizedLabel === "Ca" && /^ca\s*\d/i.test(matchedText)) return;
+    if (directionalKeys.has(canonicalLabKey(normalizedLabel))) return;
     const dictionaryGroup = dictionaryItem?.group ?? labGroupFor(normalizedLabel);
     const group = groupHint || dictionaryGroup;
     const label =
@@ -597,19 +738,44 @@ function parseLabItemsFromLine(line: string, important: boolean, groupHint = "")
           ? "Glucose urine"
         : normalizedLabel;
     const commonUnit = dictionaryItem?.commonUnits[0] ?? "";
+    const inlineUnit = unitAfterMatch(line, match.index, match[2]);
+    const unit = inlineUnit || (/^Troponin(?:\s+[IT])?$/i.test(label) ? "" : commonUnit);
 
     items.push({
       label,
       name: label,
       value: match[2],
-      previousValue: match[3] ?? "",
+      previousValue: match[3] ?? match[4] ?? "",
       group: label.startsWith("UA ") || label === "Glucose urine" ? "Urinalysis" : group,
       important,
       isImportant: important,
-      unit: commonUnit === "%" && match[2].includes("%") ? "" : commonUnit,
+      unit: unit === "%" && match[2].includes("%") ? "" : unit,
       color: "",
-      note: "",
+      note: normalizeLabNote(match[5], match[6], match[7]),
     });
+  });
+
+  Array.from(line.matchAll(genericPattern)).forEach((match) => {
+    const label = normalizeGenericLabLabel(match[1]);
+    if (directionalKeys.has(canonicalLabKey(label)) || shouldSkipGenericLabLabel(label) || findLabDictionaryItem(label)) return;
+    const note = normalizeLabNote(match[5], match[6], match[7]);
+    const hasContext = Boolean(groupHint) || /\b(lab|cbc|chem|renal|electrolyte|coag|tumou?r|marker|level|culture|serum|plasma|urine)\b/i.test(line);
+    const hasSignal = Boolean(note || match[3] || match[4]);
+    if (!hasContext && !hasSignal && /\s/.test(label)) return;
+    items.push(parsedLabItem(label, match[2], match[3] ?? match[4] ?? "", important, groupHint || "Other labs", note, unitAfterMatch(line, match.index, match[2])));
+  });
+
+  Array.from(line.matchAll(qualitativePattern)).forEach((match) => {
+    const label = normalizeLabDisplayName(match[1]);
+    if (items.some((item) => canonicalLabKey(item.label) === canonicalLabKey(label) && item.value.toLowerCase() === match[2].toLowerCase())) return;
+    items.push(parsedLabItem(label, normalizeLabNote(match[2]) || match[2], "", important, groupHint, normalizeLabNote(match[2])));
+  });
+
+  Array.from(line.matchAll(genericQualitativePattern)).forEach((match) => {
+    const label = normalizeGenericLabLabel(match[1]);
+    if (shouldSkipGenericLabLabel(label) || findLabDictionaryItem(label)) return;
+    if (items.some((item) => canonicalLabKey(item.label) === canonicalLabKey(label))) return;
+    items.push(parsedLabItem(label, normalizeLabNote(match[2]) || match[2], "", important, groupHint || "Other labs", normalizeLabNote(match[2])));
   });
 
   return items;
@@ -759,6 +925,7 @@ function canonicalLabKey(label: string) {
   if (normalized.includes("ntprobnp") || normalized.includes("ntprobnp")) return "NT-proBNP";
   if (normalized === "probnp") return "NT-proBNP";
   if (normalized.includes("bnp")) return "BNP";
+  if (normalized.includes("vanco")) return "Vancomycin";
   if (normalized.includes("hba1c") || normalized === "a1c") return "HbA1c";
   if (normalized === "chol" || normalized.includes("cholesterol")) return "Cholesterol";
   if (normalized === "tg" || normalized.includes("triglyceride")) return "TG";
@@ -788,7 +955,9 @@ function canonicalLabKey(label: string) {
   if (normalized === "scc") return "SCC";
   if (normalized === "esr") return "ESR";
   if (normalized === "fib" || normalized.includes("fibrinogen")) return "Fibrinogen";
-  if (normalized === "troponin" || normalized === "trop" || normalized.includes("troponini")) return "Troponin";
+  if (normalized.includes("troponini") || normalized === "tni" || normalized === "hstni") return "Troponin I";
+  if (normalized.includes("troponint") || normalized === "tnt" || normalized === "hstnt") return "Troponin T";
+  if (normalized === "troponin" || normalized === "trop") return "Troponin";
   return normalizeLabDisplayName(label);
 }
 
@@ -796,6 +965,31 @@ function labDisplayLabel(key: string) {
   if (key === "Cholesterol") return "Chol";
   if (key === "Glucose") return "Glu";
   return key;
+}
+
+function labQualitativeLevel(key: string, item: ParsedLabItem) {
+  const text = `${item.value} ${item.note ?? ""}`.toLowerCase();
+  if (!text.trim()) return 0;
+  if (/\b(?:h|high|elevated|l|low|decreased|positive|pos|reactive|detected|growth|trend)\b|[↑↓↗↘]/i.test(text)) return 1;
+  if (/\bpending\b/i.test(text) && /culture|cx|bcx|ucx|scx/i.test(key)) return 1;
+  return 0;
+}
+
+function labFocusSuffix(item: ParsedLabItem) {
+  const note = String(item.note ?? "").trim();
+  if (!note || note === "trend") return "";
+  if (note.toLowerCase() === String(item.value ?? "").trim().toLowerCase()) return "";
+  if (note === "H") return "↑";
+  if (note === "L") return "↓";
+  if (/^(positive|detected|reactive|growth)/i.test(note)) return "+";
+  return ` ${note}`;
+}
+
+function labFocusUnitText(key: string, item: ParsedLabItem) {
+  const unit = String(item.unit ?? "").trim();
+  if (!unit) return "";
+  if (/^(?:Troponin|Troponin I|Troponin T|Vancomycin|BNP|NT-proBNP|PCT)$/i.test(key)) return ` ${unit}`;
+  return "";
 }
 
 function labClinicalNumericValue(key: string, value: number | null) {
@@ -874,7 +1068,9 @@ function labAbnormalLevel(key: string, value: number | null) {
     case "Alb":
       return value < 3 ? 1 : 0;
     case "Troponin":
-      return value > 0 ? 2 : 0;
+    case "Troponin I":
+    case "Troponin T":
+      return 0;
     default:
       return 0;
   }
@@ -910,6 +1106,10 @@ function meaningfulLabDelta(key: string, value: number | null, previous: number 
     case "BNP":
     case "NT-proBNP":
       return percent >= 0.3;
+    case "Troponin":
+    case "Troponin I":
+    case "Troponin T":
+      return percent >= 0.2;
     default:
       return percent >= 0.35;
   }
@@ -974,11 +1174,22 @@ function collectLabObservations(patient: Patient, notes: DailyNote[] = []) {
     reports.forEach((report) => addItems(report.items, report.date || fallbackDate));
   }
 
+  function addRawText(value: string, date: string) {
+    const parsed = parseLabText(value);
+    if (parsed.length > 0) addItems(parsed, date);
+  }
+
   addReports(patient.labReports, patient.labDate || todayKey());
   if (patient.labReports.length === 0) addItems(patient.parsedLabItems, patient.labDate || todayKey());
+  if (patient.labReports.length === 0 && patient.parsedLabItems.length === 0) {
+    addRawText([patient.rawLabText, patient.newLabs].filter(Boolean).join("\n"), patient.labDate || todayKey());
+  }
   notes.forEach((note) => {
     addReports(note.labReports, note.labDate || note.date);
     if (note.labReports.length === 0) addItems(note.parsedLabItems, note.labDate || note.date);
+    if (note.labReports.length === 0 && note.parsedLabItems.length === 0) {
+      addRawText([note.rawLabText, note.labSummary].filter(Boolean).join("\n"), note.labDate || note.date);
+    }
   });
 
   const seen = new Set<string>();
@@ -1020,14 +1231,15 @@ export function getLabFocusSummary(
     const rawPrevious = numericLabValue(latest.previousValue) ?? numericLabValue(previousObservation?.value ?? "");
     const value = labClinicalNumericValue(key, rawValue);
     const previous = labClinicalNumericValue(key, rawPrevious);
-    const level = labAbnormalLevel(key, value);
+    const qualitativeLevel = labQualitativeLevel(key, latest.item);
+    const level = Math.max(labAbnormalLevel(key, value), qualitativeLevel);
     const hasDelta = meaningfulLabDelta(key, value, previous);
     const anchor = isDiseaseAnchorLab(key, patient) && shouldShowAnchorLab(key, level);
     const direction = value !== null ? labDirection(key, value, previous) : latest.previousValue ? `(${latest.previousValue})` : "";
     const formattedValue = value !== null ? formatLabFocusValue(key, value) : latest.value;
-    const text = `${labDisplayLabel(key)} ${formattedValue}${direction}`;
+    const text = `${labDisplayLabel(key)} ${formattedValue}${labFocusUnitText(key, latest.item)}${direction}${labFocusSuffix(latest.item)}`;
     const critical = level >= 2;
-    const trend = hasDelta || (level >= 1 && !anchor) || level >= 2;
+    const trend = hasDelta || qualitativeLevel >= 1 || (level >= 1 && !anchor) || level >= 2;
     const score = level * 100 + Number(hasDelta) * 35 + Number(anchor) * 25 + Number(latest.item.important || latest.item.isImportant) * 40;
 
     if (critical || trend || anchor) {

@@ -1,5 +1,9 @@
 .print-sheet {
   background: white;
+  margin-inline: auto;
+  max-width: 1120px;
+  overflow: hidden;
+  width: 100%;
 }
 
 .print-page {
@@ -211,8 +215,12 @@
 }
 
 .print-red-flags {
+  align-items: start;
   border: 0.5px solid #b42318;
   color: #b42318 !important;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 2px;
   font-weight: 800;
   font-size: var(--print-font-size);
   line-height: var(--print-line-height);
@@ -501,6 +509,7 @@
 .print-patient-list {
   border: 1px solid #1f2933;
   display: grid;
+  font-size: var(--print-font-size);
   gap: 0;
 }
 
@@ -510,6 +519,7 @@
   break-inside: auto;
   color: black;
   display: grid;
+  font-size: var(--print-font-size);
   gap: 2px;
   line-height: var(--print-line-height);
   padding: var(--print-cell-padding);
@@ -530,10 +540,18 @@
   line-height: var(--print-line-height);
 }
 
+.print-patient-context {
+  color: #1f2933;
+  font-size: var(--print-small-font-size);
+  font-weight: 700;
+  line-height: var(--print-line-height);
+  overflow-wrap: break-word;
+}
+
 .print-summary-grid {
   display: grid;
   gap: 2px;
-  grid-template-columns: minmax(0, 1.05fr) minmax(0, 1.1fr) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.15fr) minmax(0, 1.25fr) minmax(0, 1fr);
 }
 
 .print-section-box {
@@ -542,6 +560,8 @@
   border-radius: 2px;
   break-inside: auto;
   display: block;
+  font-size: var(--print-font-size);
+  line-height: var(--print-line-height);
   padding: var(--print-card-padding);
   page-break-inside: auto;
 }
@@ -555,6 +575,109 @@
   margin-bottom: 1px;
   padding-bottom: 1px;
   text-transform: uppercase;
+  white-space: normal;
+}
+
+.print-soap-list {
+  display: grid;
+  gap: 1px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.print-soap-list-extra {
+  margin-top: 1px;
+}
+
+.print-soap-item {
+  border-left: 1px solid #94a3b8;
+  line-height: var(--print-line-height);
+  overflow-wrap: anywhere;
+  padding-left: 3px;
+}
+
+.print-soap-important {
+  border-color: #b42318;
+  color: #b42318 !important;
+  font-weight: 800;
+}
+
+.print-lab-critical-line {
+  background: #fff1f0;
+  border-color: #b42318;
+}
+
+.print-lab-trend-line {
+  background: #fff8e6;
+  border-color: #b7791f;
+  color: #744210 !important;
+  font-weight: 700;
+}
+
+.print-lab-ref-line {
+  background: #f8fafc;
+  border-color: #94a3b8;
+  color: #334155 !important;
+}
+
+.print-lab-mini-table {
+  display: grid;
+  font-size: var(--print-font-size);
+  gap: 1px;
+  line-height: var(--print-line-height);
+  margin-top: 1px;
+  width: 100%;
+}
+
+.print-lab-mini-row {
+  align-items: start;
+  border-top: 0.5px solid #d9e2ec;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  min-width: 0;
+}
+
+.print-lab-mini-label {
+  font-weight: 900;
+  letter-spacing: 0;
+  line-height: var(--print-line-height);
+  padding: 0 2px;
+  text-transform: none;
+  white-space: nowrap;
+}
+
+.print-lab-mini-values {
+  line-height: var(--print-line-height);
+  min-width: 0;
+  overflow-wrap: anywhere;
+  padding: 0 2px;
+}
+
+.print-lab-row-critical .print-lab-mini-label,
+.print-lab-row-critical .print-lab-mini-values {
+  background: #fff1f0 !important;
+  color: #b42318 !important;
+  font-weight: 800;
+}
+
+.print-lab-row-trend .print-lab-mini-label,
+.print-lab-row-trend .print-lab-mini-values {
+  background: #fff8e6 !important;
+  color: #744210 !important;
+  font-weight: 700;
+}
+
+.print-lab-row-ref .print-lab-mini-label,
+.print-lab-row-ref .print-lab-mini-values {
+  background: #f8fafc !important;
+  color: #334155 !important;
+}
+
+.print-red-flag-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1px 5px;
 }
 
 .print-block-field {
@@ -729,6 +852,9 @@
     background: white !important;
     color: black !important;
     display: block;
+    margin: 0;
+    max-width: none;
+    overflow: visible;
     width: 100%;
   }
 

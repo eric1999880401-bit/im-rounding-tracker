@@ -1,4 +1,5 @@
 import type { AiDocumentDraft } from "./types";
+import { formatReasoningAdmissionSummary, formatReasoningSbar, formatReasoningWeeklySummary, hasClinicalReasoning } from "./clinicalKnowledge";
 
 function sectionContent(draft: AiDocumentDraft | null, headings: string[]) {
   if (!draft) return "";
@@ -46,6 +47,9 @@ function compactSbarContent(value: string) {
 }
 
 function formatSbarDraft(draft: AiDocumentDraft) {
+  if (hasClinicalReasoning(draft.clinicalReasoning)) {
+    return formatReasoningSbar(draft.clinicalReasoning);
+  }
   const pending = draft.followUpItems.map(compactSbarContent).filter(Boolean).join("; ");
   const verify = draft.uncertainty.map(compactSbarContent).filter(Boolean).join("; ");
   const identify = compactSbarContent(sectionContent(draft, ["Identify"]));
@@ -67,6 +71,9 @@ function formatSbarDraft(draft: AiDocumentDraft) {
 }
 
 function formatWeeklyDraft(draft: AiDocumentDraft) {
+  if (hasClinicalReasoning(draft.clinicalReasoning)) {
+    return formatReasoningWeeklySummary(draft.clinicalReasoning);
+  }
   const summary = ensureWeeklyOpening(sectionContent(draft, ["weekly summary", "summary"]) || draft.conciseSummary);
   const problemPlan = normalizeBlock(
     sectionContent(draft, ["problem-based", "assessment", "a/p", "plan"]) ||
@@ -118,6 +125,9 @@ export function formatClinicalDocumentDraft(draft: AiDocumentDraft) {
   }
 
   if (draft.documentType === "admissionSummary") {
+    if (hasClinicalReasoning(draft.clinicalReasoning)) {
+      return formatReasoningAdmissionSummary(draft.clinicalReasoning);
+    }
     return normalizeParagraph(draft.conciseSummary || draft.sections.map((section) => section.content).join(" "));
   }
 

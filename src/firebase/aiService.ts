@@ -2,6 +2,8 @@ import { httpsCallable } from "firebase/functions";
 import type {
   AnalyzeClinicalTextInput,
   AnalyzeClinicalTextResult,
+  AnalyzePatientBatchTextInput,
+  AnalyzePatientBatchTextResult,
   GenerateClinicalDocumentInput,
   GenerateClinicalDocumentResult,
 } from "../types";
@@ -17,8 +19,18 @@ const generateClinicalDocumentCallable = httpsCallable<GenerateClinicalDocumentI
   "generateClinicalDocument",
 );
 
+const analyzePatientBatchTextCallable = httpsCallable<AnalyzePatientBatchTextInput, AnalyzePatientBatchTextResult>(
+  functions,
+  "analyzePatientBatchText",
+);
+
 export async function analyzeClinicalText(input: AnalyzeClinicalTextInput) {
   const result = await analyzeClinicalTextCallable(input);
+  return result.data;
+}
+
+export async function analyzePatientBatchText(input: AnalyzePatientBatchTextInput) {
+  const result = await analyzePatientBatchTextCallable(input);
   return result.data;
 }
 

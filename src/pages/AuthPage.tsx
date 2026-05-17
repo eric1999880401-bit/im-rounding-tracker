@@ -19,7 +19,11 @@ function formatAuthError(error: unknown) {
   return error instanceof Error ? error.message : "Authentication failed.";
 }
 
-function AuthPage() {
+interface AuthPageProps {
+  onStartDemo?: () => void;
+}
+
+function AuthPage({ onStartDemo }: AuthPageProps) {
   const [email, setEmail] = useState("");
   const [userName, setUserName] = useState("");
   const [password, setPassword] = useState("");
@@ -105,6 +109,12 @@ function AuthPage() {
         <button type="submit" disabled={isSubmitting}>
           {isSubmitting ? "Please wait..." : mode === "login" ? "Log in" : mode === "reset" ? "Send reset email" : "Create account"}
         </button>
+
+        {onStartDemo && (
+          <button type="button" className="secondary" onClick={onStartDemo}>
+            Open local demo with fake data
+          </button>
+        )}
 
         {mode === "login" && (
           <button type="button" className="text-button" onClick={() => setMode("reset")}>

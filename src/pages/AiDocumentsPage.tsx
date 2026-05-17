@@ -1,8 +1,9 @@
 import { useMemo, useState } from "react";
 import { generateClinicalDocument } from "../firebase/aiService";
-import type { AiDocumentDraft, AiDocumentType, DailyNotesByPatient, Patient } from "../types";
+import type { AiDocumentDraft, AiDocumentType, DailyNote, DailyNotesByPatient, GeneratedClinicalPlan, Patient } from "../types";
 import { getAdmissionSummaryText, nowIso, todayKey } from "../utils";
 import { formatClinicalDocumentDraft, getClinicalDocumentSection } from "../clinicalDocumentFormat";
+import { applyClinicalKnowledgeToText, formatRuleBasedAdmissionSummary, formatRuleBasedSbar, formatRuleBasedWeeklySummary } from "../clinicalKnowledge";
 
 const OTHER_PATIENT_ID = "__other_patient__";
 
@@ -149,6 +150,57 @@ function selectedDocumentLabel(documentType: AiDocumentType) {
   return documentOptions.find((option) => option.value === documentType)?.label ?? "AI document";
 }
 
+function patientRuleContext(patient?: Patient, notes: DailyNote[] = []) {
+  if (!patient) return "";
+  return [
+    patient.primaryDiagnosis,
+    patient.oneLiner,
+    getAdmissionSummaryText(patient),
+    patient.underlyingDiseases,
+    patient.admissionPMH,
+    patient.activeProblems,
+    patient.hospitalCourseHighlights,
+    patient.importantRedFlags,
+    patient.vitalSigns,
+    patient.bloodSugar,
+    patient.newLabs,
+    patient.newImaging,
+    patient.assessment,
+    patient.plan,
+    patient.dischargePlan,
+    patient.tasks.map((task) => task.text).join("\n"),
+    notes
+      .map((note) =>
+        [
+          note.date,
+          note.importantRedFlags,
+          note.overnightEvents,
+          note.subjectiveOrChiefConcern,
+          note.vitalSigns,
+          note.bloodSugar,
+          note.labSummary,
+          note.imageSummary,
+          note.assessment,
+          note.plan,
+          note.dischargePlan,
+        ].filter(Boolean).join(" "),
+      )
+      .join("\n"),
+  ].filter(Boolean).join("\n");
+}
+
+function hasClinicalRuleSignal(plan: GeneratedClinicalPlan) {
+  return plan.ruleMatches.length > 0 || plan.redFlags.length > 0 || plan.todayTasks.length > 0 || plan.problemBasedAP.length > 0;
+}
+
+function formatRuleReviewedDocument(documentType: AiDocumentType, plan: GeneratedClinicalPlan) {
+  if (!hasClinicalRuleSignal(plan)) return "";
+  if (documentType === "admissionSummary") return formatRuleBasedAdmissionSummary(plan);
+  if (documentType === "isbar") return formatRuleBasedSbar(plan);
+  if (documentType === "weeklySummary") return formatRuleBasedWeeklySummary(plan);
+  return "";
+}
+
 function AiDocumentsPage({ patients, dailyNotesByPatient = {}, onSavePatient }: AiDocumentsPageProps) {
   const activePatients = patients.filter((patient) => patient.status === "active");
   const [patientId, setPatientId] = useState("");
@@ -194,15 +246,26 @@ function AiDocumentsPage({ patients, dailyNotesByPatient = {}, onSavePatient }: 
         deidentifiedConfirmed,
         storeRawText,
       });
-      const formatted = formatClinicalDocumentDraft(result.draft);
+      const rulePlan = applyClinicalKnowledgeToText(
+        [rawText, patientRuleContext(selectedPatient, notesInRange)].filter(Boolean).join("\n"),
+        {
+          pmh: selectedPatient ? [selectedPatient.underlyingDiseases, selectedPatient.admissionPMH].filter(Boolean) : [],
+          activeProblems: selectedPatient ? [selectedPatient.activeProblems, selectedPatient.primaryDiagnosis].filter(Boolean) : [],
+        },
+      );
+      const ruleFormatted = formatRuleReviewedDocument(documentType, rulePlan);
+      const formatted = ruleFormatted || formatClinicalDocumentDraft(result.draft);
       setDraft(result.draft);
       setDraftId(result.draftId);
       setModel(result.model);
       setEditableText(formatted);
+      const ruleNote = hasClinicalRuleSignal(rulePlan)
+        ? ` Clinical Knowledge review applied: ${rulePlan.ruleMatches.map((match) => match.title).join(", ") || "needs clinical review"}.`
+        : "";
       setStatusMessage(
         isOtherPatient
-          ? `Standalone draft created. It is not attached to a patient. Draft ID: ${result.draftId}`
-          : `Draft created. Review before saving. Draft ID: ${result.draftId}`,
+          ? `Standalone draft created. It is not attached to a patient.${ruleNote} Draft ID: ${result.draftId}`
+          : `Draft created. Review before saving.${ruleNote} Draft ID: ${result.draftId}`,
       );
     } catch (nextError) {
       setError(getErrorMessage(nextError));
