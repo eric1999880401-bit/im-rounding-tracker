@@ -261,6 +261,21 @@ function friendlyBulkImportError(error: unknown, hasTargetPatient: boolean) {
   return "Bulk import analysis failed. No patient data was saved.";
 }
 
+function aiFailureReason(error: unknown) {
+  const value = error as { code?: string; message?: string };
+  const code = String(value?.code ?? "").toLowerCase();
+  const message = String(value?.message ?? "").trim();
+  if (code.includes("unauthenticated")) return "Sign in again, then retry.";
+  if (code.includes("failed-precondition") || /not configured|openai_api_key/i.test(message)) {
+    return "AI backend is not configured (OPENAI_API_KEY missing in Firebase Functions).";
+  }
+  if (code.includes("resource-exhausted") || /quota|rate limit/i.test(message)) {
+    return "AI quota or rate limit reached. Retry later.";
+  }
+  if (message) return message;
+  return "Unknown AI error.";
+}
+
 function looksLikeDiscreteTargetUpdate(rawText: string) {
   const hasReportOrLabSignal =
     /\b(impression|report|ct|mri|cxr|echo|sono|ultrasound|x-ray|xray|image|imaging|lab|wbc|hb|hgb|plt|cr|bun|na|k|inr|pt|aptt|lactate|crp|pct|troponin|bnp|culture|vanco)\b/i.test(rawText);
@@ -614,8 +629,9 @@ function PatientBoardPage({
         if (fallbackDrafts.length > 0) {
           setBulkDrafts(fallbackDrafts);
           setSelectedDraftIds(new Set(fallbackDrafts.map((draft) => draft.id)));
+          const reason = aiFailureReason(error);
           setBulkStatus(
-            `AI service failed, so a local update draft was created for ${targetPatient.bed || targetPatient.patientCode || "the selected patient"}. Review carefully before saving.`,
+            `AI service failed (${reason}), so a local update draft was created for ${targetPatient.bed || targetPatient.patientCode || "the selected patient"}. Review carefully before saving.`,
           );
           return;
         }
