@@ -301,6 +301,10 @@ export function emptyDailyNote(date = todayKey()): DailyNote {
   const now = nowIso();
   return {
     date,
+    soapText: "",
+    soapStatus: "draft",
+    soapUpdatedAt: "",
+    soapVersion: 1,
     importantRedFlags: "",
     overnightEvents: "",
     subjectiveOrChiefConcern: "",
@@ -400,6 +404,7 @@ function latestNoteWith(notes: DailyNote[], predicate: (note: DailyNote) => bool
 
 export function getLatestNonEmptyDailyNote(notes: DailyNote[]) {
   return latestNoteWith(notes, (note) =>
+    hasText(note.soapText) ||
     hasText(note.importantRedFlags) ||
     hasText(note.overnightEvents) ||
     hasText(note.subjectiveOrChiefConcern) ||

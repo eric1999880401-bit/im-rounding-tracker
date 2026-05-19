@@ -597,6 +597,101 @@
   padding-left: 3px;
 }
 
+.print-visual-list {
+  display: grid;
+  gap: 1px;
+}
+
+.print-visual-row {
+  align-items: start;
+  background: #ffffff;
+  border: 0.5px solid #cbd5e1;
+  border-left: 2px solid #94a3b8;
+  border-radius: 2px;
+  display: grid;
+  gap: 2px;
+  grid-template-columns: 24px minmax(0, 1fr);
+  line-height: var(--print-line-height);
+  min-width: 0;
+  padding: 1px 2px;
+}
+
+.print-visual-label {
+  background: #e5e7eb;
+  border: 0.5px solid #cbd5e1;
+  border-radius: 2px;
+  color: #111827;
+  font-size: var(--print-chip-font-size);
+  font-weight: 900;
+  letter-spacing: -0.02em;
+  line-height: 1;
+  padding: 1px;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.print-visual-text {
+  color: #000000;
+  font-weight: 650;
+  line-height: var(--print-line-height);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.print-visual-s {
+  border-left-color: #64748b;
+}
+
+.print-visual-vs {
+  border-left-color: #475569;
+}
+
+.print-visual-pe {
+  border-left-color: #4d7c0f;
+}
+
+.print-visual-lab {
+  background: #fff8e6;
+  border-color: #f0c36d;
+  border-left-color: #b7791f;
+}
+
+.print-visual-image {
+  border-left-color: #2563eb;
+}
+
+.print-visual-ap {
+  border-left-color: #334155;
+}
+
+.print-visual-task {
+  border-left-color: #6b7280;
+}
+
+.print-visual-dc {
+  border-left-color: #92400e;
+}
+
+.print-visual-red,
+.print-visual-critical {
+  background: #fff1f0;
+  border-color: #d92d20;
+  border-left-color: #b42318;
+}
+
+.print-visual-red .print-visual-label,
+.print-visual-critical .print-visual-label {
+  background: #ffffff;
+  border-color: #d92d20;
+  color: #b42318;
+}
+
+.print-visual-red .print-visual-text,
+.print-visual-critical .print-visual-text {
+  color: #b42318 !important;
+  font-weight: 900;
+}
+
 .print-soap-important {
   border-color: #b42318;
   color: #b42318 !important;
@@ -632,17 +727,26 @@
 
 .print-lab-mini-row {
   align-items: start;
-  border-top: 0.5px solid #d9e2ec;
+  background: #ffffff;
+  border: 0.5px solid #cbd5e1;
+  border-left: 2px solid #b7791f;
+  border-radius: 2px;
   display: grid;
-  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 2px;
+  grid-template-columns: 24px minmax(0, 1fr);
   min-width: 0;
+  padding: 1px 2px;
 }
 
 .print-lab-mini-label {
+  background: #e5e7eb;
+  border: 0.5px solid #cbd5e1;
+  border-radius: 2px;
   font-weight: 900;
-  letter-spacing: 0;
-  line-height: var(--print-line-height);
-  padding: 0 2px;
+  letter-spacing: -0.02em;
+  line-height: 1;
+  padding: 1px;
+  text-align: center;
   text-transform: none;
   white-space: nowrap;
 }
@@ -661,6 +765,11 @@
   font-weight: 800;
 }
 
+.print-lab-row-critical {
+  border-color: #d92d20;
+  border-left-color: #b42318;
+}
+
 .print-lab-row-trend .print-lab-mini-label,
 .print-lab-row-trend .print-lab-mini-values {
   background: #fff8e6 !important;
@@ -668,10 +777,19 @@
   font-weight: 700;
 }
 
+.print-lab-row-trend {
+  border-color: #f0c36d;
+  border-left-color: #b7791f;
+}
+
 .print-lab-row-ref .print-lab-mini-label,
 .print-lab-row-ref .print-lab-mini-values {
   background: #f8fafc !important;
   color: #334155 !important;
+}
+
+.print-lab-row-ref {
+  border-left-color: #64748b;
 }
 
 .print-red-flag-list {
@@ -867,6 +985,48 @@
 
   .print-section-box {
     background-color: #f8fafc !important;
+  }
+
+  .print-visual-row {
+    background-color: #ffffff !important;
+    border-color: #cbd5e1 !important;
+    border-left-color: #94a3b8 !important;
+  }
+
+  .print-visual-label {
+    background-color: #e5e7eb !important;
+    border-color: #cbd5e1 !important;
+    color: #000000 !important;
+  }
+
+  .print-visual-lab {
+    background-color: #fff8e6 !important;
+    border-color: #f0c36d !important;
+    border-left-color: #b7791f !important;
+  }
+
+  .print-visual-pe {
+    border-left-color: #4d7c0f !important;
+  }
+
+  .print-visual-image {
+    border-left-color: #2563eb !important;
+  }
+
+  .print-visual-dc {
+    border-left-color: #92400e !important;
+  }
+
+  .print-visual-red,
+  .print-visual-critical {
+    background-color: #fff1f0 !important;
+    border-color: #d92d20 !important;
+    border-left-color: #b42318 !important;
+  }
+
+  .print-visual-red .print-visual-label,
+  .print-visual-critical .print-visual-label {
+    color: #b42318 !important;
   }
 
   .print-ap-problem,

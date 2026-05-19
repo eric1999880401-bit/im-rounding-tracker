@@ -147,6 +147,10 @@ function normalizeAiThinkingPrompt(item: Partial<AiThinkingPrompt>): AiThinkingP
 function normalizeDailyNote(date: string, data: Partial<DailyNote>): DailyNote {
   return {
     date: normalizeDateKey(data.date ?? date, date),
+    soapText: data.soapText ?? "",
+    soapStatus: data.soapStatus === "reviewed" ? "reviewed" : "draft",
+    soapUpdatedAt: data.soapUpdatedAt ?? "",
+    soapVersion: typeof data.soapVersion === "number" ? data.soapVersion : 1,
     importantRedFlags: data.importantRedFlags ?? "",
     overnightEvents: data.overnightEvents ?? "",
     subjectiveOrChiefConcern: data.subjectiveOrChiefConcern ?? "",

@@ -14,10 +14,12 @@ import {
   formatDateLabel,
   plainClinicalText,
   sortPatients,
+  todayKey,
 } from "../utils";
 import { ClinicalText } from "../components/ClinicalText";
 import { useT } from "../i18n";
 import { getRoundingDigest } from "../roundingDigest";
+import { patientToSoapDraft } from "../soapDraft";
 
 interface PageProps {
   patients: Patient[];
@@ -26,6 +28,8 @@ interface PageProps {
   miscTasks?: MiscTask[];
   studyTopics?: StudyTopic[];
 }
+
+type PrintVisualKind = "s" | "vs" | "pe" | "lab" | "image" | "ap" | "task" | "dc" | "red" | "other";
 
 function PrintRoundingListPage({
   patients,
@@ -201,6 +205,78 @@ function PrintRoundingListPage({
       /^Lab \u0394/i.test(item.text) ? "print-lab-trend-line" : "",
       /^Lab Ref/i.test(item.text) ? "print-lab-ref-line" : "",
     ].filter(Boolean).join(" ");
+  }
+
+  function classifyPrintVisualItem(item: { raw: string; text: string }, fallbackKind: PrintVisualKind) {
+    const raw = item.raw.trim();
+    const normalizedText = item.text
+      .replace(/^!+\s*/, "")
+      .replace(/^\*\s*/, "")
+      .replace(/^(\w[\w/ ]{0,12}:\s*)(?:!|\*)\s*/i, "$1")
+      .trim();
+    const prefixMatch = normalizedText.match(/^(S|V\/S|VS|PE|Lab|Image|Img|Task|Tasks|DC|Prep)\s*:\s*(.*)$/i);
+    const prefix = prefixMatch?.[1].toLowerCase() ?? "";
+    const body = (prefixMatch ? prefixMatch[2] : normalizedText)
+      .replace(/^!+\s*/, "")
+      .replace(/^\*\s*/, "")
+      .replace(/^(?:crit|critical|abn|abnormal|anchor|trend)\s+/i, "")
+      .trim();
+
+    let kind = fallbackKind;
+    if (prefix === "s") kind = "s";
+    if (prefix === "v/s" || prefix === "vs") kind = "vs";
+    if (prefix === "pe") kind = "pe";
+    if (prefix === "lab") kind = "lab";
+    if (prefix === "image" || prefix === "img") kind = "image";
+    if (prefix === "task" || prefix === "tasks") kind = "task";
+    if (prefix === "dc" || prefix === "prep") kind = "dc";
+
+    const critical =
+      fallbackKind === "red" ||
+      isImportantPrintLine(raw) ||
+      item.text.startsWith("*") ||
+      /\b(urgent|crit|critical|shock|sepsis|desat|bleed|hypot|lactate|blood culture|b\/c)\b/i.test(raw) ||
+      (kind === "lab" && /\b(k\s*[0-2](?:\.\d+)?|k\s*[6-9](?:\.\d+)?|hb\s*[0-7](?:\.\d+)?|cr\s*[2-9](?:\.\d+)?)\b/i.test(body));
+
+    const labelMap: Record<PrintVisualKind, string> = {
+      s: "S",
+      vs: "V/S",
+      pe: "PE",
+      lab: "LAB",
+      image: "IMG",
+      ap: "A/P",
+      task: "T",
+      dc: "DC",
+      red: "RED",
+      other: "NOTE",
+    };
+
+    return {
+      kind,
+      label: labelMap[kind],
+      text: removePrintEllipsis(body || normalizedText),
+      critical,
+    };
+  }
+
+  function renderPrintVisualItems(items: Array<{ raw: string; text: string }>, keyPrefix: string, fallbackKind: PrintVisualKind) {
+    if (items.length === 0) return null;
+    return (
+      <div className="print-visual-list">
+        {items.map((item, index) => {
+          const visual = classifyPrintVisualItem(item, fallbackKind);
+          return (
+            <div
+              className={`print-visual-row print-visual-${visual.kind}${visual.critical ? " print-visual-critical" : ""}`}
+              key={`${keyPrefix}-${visual.label}-${visual.text}-${index}`}
+            >
+              <span className="print-visual-label">{visual.label}</span>
+              <span className="print-visual-text">{visual.text}</span>
+            </div>
+          );
+        })}
+      </div>
+    );
   }
 
   function simpleRedFlagText(value: string) {
@@ -639,53 +715,44 @@ function PrintRoundingListPage({
   }
 
   function patientContextText(patient: Patient) {
-    const snapshot = getRoundingDigest(patient, dailyNotesByPatient[patient.id] ?? [], {
-      mode: "board",
-      hideCompletedTasks,
-    }).snapshot;
+    const soap = patientToSoapDraft(patient, dailyNotesByPatient[patient.id] ?? [], todayKey());
     return removePrintEllipsis([
-      snapshot.dxCore ? `Dx ${snapshot.dxCore}` : "",
-      snapshot.risks.length > 0 ? `PMH ${snapshot.risks.join(", ")}` : "",
-      snapshot.activeIssues.length > 0 ? `Issues ${snapshot.activeIssues.join(", ")}` : "",
+      ...soap.header.filter((line) => !/^Red flags:|^Date:/i.test(line)).slice(1, 5),
     ].filter(Boolean).join(" | "));
   }
 
   function subjectiveSoapText(patient: Patient) {
-    return compactList(
-      [
-        patient.subjectiveOrChiefConcern,
-        patient.overnightEvent,
-        patient.oneLiner || diagnosisSummary(patient),
-      ].flatMap(clinicalItems),
-      density === "ultra-compact" ? 2 : 3,
-      printLimits().detailChars,
-    );
+    const soap = patientToSoapDraft(patient, dailyNotesByPatient[patient.id] ?? [], todayKey());
+    return compactList(soap.sLines, density === "ultra-compact" ? 2 : 3, printLimits().detailChars);
   }
 
   function objectiveSoapText(patient: Patient) {
-    return [
-      importantObjectiveText(patient.vitalSigns, printLimits().chars, 1),
-      importantObjectiveText(patient.bloodSugar, printLimits().chars, 1),
-      peSummaryText(patient) ? `PE: ${peSummaryText(patient)}` : "",
-    ].filter(Boolean).join("; ");
+    const soap = patientToSoapDraft(patient, dailyNotesByPatient[patient.id] ?? [], todayKey());
+    const objectiveLines = soap.oLines.filter((line) => !/^(?:lab|image|img)\s*:/i.test(line));
+    return compactList(objectiveLines, density === "ultra-compact" ? 2 : 3, printLimits().detailChars);
   }
 
   function imageSoapText(patient: Patient) {
-    const images = imageLines(patient);
+    const soap = patientToSoapDraft(patient, dailyNotesByPatient[patient.id] ?? [], todayKey());
+    const images = soap.oLines
+      .filter((line) => /^(?:image|img)\s*:/i.test(line))
+      .map((line) => line.replace(/^(?:image|img)\s*:\s*/i, ""));
     return images.length > 0 ? `Img: ${images.join("; ")}` : "";
   }
 
   function assessmentSoapText(patient: Patient) {
-    return assessmentPlanSummaryText(patient) || issueSummary(patient) || diagnosisSummary(patient);
+    const soap = patientToSoapDraft(patient, dailyNotesByPatient[patient.id] ?? [], todayKey());
+    const apText = soap.apProblems
+      .map((problem) => [problem.title, problem.lines.join("; ")].filter(Boolean).join(": "))
+      .join("\n");
+    return apText || assessmentPlanSummaryText(patient) || issueSummary(patient) || diagnosisSummary(patient);
   }
 
   function taskDcText(patient: Patient) {
-    const prep = dischargePrepText(patient);
-    return [
-      taskSummaryText(patient),
-      patient.dischargePlan ? `DC: ${compactText(patient.dischargePlan, printLimits().dcChars, 1)}` : "",
-      prep ? `Prep: ${prep}` : "",
-    ].filter(Boolean).join("; ");
+    const soap = patientToSoapDraft(patient, dailyNotesByPatient[patient.id] ?? [], todayKey());
+    return [...soap.taskLines, ...soap.dcLines.map((line) => (/^Prep:/i.test(line) ? line : `DC: ${line}`))]
+      .filter(Boolean)
+      .join("; ");
   }
 
   function blockField(label: string, value: ReactNode) {
@@ -698,43 +765,27 @@ function PrintRoundingListPage({
     );
   }
 
-  function sectionBox(title: string, value: string, extra?: ReactNode) {
+  function sectionBox(title: string, value: string, extra?: ReactNode, fallbackKind: PrintVisualKind = "other") {
     const visibleItems = printListItems(value);
     if (visibleItems.length === 0 && !extra) return null;
     return (
       <div className="print-section-box">
         <div className="print-section-title">{title}</div>
-        {visibleItems.length > 0 && (
-          <ul className="print-soap-list">
-            {visibleItems.map((item, index) => (
-              <li className={printItemClassName(item)} key={`${title}-${item.text}-${index}`}>
-                {item.text}
-              </li>
-            ))}
-          </ul>
-        )}
+        {renderPrintVisualItems(visibleItems, title, fallbackKind)}
         {extra}
       </div>
     );
   }
 
-  function renderPrintItems(value: string, keyPrefix: string) {
+  function renderPrintItems(value: string, keyPrefix: string, fallbackKind: PrintVisualKind = "other") {
     const visibleItems = printListItems(value);
     if (visibleItems.length === 0) return null;
-    return (
-      <ul className="print-soap-list print-soap-list-extra">
-        {visibleItems.map((item, index) => (
-          <li className={printItemClassName(item)} key={`${keyPrefix}-${item.text}-${index}`}>
-            {item.text}
-          </li>
-        ))}
-      </ul>
-    );
+    return <div className="print-soap-list-extra">{renderPrintVisualItems(visibleItems, keyPrefix, fallbackKind)}</div>;
   }
 
   function objectiveExtra(patient: Patient) {
     const lab = renderLabMiniTable(patient);
-    const image = renderPrintItems(imageSoapText(patient), `${patient.id}-image`);
+    const image = renderPrintItems(imageSoapText(patient), `${patient.id}-image`, "image");
     if (!lab && !image) return null;
     return (
       <>
@@ -800,8 +851,10 @@ function PrintRoundingListPage({
 
         <div className="print-patient-list">
           {sectionPatients.map((patient) => {
+            const soapForPrint = patientToSoapDraft(patient, dailyNotesByPatient[patient.id] ?? [], todayKey());
+            const soapRedFlags = soapForPrint.header.find((line) => /^Red flags:/i.test(line))?.replace(/^Red flags:\s*/i, "") ?? "";
             const redFlags = compactList(
-              clinicalItems(patient.importantRedFlags).map(simpleRedFlagText),
+              clinicalItems(soapRedFlags || patient.importantRedFlags).map(simpleRedFlagText),
               printLimits().redFlags,
               printLimits().detailChars,
             );
@@ -825,21 +878,15 @@ function PrintRoundingListPage({
                 {redFlagItems.length > 0 && (
                   <div className="print-red-flags">
                     <strong>Red Flags:</strong>
-                    <ul className="print-soap-list print-red-flag-list">
-                      {redFlagItems.map((item, index) => (
-                        <li className="print-soap-item print-soap-important" key={`red-${patient.id}-${item.text}-${index}`}>
-                          {item.text}
-                        </li>
-                      ))}
-                    </ul>
+                    {renderPrintVisualItems(redFlagItems, `red-${patient.id}`, "red")}
                   </div>
                 )}
 
                 <div className="print-summary-grid">
-                  {sectionBox("S", subjectiveSoapText(patient))}
-                  {sectionBox("O", objectiveSoapText(patient), objectiveExtra(patient))}
-                  {sectionBox("A/P", assessmentSoapText(patient))}
-                  {sectionBox("Tasks / DC", taskDcText(patient))}
+                  {sectionBox("S", subjectiveSoapText(patient), undefined, "s")}
+                  {sectionBox("O", objectiveSoapText(patient), objectiveExtra(patient), "other")}
+                  {sectionBox("A/P", assessmentSoapText(patient), undefined, "ap")}
+                  {sectionBox("Tasks / DC", taskDcText(patient), undefined, "task")}
                 </div>
               </article>
             );

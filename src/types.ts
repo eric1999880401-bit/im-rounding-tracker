@@ -179,6 +179,31 @@ export interface AnalyzeClinicalTextResult {
   rawTextPreview: string;
 }
 
+export interface GenerateRoundSoapInput {
+  patientId: string;
+  selectedDate: string;
+  sourceType: AiClinicalSourceType;
+  workflowMode?: "dailyUpdate" | "newSoap" | "transferHandoff";
+  rawText: string;
+  currentSoapBaseline: string;
+  deidentifiedConfirmed: boolean;
+  patientContext?: {
+    age?: string | number;
+    sex?: string;
+    pmh?: string[] | string;
+    activeProblems?: string[] | string;
+    currentAssessmentPlan?: unknown[];
+  };
+}
+
+export interface GenerateRoundSoapResult {
+  draftId: string;
+  soapText: string;
+  warnings: string[];
+  highlightHints: string[];
+  model: string;
+}
+
 export type PatientImportDraftStatus = "new" | "updateCandidate";
 
 export interface PatientImportDraft {
@@ -421,6 +446,10 @@ export interface PatientTask {
 
 export interface DailyNote {
   date: string;
+  soapText?: string;
+  soapStatus?: "draft" | "reviewed";
+  soapUpdatedAt?: string;
+  soapVersion?: number;
   importantRedFlags: string;
   overnightEvents: string;
   subjectiveOrChiefConcern: string;

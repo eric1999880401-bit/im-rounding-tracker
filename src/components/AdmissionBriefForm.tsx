@@ -7,6 +7,7 @@ import ColorMarkupTextarea from "./ColorMarkupTextarea";
 interface AdmissionBriefFormProps {
   patient: Patient;
   onChange: (patient: Patient) => void;
+  isDemoMode?: boolean;
   onFieldBlur?: () => void;
   onCompositionStart?: () => void;
   onCompositionEnd?: () => void;
@@ -15,6 +16,7 @@ interface AdmissionBriefFormProps {
 function AdmissionBriefForm({
   patient,
   onChange,
+  isDemoMode = false,
   onFieldBlur,
   onCompositionStart,
   onCompositionEnd,
@@ -29,24 +31,6 @@ function AdmissionBriefForm({
     onChange({ ...patient, [field]: value, updatedAt: new Date().toISOString() });
   }
 
-  function updateChiefComplaint(value: string) {
-    onChange({
-      ...patient,
-      chiefComplaint: value,
-      admissionChiefConcern: value,
-      updatedAt: new Date().toISOString(),
-    });
-  }
-
-  function updateHpi(value: string) {
-    onChange({
-      ...patient,
-      presentIllnessOrHPI: value,
-      hpiOrAdmissionStory: value,
-      updatedAt: new Date().toISOString(),
-    });
-  }
-
   function commitOnBlur() {
     onFieldBlur?.();
   }
@@ -58,6 +42,65 @@ function AdmissionBriefForm({
   function getErrorMessage(error: unknown) {
     if (error instanceof Error) return error.message;
     return String(error ?? "Unknown error");
+  }
+
+  function firstMatchingLine(text: string, pattern: RegExp) {
+    return text
+      .split(/\r?\n/)
+      .map((line) => line.replace(/^[-*]\s*/, "").trim())
+      .find((line) => pattern.test(line)) ?? "";
+  }
+
+  function compactAdmissionLine(text: string) {
+    const lines = text
+      .split(/\r?\n/)
+      .map((line) => line.replace(/^[-*]\s*/, "").trim())
+      .filter(Boolean)
+      .filter((line) => !/^(?:name|mrn|id|birthday|phone|address)\s*:/i.test(line));
+    const diagnosisLine = firstMatchingLine(text, /\b(dx|diagnosis|impression|admitted|admission|pna|pneumonia|sepsis|hf|stroke|cancer|infection)\b/i);
+    const symptomLine = firstMatchingLine(text, /\b(chief|cc|fever|cough|dyspnea|sob|pain|weak|syncope|edema|bleed|melena)\b/i);
+    const labLine = firstMatchingLine(text, /\b(wbc|hb|hgb|plt|cr|bun|na|k\b|lactate|crp|troponin|culture|b\/c|bcx)\b/i);
+    const imageLine = firstMatchingLine(text, /\b(ct|mri|cxr|xray|x-ray|echo|sono|ultrasound|egd|scope|image|imaging)\b/i);
+    const treatmentLine = firstMatchingLine(text, /\b(abx|antibiotic|cef|zosyn|pip\/tazo|meropenem|teicoplanin|vancomycin|oxygen|o2|lasix|diuretic|consult|opd|discharge|dc)\b/i);
+    const summaryLines = [diagnosisLine || lines[0], symptomLine, labLine, imageLine, treatmentLine]
+      .map((line) => line.replace(/\s+/g, " ").trim())
+      .filter(Boolean);
+    return summaryLines.slice(0, 4).join(" ");
+  }
+
+  function buildLocalAdmissionSummary(sourceText: string) {
+    const summary = compactAdmissionLine(sourceText);
+    return summary || sourceText.replace(/\s+/g, " ").trim().slice(0, 500);
+  }
+
+  function buildAdmissionPatch(sourceText: string, summary: string): Patient {
+    const now = new Date().toISOString();
+    const chiefConcern = firstMatchingLine(sourceText, /\b(chief|cc|fever|cough|dyspnea|sob|pain|weak|syncope|edema|bleed|melena)\b/i)
+      .replace(/^(?:chief complaint|chief concern|cc)\s*:\s*/i, "")
+      .trim();
+    const hpi = firstMatchingLine(sourceText, /\b(hpi|present illness|history|admitted|presented|progressive|started|for \d+\s*(?:day|week|month))\b/i)
+      .replace(/^(?:hpi|pi|present illness|history of present illness)\s*:\s*/i, "")
+      .trim();
+    const pmh = firstMatchingLine(sourceText, /\b(pmh|past history|htn|dm|ckd|cad|hf|copd|af|stroke|cancer|scc)\b/i)
+      .replace(/^(?:pmh|past medical history)\s*:\s*/i, "")
+      .trim();
+    const lab = firstMatchingLine(sourceText, /\b(wbc|hb|hgb|plt|cr|bun|na|k\b|lactate|crp|troponin|culture|b\/c|bcx)\b/i);
+    const image = firstMatchingLine(sourceText, /\b(ct|mri|cxr|xray|x-ray|echo|sono|ultrasound|egd|scope|image|imaging)\b/i);
+    return {
+      ...patient,
+      generatedAdmissionSummary: summary,
+      admissionBriefFreeText: patient.admissionBriefFreeText.trim() ? patient.admissionBriefFreeText : summary,
+      oneLiner: patient.oneLiner.trim() ? patient.oneLiner : summary,
+      chiefComplaint: patient.chiefComplaint.trim() ? patient.chiefComplaint : chiefConcern,
+      admissionChiefConcern: patient.admissionChiefConcern.trim() ? patient.admissionChiefConcern : chiefConcern,
+      presentIllnessOrHPI: patient.presentIllnessOrHPI.trim() ? patient.presentIllnessOrHPI : hpi,
+      hpiOrAdmissionStory: patient.hpiOrAdmissionStory.trim() ? patient.hpiOrAdmissionStory : hpi,
+      admissionPMH: patient.admissionPMH.trim() ? patient.admissionPMH : pmh,
+      initialLabs: patient.initialLabs.trim() ? patient.initialLabs : lab,
+      initialImaging: patient.initialImaging.trim() ? patient.initialImaging : image,
+      showAdmissionBriefOnPrint: true,
+      updatedAt: now,
+    };
   }
 
   async function generateAdmissionSummary(sourceText = admissionNoteSource) {
@@ -77,22 +120,22 @@ function AdmissionBriefForm({
 
     setGeneratingSummary(true);
     try {
-      const result = await generateClinicalDocument({
-        patientId: patient.id,
-        documentType: "admissionSummary",
-        rawText: text,
-        deidentifiedConfirmed: true,
-        storeRawText: false,
-      });
-      const summary = formatClinicalDocumentDraft(result.draft);
-      onChange({
-        ...patient,
-        generatedAdmissionSummary: summary,
-        admissionBriefFreeText: patient.admissionBriefFreeText.trim() ? patient.admissionBriefFreeText : summary,
-        oneLiner: patient.oneLiner.trim() ? patient.oneLiner : summary,
-        updatedAt: new Date().toISOString(),
-      });
-      setGenerationStatus(`Admission summary generated. Review, edit, then Save. Draft: ${result.draftId}`);
+      if (isDemoMode) {
+        const summary = buildLocalAdmissionSummary(text);
+        onChange(buildAdmissionPatch(text, summary));
+        setGenerationStatus("Demo admission summary generated locally. Review, edit, then Save.");
+      } else {
+        const result = await generateClinicalDocument({
+          patientId: patient.id,
+          documentType: "admissionSummary",
+          rawText: text,
+          deidentifiedConfirmed: true,
+          storeRawText: false,
+        });
+        const summary = formatClinicalDocumentDraft(result.draft);
+        onChange(buildAdmissionPatch(text, summary));
+        setGenerationStatus(`Admission summary generated. Review, edit, then Save. Draft: ${result.draftId}`);
+      }
     } catch (error) {
       setGenerationError(getErrorMessage(error));
     } finally {
@@ -100,16 +143,33 @@ function AdmissionBriefForm({
     }
   }
 
+  function shouldTreatPasteAsAdmissionNote(value: string) {
+    const text = value.trim();
+    if (text.length < 80) return false;
+    return /\b(admission|admitted|hpi|chief|pmh|diagnosis|assessment|plan|hospital course|v\/s|lab|image|ct|cxr|wbc|hb|cr)\b/i.test(text);
+  }
+
   function handleAdmissionNotePaste(event: ClipboardEvent<HTMLTextAreaElement>) {
     const pastedText = event.clipboardData.getData("text");
     if (!pastedText.trim()) return;
+    event.preventDefault();
     setAdmissionNoteSource(pastedText);
     window.setTimeout(() => {
       void generateAdmissionSummary(pastedText);
     }, 0);
   }
 
-  const hasGeneratedAdmissionDraft = patient.generatedAdmissionNote.trim() || patient.generatedAdmissionSummary.trim();
+  function handleAdmissionSummaryPaste(event: ClipboardEvent<HTMLTextAreaElement>) {
+    const pastedText = event.clipboardData.getData("text");
+    if (!shouldTreatPasteAsAdmissionNote(pastedText)) return;
+    event.preventDefault();
+    setAdmissionNoteSource(pastedText);
+    setGenerationStatus("");
+    setGenerationError("");
+    window.setTimeout(() => {
+      void generateAdmissionSummary(pastedText);
+    }, 0);
+  }
 
   return (
     <section className="panel">
@@ -152,161 +212,17 @@ function AdmissionBriefForm({
 
         <label className="span-2">
           Admission Summary
+          <span className="field-hint">You can paste a full admission note here too; it will be converted into a short summary after de-identification is confirmed.</span>
           <ColorMarkupTextarea
             value={patient.admissionBriefFreeText || patient.generatedAdmissionSummary}
             onChange={(value) => updateField("admissionBriefFreeText", value)}
             onBlur={commitOnBlur}
             onCompositionStart={onCompositionStart}
             onCompositionEnd={handleCompositionEnd}
+            onPaste={handleAdmissionSummaryPaste}
             placeholder="AI-generated or clinician-written short admission summary for rounds."
           />
         </label>
-
-        <label className="span-2">
-          Chief Complaint
-          <textarea
-            value={patient.chiefComplaint || patient.admissionChiefConcern}
-            onChange={(event) => updateChiefComplaint(event.target.value)}
-            onBlur={commitOnBlur}
-            onCompositionStart={onCompositionStart}
-            onCompositionEnd={handleCompositionEnd}
-          />
-        </label>
-
-        <label className="span-2">
-          PI / HPI / Present Illness
-          <textarea
-            value={patient.presentIllnessOrHPI || patient.hpiOrAdmissionStory}
-            onChange={(event) => updateHpi(event.target.value)}
-            onBlur={commitOnBlur}
-            onCompositionStart={onCompositionStart}
-            onCompositionEnd={handleCompositionEnd}
-          />
-        </label>
-
-        <details className="admission-structured-details span-2">
-          <summary>Structured H&P fields</summary>
-          <div className="form-grid compact-form-grid">
-            <label>
-              PMH
-              <textarea
-                value={patient.admissionPMH}
-                onChange={(event) => updateField("admissionPMH", event.target.value)}
-                onBlur={commitOnBlur}
-                onCompositionStart={onCompositionStart}
-                onCompositionEnd={handleCompositionEnd}
-              />
-            </label>
-
-            <label>
-              Baseline function
-              <textarea
-                value={patient.baselineFunction}
-                onChange={(event) => updateField("baselineFunction", event.target.value)}
-                onBlur={commitOnBlur}
-                onCompositionStart={onCompositionStart}
-                onCompositionEnd={handleCompositionEnd}
-              />
-            </label>
-
-            <label className="span-2">
-              Initial PE
-              <ColorMarkupTextarea
-                value={patient.initialPhysicalExam}
-                onChange={(value) => updateField("initialPhysicalExam", value)}
-                onBlur={commitOnBlur}
-                onCompositionStart={onCompositionStart}
-                onCompositionEnd={handleCompositionEnd}
-              />
-            </label>
-
-            <label>
-              Initial labs
-              <textarea
-                value={patient.initialLabs}
-                onChange={(event) => updateField("initialLabs", event.target.value)}
-                onBlur={commitOnBlur}
-                onCompositionStart={onCompositionStart}
-                onCompositionEnd={handleCompositionEnd}
-              />
-            </label>
-
-            <label>
-              Initial imaging
-              <textarea
-                value={patient.initialImaging}
-                onChange={(event) => updateField("initialImaging", event.target.value)}
-                onBlur={commitOnBlur}
-                onCompositionStart={onCompositionStart}
-                onCompositionEnd={handleCompositionEnd}
-              />
-            </label>
-
-            <label>
-              Initial assessment
-              <textarea
-                value={patient.initialAssessment}
-                onChange={(event) => updateField("initialAssessment", event.target.value)}
-                onBlur={commitOnBlur}
-                onCompositionStart={onCompositionStart}
-                onCompositionEnd={handleCompositionEnd}
-              />
-            </label>
-
-            <label>
-              Initial plan
-              <textarea
-                value={patient.initialPlan}
-                onChange={(event) => updateField("initialPlan", event.target.value)}
-                onBlur={commitOnBlur}
-                onCompositionStart={onCompositionStart}
-                onCompositionEnd={handleCompositionEnd}
-              />
-            </label>
-
-            <label className="span-2">
-              Early hospital course
-              <textarea
-                value={patient.earlyHospitalCourse}
-                onChange={(event) => updateField("earlyHospitalCourse", event.target.value)}
-                onBlur={commitOnBlur}
-                onCompositionStart={onCompositionStart}
-                onCompositionEnd={handleCompositionEnd}
-              />
-            </label>
-          </div>
-        </details>
-
-        {hasGeneratedAdmissionDraft && (
-          <details className="admission-generated-drafts span-2">
-            <summary>AI-generated source drafts</summary>
-            {patient.generatedAdmissionNote.trim() && (
-              <label>
-                AI Admission Note Draft
-                <textarea
-                  value={patient.generatedAdmissionNote}
-                  onChange={(event) => updateField("generatedAdmissionNote", event.target.value)}
-                  onBlur={commitOnBlur}
-                  onCompositionStart={onCompositionStart}
-                  onCompositionEnd={handleCompositionEnd}
-                />
-              </label>
-            )}
-
-            {patient.generatedAdmissionSummary.trim() && (
-              <label>
-                AI Admission Summary Draft
-                <textarea
-                  value={patient.generatedAdmissionSummary}
-                  onChange={(event) => updateField("generatedAdmissionSummary", event.target.value)}
-                  onBlur={commitOnBlur}
-                  onCompositionStart={onCompositionStart}
-                  onCompositionEnd={handleCompositionEnd}
-                />
-              </label>
-            )}
-          </details>
-        )}
       </div>
     </section>
   );

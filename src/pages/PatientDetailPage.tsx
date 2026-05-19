@@ -8,6 +8,7 @@ import TaskList from "../components/TaskList";
 import AiIntakePanel from "../components/AiIntakePanel";
 import ClinicalDocumentQuickActions from "../components/ClinicalDocumentQuickActions";
 import { ClinicalText } from "../components/ClinicalText";
+import RoundSoapComposer from "../components/RoundSoapComposer";
 import LabHistoryPanel from "../components/LabHistoryPanel";
 import ActiveProblemEditor from "../components/ActiveProblemEditor";
 import { buildConcisePatientClinicalUpdate } from "../clinicalPatientPolish";
@@ -23,7 +24,6 @@ import {
 import { useT } from "../i18n";
 import {
   dailyNoteFromPatient,
-  dischargePrepText,
   emptyDailyNote,
   getLatestNonEmptyDailyNote,
   getPatientDisplaySummary,
@@ -34,11 +34,13 @@ import {
   todayKey,
 } from "../utils";
 import { getRoundingDigest } from "../roundingDigest";
+import { fallbackSoapTextFromPatient, soapPreviewTextFromPatient, soapTextToPatientPatch } from "../soapDraft";
 
 interface PageProps {
   patients: Patient[];
   dailyNotesByPatient?: DailyNotesByPatient;
   dataLoading?: boolean;
+  isDemoMode?: boolean;
   onSavePatient: (patient: Patient) => Promise<void>;
   onSaveDailyNote: (patientId: string, note: DailyNote) => Promise<void>;
 }
@@ -83,6 +85,26 @@ function simpleDetailRedFlags(value: string) {
     )
     .filter(Boolean)
     .join("\n");
+}
+
+function hasReviewedAdmissionBrief(patient: Patient) {
+  return [
+    patient.admissionBriefFreeText,
+    patient.generatedAdmissionSummary,
+    patient.generatedAdmissionNote,
+    patient.chiefComplaint,
+    patient.admissionChiefConcern,
+    patient.presentIllnessOrHPI,
+    patient.hpiOrAdmissionStory,
+    patient.admissionPMH,
+    patient.initialAssessment,
+    patient.initialPlan,
+    patient.earlyHospitalCourse,
+  ].some((value) => value.trim().length > 0);
+}
+
+function shouldPromptForAdmissionBrief(patient: Patient) {
+  return (patient.isNewAdmission || patient.showAdmissionBriefOnPrint) && !hasReviewedAdmissionBrief(patient);
 }
 
 function mergeNoteWithFallback(note: DailyNote, fallbackPatient: Patient, date: string): DailyNote {
@@ -171,6 +193,7 @@ function PatientDetailPage({
   patients,
   dailyNotesByPatient = {},
   dataLoading = false,
+  isDemoMode = false,
   onSavePatient,
   onSaveDailyNote,
 }: PageProps) {
@@ -196,15 +219,21 @@ function PatientDetailPage({
   const [quickVsOrder, setQuickVsOrder] = useState("");
   const [cleanupPreview, setCleanupPreview] = useState<{ patient: Patient; changes: ClinicalFieldCleanupChange[] } | null>(null);
   const [cleanupStatus, setCleanupStatus] = useState("");
+  const [soapEditorText, setSoapEditorText] = useState("");
+  const [soapEditorDirty, setSoapEditorDirty] = useState(false);
+  const [externalSoapDraft, setExternalSoapDraft] = useState({ revision: 0, text: "", status: "" });
+  const [admissionPromptOpen, setAdmissionPromptOpen] = useState(false);
+  const [admissionPromptDismissedPatientId, setAdmissionPromptDismissedPatientId] = useState("");
   const draftRef = useRef<Patient | null>(initialDraft);
   const isDirtyRef = useRef(false);
+  const soapEditorDirtyRef = useRef(false);
   const isComposingRef = useRef(false);
 
   useEffect(() => {
     if (!sourcePatient) return;
 
     const changedPatient = draftRef.current?.id !== sourcePatient.id;
-    const canAcceptSnapshot = changedPatient || (!isDirtyRef.current && !isComposingRef.current);
+    const canAcceptSnapshot = changedPatient || (!isDirtyRef.current && !soapEditorDirtyRef.current && !isComposingRef.current);
 
     if (canAcceptSnapshot) {
       const nextDisplayPatient = patientForDate(sourcePatient, dailyNotesByPatient, selectedDate);
@@ -214,12 +243,23 @@ function PatientDetailPage({
       const nextPatient = patientWithDailyNote(nextDisplayPatient, nextNote);
       draftRef.current = nextPatient;
       setDraftPatient(nextPatient);
+      setSoapEditorText(soapPreviewTextFromPatient(nextPatient, dailyNotesByPatient[sourcePatient.id] ?? [], selectedDate));
+      setSoapEditorDirty(false);
+      soapEditorDirtyRef.current = false;
       setIsDirty(false);
       isDirtyRef.current = false;
       setCleanupPreview(null);
       setCleanupStatus("");
+      setExternalSoapDraft({ revision: 0, text: "", status: "" });
     }
   }, [sourcePatient, selectedDate, selectedNote, patientNotes.length, dailyNotesByPatient]);
+
+  useEffect(() => {
+    if (!draftPatient) return;
+    if (shouldPromptForAdmissionBrief(draftPatient) && admissionPromptDismissedPatientId !== draftPatient.id) {
+      setAdmissionPromptOpen(true);
+    }
+  }, [draftPatient, admissionPromptDismissedPatientId]);
 
   useEffect(() => {
     const availableNotes = patientNotes.filter((note) => note.date !== selectedDate);
@@ -260,6 +300,12 @@ function PatientDetailPage({
     isDirtyRef.current = true;
   }
 
+  function updateSoapEditor(value: string) {
+    setSoapEditorText(value);
+    setSoapEditorDirty(true);
+    soapEditorDirtyRef.current = true;
+  }
+
   function noteFromDraft(patient: Patient): DailyNote {
     const now = nowIso();
     return {
@@ -285,6 +331,20 @@ function PatientDetailPage({
   async function createSelectedDateNote() {
     if (!draftRef.current) return;
     await commitDraft(draftRef.current);
+  }
+
+  async function saveAdmissionPrompt() {
+    if (!draftRef.current) return;
+    await commitDraft(draftRef.current);
+    setAdmissionPromptDismissedPatientId(draftRef.current.id);
+    setAdmissionPromptOpen(false);
+  }
+
+  function dismissAdmissionPrompt() {
+    if (draftRef.current) {
+      setAdmissionPromptDismissedPatientId(draftRef.current.id);
+    }
+    setAdmissionPromptOpen(false);
   }
 
   function buildAiAcceptedDailyNote(
@@ -396,6 +456,34 @@ function PatientDetailPage({
     setDraftPatient(safeNextPatient);
     await onSavePatient(safeNextPatient);
     await onSaveDailyNote(safeNextPatient.id, acceptedNote);
+    setSoapEditorText(soapPreviewTextFromPatient(safeNextPatient, [acceptedNote, ...patientNotes], selectedDate));
+    setSoapEditorDirty(false);
+    soapEditorDirtyRef.current = false;
+    setIsDirty(false);
+    isDirtyRef.current = false;
+  }
+
+  async function saveSoapEditor() {
+    if (!draftRef.current || isComposingRef.current) return;
+    const currentSoapText = soapEditorText || soapPreviewTextFromPatient(draftRef.current, patientNotes, selectedDate);
+    const patch = soapTextToPatientPatch(currentSoapText, draftRef.current, selectedDate);
+    const now = nowIso();
+    const nextPatient = { ...patch.patient, updatedAt: now };
+    const nextNote: DailyNote = {
+      ...noteFromDraft(nextPatient),
+      ...patch.dailyNotePatch,
+      date: selectedDate,
+      createdAt: selectedNote?.createdAt || now,
+      updatedAt: now,
+    };
+
+    draftRef.current = nextPatient;
+    setDraftPatient(nextPatient);
+    await onSavePatient(nextPatient);
+    await onSaveDailyNote(nextPatient.id, nextNote);
+    setSoapEditorText(soapPreviewTextFromPatient(nextPatient, [nextNote, ...patientNotes], selectedDate));
+    setSoapEditorDirty(false);
+    soapEditorDirtyRef.current = false;
     setIsDirty(false);
     isDirtyRef.current = false;
   }
@@ -514,16 +602,26 @@ function PatientDetailPage({
     setCleanupPreview(preview);
     setCleanupStatus(
       preview.changes.length > 0
-        ? `${preview.changes.length} field(s) can be cleaned. Review below, then apply to local draft.`
+        ? `${preview.changes.length} field(s) can be cleaned. Review below, then apply and refresh the SOAP editor.`
         : "No obvious AI field pollution found.",
     );
   }
 
   function applyClinicalFieldCleanup() {
     if (!cleanupPreview || cleanupPreview.changes.length === 0) return;
-    updateDraft({ ...cleanupPreview.patient, updatedAt: nowIso() });
-    setCleanupStatus("Cleaned version applied to local draft. Use Save to write it to Firestore.");
-    setActiveTab("assessmentPlan");
+    const cleanedPatient = { ...cleanupPreview.patient, updatedAt: nowIso() };
+    updateDraft(cleanedPatient);
+    setExternalSoapDraft((current) => ({
+      revision: current.revision + 1,
+      text: fallbackSoapTextFromPatient(cleanedPatient, patientNotes, selectedDate),
+      status: "Cleanup applied to SOAP editor. Review, then Save reviewed SOAP.",
+    }));
+    setCleanupPreview({ patient: cleanedPatient, changes: [] });
+    setCleanupStatus("Cleaned fields applied and SOAP editor refreshed. Review the SOAP above, then Save reviewed SOAP.");
+    setActiveTab("rounds");
+    window.requestAnimationFrame(() => {
+      document.querySelector(".round-soap-composer")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
   }
 
   function shortCleanupText(value: string) {
@@ -553,6 +651,11 @@ function PatientDetailPage({
         {patientNotes.map((note) => (
           <details key={note.date} open={note.date === selectedDate}>
             <summary>{note.date}</summary>
+            {note.soapText?.trim() ? (
+              <div className="soap-history-reviewed">
+                <ClinicalText value={note.soapText} />
+              </div>
+            ) : (
             <div className="soap-history-grid">
               <div><strong>Red Flags</strong><ClinicalText value={note.importantRedFlags} importantDefault /></div>
               <div><strong>Overnight Event</strong><ClinicalText value={note.overnightEvents} /></div>
@@ -566,6 +669,7 @@ function PatientDetailPage({
               <div><strong>P</strong><ClinicalText value={note.plan} /></div>
               <div><strong>DC / VS</strong><ClinicalText value={[note.dischargePlan, note.vsOrder].filter(Boolean).join("\n")} /></div>
             </div>
+            )}
           </details>
         ))}
       </section>
@@ -573,112 +677,33 @@ function PatientDetailPage({
   }
 
   function renderRoundsMode() {
-    const roundsSummary = displaySummary?.patient ?? currentPatient;
-    const digest = getRoundingDigest(roundsSummary, patientNotes, {
-      mode: "rounds",
-      hideCompletedTasks: true,
-    });
-    const snapshot = digest.snapshot;
-    const redFlags = snapshot.redFlags.map(simpleDetailRedFlags).filter(Boolean).join("\n");
-    const prepText = dischargePrepText(roundsSummary);
-    const taskDcText = [
-      digest.tasks,
-      digest.discharge ? `DC: ${digest.discharge}` : "",
-      prepText ? `Prep: ${prepText}` : "",
-    ].filter(Boolean).join("\n");
-
     return (
       <section className="panel rounds-mode-panel">
         <div className="section-heading">
-          <h2>SOAP</h2>
+          <div>
+            <h2>SOAP</h2>
+            <p className="muted">Board, Details, and Print read this reviewed SOAP. Paste stays local until Generate; Save is explicit.</p>
+          </div>
           <span className="muted">{selectedDate}</span>
         </div>
 
-        {redFlags && (
-          <section className="detail-soap-redflag">
-            <span className="board-label">Red flags</span>
-            <ClinicalText value={redFlags} maxLines={3} maxCharsPerLine={90} importantDefault />
-          </section>
-        )}
-
-        <div className="detail-rounding-sheet">
-          <section className="detail-soap-block detail-rounding-context">
-            <span className="board-label">Dx / Issues</span>
-            <div className="detail-context-lines">
-              <strong>{snapshot.dxCore || "-"}</strong>
-              {snapshot.activeIssues.length > 0 && (
-                <div className="board-chip-row">
-                  {snapshot.activeIssues.slice(0, 5).map((issue) => (
-                    <span className="board-mini-chip" key={issue}>{issue}</span>
-                  ))}
-                </div>
-              )}
-              {snapshot.risks.length > 0 && <span className="muted">PMH: {snapshot.risks.slice(0, 5).join(", ")}</span>}
-            </div>
-          </section>
-
-          <section className="detail-soap-block">
-            <span className="board-label">S</span>
-            <ClinicalText value={digest.subjective} fallback="-" maxLines={4} maxCharsPerLine={90} />
-          </section>
-
-          <section className="detail-soap-block detail-soap-objective">
-            <span className="board-label">O</span>
-            <div className="detail-objective-stack">
-              <div>
-                <span className="objective-chip-label">V/S / PE</span>
-                <ClinicalText value={digest.objective} fallback="-" maxLines={3} maxCharsPerLine={88} />
-              </div>
-              <div>
-                <span className="objective-chip-label">Lab focus</span>
-                <ClinicalText value={digest.lab} fallback="No lab signal" maxLines={4} maxCharsPerLine={88} />
-              </div>
-              <div>
-                <span className="objective-chip-label">Image focus</span>
-                <ClinicalText value={digest.image} fallback="-" maxLines={2} maxCharsPerLine={88} />
-              </div>
-            </div>
-          </section>
-
-          <section className="detail-soap-block detail-soap-ap">
-            <span className="board-label">A/P</span>
-            <ClinicalText value={digest.assessmentPlan} fallback="-" maxLines={6} maxCharsPerLine={92} />
-          </section>
-
-          <section className="detail-soap-block detail-soap-task">
-            <span className="board-label">Tasks / DC</span>
-            <ClinicalText value={taskDcText} fallback="No pending tasks" maxLines={6} maxCharsPerLine={88} />
-          </section>
-        </div>
-
-        <details className="rounds-quick-order-collapse">
-          <summary>Add post-round order / task</summary>
-          <section className="rounds-quick-order">
-            <label>
-              Post-round orders / VS note
-              <textarea
-                value={quickVsOrder}
-                onChange={(event) => setQuickVsOrder(event.target.value)}
-                onCompositionStart={handleCompositionStart}
-                onCompositionEnd={handleCompositionEnd}
-                placeholder="BP q4h; repeat CBC tomorrow; hold antiplatelet if Hb drops"
-                rows={2}
-              />
-            </label>
-            <button type="button" disabled={!quickVsOrder.trim()} onClick={() => void appendQuickVsOrder()}>
-              Add to today's SOAP
-            </button>
-          </section>
-        </details>
-
-        <details className="rounds-quick-order-collapse rounds-intake-collapse">
-          <summary>Paste update / AI intake preview</summary>
-          <AiIntakePanel
-            patient={currentPatient}
-            selectedDate={selectedDate}
-            onApplyPatient={applyAiIntakePatient}
-          />
-        </details>
+        <RoundSoapComposer
+          patient={currentPatient}
+          dailyNotes={patientNotes}
+          selectedDate={selectedDate}
+          isDemoMode={isDemoMode}
+          onSavePatient={async (nextPatient) => {
+            draftRef.current = nextPatient;
+            setDraftPatient(nextPatient);
+            await onSavePatient(nextPatient);
+            setIsDirty(false);
+            isDirtyRef.current = false;
+          }}
+          onSaveDailyNote={onSaveDailyNote}
+          externalSoapText={externalSoapDraft.text}
+          externalSoapRevision={externalSoapDraft.revision}
+          externalSoapStatus={externalSoapDraft.status}
+        />
       </section>
     );
   }
@@ -731,6 +756,43 @@ function PatientDetailPage({
         )}
       </section>
 
+      {admissionPromptOpen && (
+        <div className="admission-prompt-backdrop" role="presentation">
+          <section
+            className="admission-prompt-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="admission-prompt-title"
+          >
+            <div className="section-heading">
+              <div>
+                <h2 id="admission-prompt-title">New admission needs Admission Brief</h2>
+                <p className="muted">Paste the de-identified admission note here first. Review the generated summary, then save explicitly.</p>
+              </div>
+              <button type="button" className="secondary" onClick={dismissAdmissionPrompt}>
+                Skip for now
+              </button>
+            </div>
+            <AdmissionBriefForm
+              patient={currentPatient}
+              onChange={updateDraft}
+              isDemoMode={isDemoMode}
+              onFieldBlur={handleFieldBlur}
+              onCompositionStart={handleCompositionStart}
+              onCompositionEnd={handleCompositionEnd}
+            />
+            <div className="admission-prompt-actions form-actions">
+              <button type="button" className="secondary" onClick={dismissAdmissionPrompt}>
+                Not now
+              </button>
+              <button type="button" disabled={!isDirty} onClick={() => void saveAdmissionPrompt()}>
+                Save Admission Brief
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
+
       <section className="panel detail-date-bar">
         <label>
           Daily SOAP Date
@@ -750,8 +812,11 @@ function PatientDetailPage({
         )}
       </section>
 
+      {activeTab === "rounds" && renderRoundsMode()}
+
       {(visibleCleanupChanges.length > 0 || cleanupStatus) && (
-        <section className="panel ai-cleanup-panel">
+        <details className="panel ai-cleanup-panel">
+          <summary>Clean AI Draft preview</summary>
           <div className="section-heading">
             <div>
               <h3>Clean AI Draft</h3>
@@ -762,13 +827,13 @@ function PatientDetailPage({
                 Preview cleanup
               </button>
               <button type="button" disabled={!cleanupPreview || cleanupPreview.changes.length === 0} onClick={applyClinicalFieldCleanup}>
-                Apply to local draft
+                Apply + refresh SOAP
               </button>
             </div>
           </div>
           {cleanupStatus && <p className="status-message">{cleanupStatus}</p>}
           {!cleanupPreview && visibleCleanupChanges.length > 0 && (
-            <p className="muted">{visibleCleanupChanges.length} AI-draft field cleanup(s) detected. Preview to compare before applying to the local draft.</p>
+            <p className="muted">{visibleCleanupChanges.length} AI-draft field cleanup(s) detected. Preview to compare before applying to the SOAP editor.</p>
           )}
           {cleanupPreview && visibleCleanupChanges.length > 0 && (
             <div className="cleanup-change-grid">
@@ -792,162 +857,18 @@ function PatientDetailPage({
               ))}
             </div>
           )}
-        </section>
+        </details>
       )}
 
-      <section className="panel detail-tabs-shell">
-        <div className="detail-tabs" role="tablist" aria-label="Patient detail sections">
-          {detailTabs.map((tab) => {
-            const TabIcon = tab.Icon;
-            const fullLabel = t(tab.labelKey);
-            return (
-              <button
-                type="button"
-                className={`detail-tab${activeTab === tab.id ? " active" : ""}`}
-                key={tab.id}
-                onClick={() => setActiveTab(tab.id)}
-                role="tab"
-                aria-selected={activeTab === tab.id}
-                aria-label={fullLabel}
-                title={fullLabel}
-              >
-                <span className="detail-tab-icon">
-                  <TabIcon />
-                </span>
-                <span className="detail-tab-label">{t(tab.shortKey)}</span>
-              </button>
-            );
-          })}
-        </div>
-      </section>
-
-      {activeTab === "rounds" && renderRoundsMode()}
-
-      {activeTab === "objective" && (
-        <>
-          <DailyNoteForm
-            patient={currentPatient}
-            onChange={updateDraft}
-            section="objective"
-            onImmediateCommit={() => void commitDraft()}
-            onFieldBlur={handleFieldBlur}
-            onCompositionStart={handleCompositionStart}
-            onCompositionEnd={handleCompositionEnd}
-          />
-          <LabHistoryPanel patient={currentPatient} notes={patientNotes} />
-        </>
-      )}
-
-      {activeTab === "assessmentPlan" && (
-        <>
-          <section className="panel">
-            <div className="section-heading">
-              <h2>Diagnosis / Problems</h2>
-              <button type="button" className="secondary" onClick={refineAssessmentPlanFromClinicalFacts}>
-                Refine A/P
-              </button>
-            </div>
-            <div className="form-grid">
-              <label className="span-2">
-                Primary Diagnosis
-                <input
-                  value={currentPatient.primaryDiagnosis}
-                  onChange={(event) => updateField("primaryDiagnosis", event.target.value)}
-                  onBlur={handleFieldBlur}
-                  onCompositionStart={handleCompositionStart}
-                  onCompositionEnd={handleCompositionEnd}
-                />
-              </label>
-              <label className="span-2">
-                PMH / Underlying Disease
-                <textarea
-                  value={currentPatient.underlyingDiseases}
-                  onChange={(event) => updateUnderlyingDiseases(event.target.value)}
-                  onBlur={handleFieldBlur}
-                  onCompositionStart={handleCompositionStart}
-                  onCompositionEnd={handleCompositionEnd}
-                />
-              </label>
-              <div className="span-2">
-                <ActiveProblemEditor
-                  legacyText={currentPatient.activeProblems}
-                  items={currentPatient.activeProblemStructuredItems}
-                  onLegacyTextChange={updateActiveProblems}
-                  onItemsChange={(items) => updateField("activeProblemStructuredItems", items)}
-                  onFieldBlur={handleFieldBlur}
-                  onCompositionStart={handleCompositionStart}
-                  onCompositionEnd={handleCompositionEnd}
-                />
-              </div>
-            </div>
-          </section>
-          <DailyNoteForm
-            patient={currentPatient}
-            onChange={updateDraft}
-            section="assessmentPlan"
-            onImmediateCommit={() => void commitDraft()}
-            onFieldBlur={handleFieldBlur}
-            onCompositionStart={handleCompositionStart}
-            onCompositionEnd={handleCompositionEnd}
-          />
-        </>
-      )}
-
-      {activeTab === "tasksDischarge" && (
-        <>
-          <TaskList
-            tasks={currentPatient.tasks}
-            onChange={(tasks) => updateDraft({ ...currentPatient, tasks })}
-            onCommit={() => commitDraft()}
-            onFieldBlur={handleFieldBlur}
-            onCompositionStart={handleCompositionStart}
-            onCompositionEnd={handleCompositionEnd}
-          />
-          <DailyNoteForm
-            patient={currentPatient}
-            onChange={updateDraft}
-            section="discharge"
-            onImmediateCommit={() => void commitDraft()}
-            onFieldBlur={handleFieldBlur}
-            onCompositionStart={handleCompositionStart}
-            onCompositionEnd={handleCompositionEnd}
-          />
-          {currentPatient.specialAttention.trim() && (
-            <section className="panel legacy-note">
-              <h3>Legacy Special Attention</h3>
-              <ClinicalText value={currentPatient.specialAttention} />
-            </section>
-          )}
-        </>
-      )}
-
-      {activeTab === "aiIntake" && (
-        <div className="detail-update-stack">
-          <ClinicalDocumentQuickActions
-            patient={currentPatient}
-            notes={patientNotes}
-            selectedDate={selectedDate}
-            onSavePatient={async (nextPatient) => {
-              draftRef.current = nextPatient;
-              setDraftPatient(nextPatient);
-              await commitDraft(nextPatient);
-            }}
-          />
-          <AiIntakePanel
-            patient={currentPatient}
-            selectedDate={selectedDate}
-            onApplyPatient={applyAiIntakePatient}
-          />
-        </div>
-      )}
-
-      {activeTab === "more" && (
+      <details className="panel detail-more-section">
+        <summary>Advanced / legacy fields</summary>
         <div className="detail-more-stack">
           <details className="detail-more-section" open={currentPatient.isNewAdmission || currentPatient.showAdmissionBriefOnPrint}>
             <summary>Admission Brief</summary>
             <AdmissionBriefForm
               patient={currentPatient}
               onChange={updateDraft}
+              isDemoMode={isDemoMode}
               onFieldBlur={handleFieldBlur}
               onCompositionStart={handleCompositionStart}
               onCompositionEnd={handleCompositionEnd}
@@ -965,13 +886,15 @@ function PatientDetailPage({
               onSubmit={() => commitDraft()}
               submitLabel="Save Basic Info"
               showClinicalSections={false}
+              showTeamService={false}
+              showStatus={false}
               onFieldBlur={handleFieldBlur}
               onCompositionStart={handleCompositionStart}
               onCompositionEnd={handleCompositionEnd}
             />
           </details>
         </div>
-      )}
+      </details>
     </div>
   );
 }

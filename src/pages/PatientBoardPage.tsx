@@ -1,6 +1,6 @@
 import { Link } from "react-router-dom";
-import { useState } from "react";
-import type { AnalyzePatientBatchTextInput, DailyNotesByPatient, Patient, PatientImportDraft, SortMode, TaskCategory, TaskPriority } from "../types";
+import { useEffect, useState } from "react";
+import type { AnalyzePatientBatchTextInput, DailyNote, DailyNotesByPatient, Patient, PatientImportDraft, SortMode, TaskCategory, TaskPriority } from "../types";
 import {
   createId,
   createTodayFromYesterday,
@@ -12,6 +12,7 @@ import {
   nowIso,
   parseLabText,
   pendingDischargePrep,
+  safeClinicalLine,
   sortPatients,
   textToItems,
   todayKey,
@@ -21,8 +22,7 @@ import { applyClinicalKnowledgeToPatientImportDraft } from "../clinicalKnowledge
 import { buildConcisePatientClinicalUpdate } from "../clinicalPatientPolish";
 import { routePatientImportDraft } from "../clinicalFieldRouter";
 import PatientForm from "../components/PatientForm";
-import { ClinicalText } from "../components/ClinicalText";
-import { BoardSignalPanel } from "../components/BoardSignalPanel";
+import RoundSoapComposer from "../components/RoundSoapComposer";
 import {
   IconArchive,
   IconBrief,
@@ -33,6 +33,7 @@ import {
 } from "../components/icons";
 import { useT } from "../i18n";
 import { getRoundingDigest } from "../roundingDigest";
+import { patientToSoapDraft } from "../soapDraft";
 
 interface PageProps {
   patients: Patient[];
@@ -42,10 +43,12 @@ interface PageProps {
   isDemoMode?: boolean;
   onCreatePatient: (patient: Patient) => Promise<void>;
   onSavePatient: (patient: Patient) => Promise<void>;
+  onSaveDailyNote: (patientId: string, note: DailyNote) => Promise<void>;
 }
 
 const taskCategories: TaskCategory[] = ["lab", "imaging", "consult", "discharge", "family", "order", "other"];
 type BulkImportMode = NonNullable<AnalyzePatientBatchTextInput["importMode"]>;
+type BoardVisualKind = "s" | "vs" | "pe" | "lab" | "image" | "task" | "dc" | "other";
 
 function uniqueLines(...values: string[]) {
   const seen = new Set<string>();
@@ -78,6 +81,83 @@ function normalizeTaskPriority(value: string): TaskPriority {
 
 function normalizeTaskCategory(value: string): TaskCategory {
   return taskCategories.includes(value as TaskCategory) ? (value as TaskCategory) : "other";
+}
+
+function classifyBoardVisualLine(line: string, fallbackKind: BoardVisualKind = "other") {
+  const raw = line.trim();
+  const important = raw.startsWith("!") || /\b(urgent|crit|critical|shock|sepsis|desat|bleed|hypot|lactate|b\/c|blood culture|teicoplanin|vancomycin|meropenem|cef|pip\/tazo)\b/i.test(raw);
+  const withoutBang = raw.replace(/^!+\s*/, "");
+  const prefixMatch = withoutBang.match(/^(S|V\/S|VS|PE|Lab|Image|Img|Task|Tasks|DC)\s*:\s*(.*)$/i);
+  const prefix = prefixMatch?.[1].toLowerCase() ?? "";
+  const text = (prefixMatch ? prefixMatch[2].trim() : withoutBang)
+    .replace(/^!+\s*/, "")
+    .replace(/^(?:crit|critical|abn|abnormal|anchor|trend)\s+/i, "")
+    .trim();
+
+  let kind = fallbackKind;
+  if (prefix === "s") kind = "s";
+  if (prefix === "v/s" || prefix === "vs") kind = "vs";
+  if (prefix === "pe") kind = "pe";
+  if (prefix === "lab") kind = "lab";
+  if (prefix === "image" || prefix === "img") kind = "image";
+  if (prefix === "task" || prefix === "tasks") kind = "task";
+  if (prefix === "dc") kind = "dc";
+
+  const critical =
+    important ||
+    (kind === "lab" && /\b(crit|critical|lactate|k\s*[6-9](?:\.\d+)?|k\s*[0-2](?:\.\d+)?|hb\s*[0-7](?:\.\d+)?|na\s*1[01]\d|wbc\s*[23]\d|plt\s*[0-4]\d|cr\s*[2-9](?:\.\d+)?)\b/i.test(text)) ||
+    (kind === "vs" && /\b(bp\s*[5-8]\d\/|spo2\s*[0-8]\d|rr\s*[3-9]\d|t\s*3[89]\.|hr\s*1[3-9]\d)\b/i.test(text));
+
+  const labelMap: Record<BoardVisualKind, string> = {
+    s: "S",
+    vs: "V/S",
+    pe: "PE",
+    lab: "LAB",
+    image: "IMG",
+    task: "TASK",
+    dc: "DC",
+    other: "NOTE",
+  };
+
+  return {
+    kind,
+    label: labelMap[kind],
+    text: safeClinicalLine(text || withoutBang, 76),
+    critical,
+  };
+}
+
+function renderBoardVisualLines(lines: string[], fallback: string, fallbackKind: BoardVisualKind = "other", maxLines = 4) {
+  const visibleLines = lines.map((line) => line.trim()).filter(Boolean).slice(0, maxLines);
+  if (visibleLines.length === 0) return <span className="board-visual-empty">{fallback}</span>;
+
+  return (
+    <div className="board-visual-stack">
+      {visibleLines.map((line, index) => {
+        const visual = classifyBoardVisualLine(line, fallbackKind);
+        return (
+          <div
+            className={`board-visual-line board-visual-line-${visual.kind}${visual.critical ? " board-visual-line-critical" : ""}`}
+            key={`${line}-${index}`}
+          >
+            <span className="board-visual-label">{visual.label}</span>
+            <span className="board-visual-text">{visual.text}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function boardProblemClass(title: string, lines: string[]) {
+  const text = `${title} ${lines.join(" ")}`.toLowerCase();
+  if (/\b(shock|sepsis|bacteremia|bleed|hypox|aki|critical|urgent|neutropenic|stroke|acs)\b/.test(text)) {
+    return "board-soap-problem board-soap-problem-critical";
+  }
+  if (/\b(abx|antibiotic|teicoplanin|vancomycin|meropenem|cef|culture|oxygen|transfusion|consult|source)\b/.test(text)) {
+    return "board-soap-problem board-soap-problem-important";
+  }
+  return "board-soap-problem";
 }
 
 function taskLine(task: PatientImportDraft["tasks"][number]) {
@@ -502,6 +582,7 @@ function PatientBoardPage({
   isDemoMode = false,
   onCreatePatient,
   onSavePatient,
+  onSaveDailyNote,
 }: PageProps) {
   const t = useT();
   const [showForm, setShowForm] = useState(false);
@@ -517,6 +598,8 @@ function PatientBoardPage({
   const [bulkStatus, setBulkStatus] = useState("");
   const [bulkDrafts, setBulkDrafts] = useState<PatientImportDraft[]>([]);
   const [selectedDraftIds, setSelectedDraftIds] = useState<Set<string>>(new Set());
+  const [bulkImportOpen, setBulkImportOpen] = useState(false);
+  const [openSoapComposerPatientId, setOpenSoapComposerPatientId] = useState("");
   const attendingNames = getActiveAttendingNames(patients);
   const uniquePatients = Array.from(new Map(patients.map((patient) => [patient.id, patient])).values());
   const activeSourcePatients = getActivePatients(uniquePatients);
@@ -542,6 +625,12 @@ function PatientBoardPage({
     const digest = boardDigest(patient);
     return Boolean(digest.subjective || digest.objective || digest.lab || digest.image || pendingTasks(patient).length > 0);
   }).length;
+
+  useEffect(() => {
+    if (bulkLoading || bulkError || bulkStatus || bulkDrafts.length > 0) {
+      setBulkImportOpen(true);
+    }
+  }, [bulkDrafts.length, bulkError, bulkLoading, bulkStatus]);
 
   async function addPatient() {
     const now = nowIso();
@@ -862,18 +951,35 @@ function PatientBoardPage({
           onChange={setDraftPatient}
           onSubmit={addPatient}
           submitLabel="Create Patient"
+          showTeamService={false}
+          showStatus={false}
           onCancel={() => setShowForm(false)}
         />
       )}
 
-      <section className="panel bulk-import-panel">
-        <div className="section-heading">
+      <details
+        className="panel bulk-import-panel bulk-import-collapse"
+        open={bulkImportOpen}
+        onToggle={(event) => setBulkImportOpen(event.currentTarget.open)}
+      >
+        <summary className="bulk-import-summary">
           <div>
             <h3>Bulk Patient Import</h3>
-            <p className="muted">Paste a de-identified service list once, review extracted cards, then create or update selected patients.</p>
+            <p className="muted">
+              {bulkImportOpen
+                ? "Paste a de-identified service list once, review extracted cards, then create or update selected patients."
+                : "Collapsed. Open only when importing or updating patients."}
+            </p>
           </div>
-          <span className="badge normal">{isDemoMode ? "Demo parser" : "AI draft"}</span>
-        </div>
+          <div className="bulk-import-summary-meta">
+            {bulkDrafts.length > 0 && <span className="badge normal">{bulkDrafts.length} draft{bulkDrafts.length === 1 ? "" : "s"}</span>}
+            {bulkText.trim() && bulkDrafts.length === 0 && <span className="badge low">text ready</span>}
+            <span className="badge normal">{isDemoMode ? "Demo parser" : "AI draft"}</span>
+            <span className="bulk-import-toggle-label">{bulkImportOpen ? "Collapse" : "Expand"}</span>
+          </div>
+        </summary>
+
+        <div className="bulk-import-body">
 
         <label>
           Import intent
@@ -1124,7 +1230,8 @@ function PatientBoardPage({
             ))}
           </div>
         )}
-      </section>
+        </div>
+      </details>
 
       <section className="panel morning-cockpit">
         <div className="section-heading">
@@ -1246,8 +1353,11 @@ function PatientBoardPage({
         {dataError && <p className="error-message">{dataError}</p>}
         <div className="patient-board-grid">
           {activePatients.map((patient) => {
-            const digest = boardDigest(patient);
-            const snapshot = digest.snapshot;
+            const soap = patientToSoapDraft(patient, dailyNotesByPatient[patient.id] ?? [], todayKey());
+            const redFlagLine = soap.header.find((line) => /^Red flags:/i.test(line))?.replace(/^Red flags:\s*/i, "") ?? "";
+            const contextLines = soap.header.filter(
+              (line) => !/^Red flags:|^Date:|^Attending:/i.test(line) && !line.includes(patient.patientCode),
+            );
             const pendingTaskCount = pendingTasks(patient).length;
             const urgentTaskCount = pendingTasks(patient).filter(
               (task) => task.priority === "urgent" || task.text.trim().startsWith("!"),
@@ -1268,51 +1378,48 @@ function PatientBoardPage({
               </header>
 
               <div className="patient-board-card-body">
-                <section className="patient-board-section patient-board-overview">
-                  {snapshot.redFlags.length > 0 && (
+                <section className="patient-board-section patient-board-soap-context">
+                  {redFlagLine && (
                     <div className="board-red-flag-strip">
                       <span className="board-label">Red Flags</span>
-                      <span>{snapshot.redFlags.slice(0, 2).join("; ")}</span>
+                      <span>{redFlagLine}</span>
                     </div>
                   )}
-                  <div className="digest-line digest-line-primary">
-                    <span className="board-label">Dx</span>
-                    <strong>{snapshot.dxCore || "-"}</strong>
+                  <div className="board-soap-header-lines">
+                    {contextLines.slice(0, 5).map((line) => (
+                      <div className={/^Dx:/i.test(line) ? "board-soap-header-primary" : "board-soap-header-line"} key={line}>
+                        {line}
+                      </div>
+                    ))}
+                    {contextLines.length === 0 && (
+                      <div className="board-soap-header-primary">Dx: {patient.primaryDiagnosis || patient.oneLiner || "-"}</div>
+                    )}
+                    <div className="muted">Attending: {patient.attending || t("board.unassigned")}</div>
                   </div>
-                  {snapshot.activeIssues.length > 0 && (
-                    <div className="board-chip-row" aria-label="Active issues">
-                      {snapshot.activeIssues.slice(0, 4).map((issue) => (
-                        <span className="board-mini-chip" key={issue}>{issue}</span>
-                      ))}
-                    </div>
-                  )}
-                  {snapshot.risks.length > 0 && (
-                  <div className="digest-line digest-line-muted">
-                    <span className="board-label">Risk</span>
-                    <span>{snapshot.risks.slice(0, 4).join(", ")}</span>
-                  </div>
-                  )}
-                  <div className="muted">Attending: {patient.attending || t("board.unassigned")}</div>
                 </section>
 
-                <section className="patient-board-section patient-board-today">
-                  <span className="board-label">S</span>
-                  <ClinicalText value={digest.subjective} fallback="-" maxLines={2} maxCharsPerLine={48} />
-                  <div className="board-subsection">
-                    <span className="board-label">V/S / PE</span>
-                    <BoardSignalPanel value={digest.objective} fallback="-" kind="objective" maxItems={2} />
+                <section className="patient-board-section patient-board-soap-main">
+                  <div className="board-soap-row">
+                    <span className="board-label">S</span>
+                    {renderBoardVisualLines(soap.sLines, "-", "s", 2)}
                   </div>
-                  <div className="board-subsection">
-                    <span className="board-label">Lab focus</span>
-                    <BoardSignalPanel value={digest.lab} fallback="No lab signal" kind="lab" maxItems={2} />
+                  <div className="board-soap-row">
+                    <span className="board-label">O</span>
+                    {renderBoardVisualLines(soap.oLines, "-", "other", 5)}
                   </div>
-                  <span className="board-label">Image focus</span>
-                  <BoardSignalPanel value={digest.image} fallback="-" kind="image" maxItems={2} />
                 </section>
 
-                <section className="patient-board-section patient-board-plan">
+                <section className="patient-board-section patient-board-soap-ap">
                   <span className="board-label">A/P</span>
-                  <ClinicalText value={digest.assessmentPlan} fallback="-" maxLines={3} maxCharsPerLine={50} />
+                  <div className="board-soap-ap-list">
+                    {soap.apProblems.slice(0, 4).map((problem) => (
+                      <div className={boardProblemClass(problem.title, problem.lines)} key={`${problem.title}-${problem.lines.join("|")}`}>
+                        <strong>#{problem.title}</strong>
+                        {problem.lines.length > 0 && <span>{problem.lines.slice(0, 2).join("; ")}</span>}
+                      </div>
+                    ))}
+                    {soap.apProblems.length === 0 && <span className="muted">-</span>}
+                  </div>
                 </section>
 
                 <section className="patient-board-section patient-board-tasks-dc">
@@ -1323,10 +1430,15 @@ function PatientBoardPage({
                       <span>{pendingTaskCount} pending</span>
                     </span>
                   </div>
-                  <ClinicalText value={digest.tasks} fallback="No pending tasks" maxLines={3} maxCharsPerLine={50} />
+                  {renderBoardVisualLines(soap.taskLines, "No pending tasks", "task", 4)}
                   <div className="board-subsection patient-board-discharge">
                     <span className="board-label">DC</span>
-                    <ClinicalText value={digest.discharge || (patient.dischargeTargetDate ? `Target: ${patient.dischargeTargetDate}` : "")} fallback="TBD" maxLines={2} maxCharsPerLine={50} />
+                    {renderBoardVisualLines(
+                      soap.dcLines.length > 0 ? soap.dcLines : patient.dischargeTargetDate ? [`Target: ${patient.dischargeTargetDate}`] : [],
+                      "TBD",
+                      "dc",
+                      2,
+                    )}
                     {dischargeReminder(patient) && <div className="important-line">{dischargeReminder(patient)}</div>}
                   </div>
                 </section>
@@ -1343,6 +1455,15 @@ function PatientBoardPage({
                     <span className="icon-button-icon"><IconDetails /></span>
                     <span className="icon-button-label">{t("board.actionShort.details")}</span>
                   </Link>
+                  <button
+                    type="button"
+                    className={`secondary icon-button${openSoapComposerPatientId === patient.id ? " icon-button-active" : ""}`}
+                    onClick={() => setOpenSoapComposerPatientId((current) => (current === patient.id ? "" : patient.id))}
+                    aria-label="Update SOAP"
+                    title="Update SOAP"
+                  >
+                    <span className="icon-button-label">SOAP</span>
+                  </button>
                   <button
                     type="button"
                     className="secondary icon-button"
@@ -1399,6 +1520,19 @@ function PatientBoardPage({
                   </button>
                 </div>
               </footer>
+              {openSoapComposerPatientId === patient.id && (
+                <div className="patient-board-inline-soap">
+                  <RoundSoapComposer
+                    patient={patient}
+                    dailyNotes={dailyNotesByPatient[patient.id] ?? []}
+                    selectedDate={todayKey()}
+                    isDemoMode={isDemoMode}
+                    compact
+                    onSavePatient={onSavePatient}
+                    onSaveDailyNote={onSaveDailyNote}
+                  />
+                </div>
+              )}
             </article>
             );
           })}

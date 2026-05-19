@@ -18,8 +18,19 @@ const {
   formatRuleBasedWeeklySummary,
 } = await server.ssrLoadModule("/src/clinicalKnowledge.ts");
 const { formatClinicalDocumentDraft } = await server.ssrLoadModule("/src/clinicalDocumentFormat.ts");
-const { emptyPatient, getLabFocusSummary, interpretLabItem, parseLabReports, parseLabText, safeClinicalLine, textToItems, todayKey, nowIso, createId } = await server.ssrLoadModule("/src/utils.ts");
+const { emptyDailyNote, emptyPatient, getLabFocusSummary, interpretLabItem, parseLabReports, parseLabText, safeClinicalLine, textToItems, todayKey, nowIso, createId } = await server.ssrLoadModule("/src/utils.ts");
 const { getRoundingDigest } = await server.ssrLoadModule("/src/roundingDigest.ts");
+const {
+  aiSoapDraftToSoapDraft,
+  formatSoapDraft,
+  getCanonicalSoapText,
+  localRoundSoapFromPaste,
+  parseSoapText,
+  patientToSoapDraft,
+  soapDraftToPatientPatch,
+  soapTextToPatientPatch,
+  soapTextWithDerivedHighlights,
+} = await server.ssrLoadModule("/src/soapDraft.ts");
 const { buildConcisePatientClinicalUpdate } = await server.ssrLoadModule("/src/clinicalPatientPolish.ts");
 const { sanitizeAiSoapDraftForReview } = await server.ssrLoadModule("/src/aiDraftSanitizer.ts");
 const { routePatientImportDraft, routePatientClinicalFields } = await server.ssrLoadModule("/src/clinicalFieldRouter.ts");
@@ -1082,6 +1093,164 @@ try {
 } catch (error) {
   failures.push({ name: "H5-113 quality regression keeps safe A/P, named PMH, image study type, lab dates, and abnormal flags", error: error instanceof Error ? error.message : String(error) });
   console.error(`FAIL H5-113 quality regression keeps safe A/P, named PMH, image study type, lab dates, and abnormal flags: ${failures[failures.length - 1].error}`);
+}
+
+try {
+  const patient = {
+    ...emptyPatient(),
+    id: "demo-soap-first",
+    bed: "H5-113",
+    patientCode: "DEMO-SOAP",
+    age: 51,
+    sex: "M",
+    primaryDiagnosis: "esophageal SCC with MRSA/Enterococcus bacteremia",
+    underlyingDiseases: "right hypopharyngeal SCC; mid-lower esophageal SCC; J-tube",
+    tasks: [],
+    updatedAt: nowIso(),
+  };
+  const aiDraft = {
+    oneLiner: "esophageal SCC w/ MRSA/Enterococcus bacteremia",
+    admissionSummary: "",
+    isbarHandoff: "",
+    clinicalReasoning: {
+      currentClinicalState: "bacteremia on teicoplanin, clinically stable",
+      primaryRisk: "line infection/source control",
+      whyThisMatters: [],
+      activeProblemsRanked: [],
+      resolvedOrLessImportant: ["initial fluid-responsive shock, resolved"],
+      missingDataNeeded: ["blood culture clearance"],
+      noiseToIgnore: ["Brain CT no ICH/edema unless neuro concern"],
+    },
+    subjective: {
+      chiefConcern: "5/15 afebrile, weak, no fever",
+      symptoms: [],
+      overnightEvents: [],
+      importantSymptoms: [],
+      importantOvernightEvents: [],
+    },
+    objective: {
+      vitals: [
+        { date: "5/15", name: "V/S", value: "T 37.0 C, BP 100/69, P 99, RR 16, SpO2 100%", interpretation: "", isAbnormal: false, isImportant: true },
+      ],
+      bloodSugars: [],
+      physicalExam: [{ system: "Ext", finding: "No edema", isImportant: false }],
+      labs: [
+        { date: "5/15", group: "Infx", name: "WBC", value: "12.7", unit: "", previousValue: "", isAbnormal: true, isImportant: true, interpretation: "" },
+        { date: "5/15", group: "Anemia", name: "Hb", value: "9.4", unit: "", previousValue: "10.2", isAbnormal: true, isImportant: true, interpretation: "downtrend" },
+        { date: "5/15", group: "Lyte/Renal", name: "K", value: "3.0", unit: "", previousValue: "", isAbnormal: true, isImportant: true, interpretation: "" },
+      ],
+      images: [
+        { date: "5/13", studyType: "CT neck/chest", finding: "persistent esophageal wall thickening; stable metastatic LAD", impression: "persistent esophageal wall thickening; stable metastatic LAD", isImportant: true },
+      ],
+    },
+    assessmentPlan: [
+      {
+        problemTitle: "MRSA/Enterococcus bacteremia",
+        assessmentSummary: "B/C MRSA and Port-A Enterococcus faecalis",
+        evidenceOrCourseItems: ["Teicoplanin started 5/13"],
+        planItems: ["Teicoplanin 5/13-, f/u B/C clearance, define duration/source"],
+        isImportant: true,
+      },
+      {
+        problemTitle: "Esophageal/hypopharyngeal SCC, J-tube nutrition",
+        assessmentSummary: "advanced SCC with J-tube feeding",
+        evidenceOrCourseItems: ["CT neck/chest 5/13 persistent esophageal wall thickening/stable metastatic LAD"],
+        planItems: ["maintain J-tube feeds; oncology f/u"],
+        isImportant: true,
+      },
+    ],
+    redFlags: [{ text: "Bacteremia", reason: "culture-positive infection; verify clearance/source" }],
+    tasks: [
+      { text: "f/u repeat blood cultures from 5/15", priority: "urgent", dueDate: "", category: "lab" },
+      { text: "monitor port-A as possible source", priority: "urgent", dueDate: "", category: "order" },
+    ],
+    dischargeIssues: ["continue IV abx course; outpatient oncology f/u"],
+    thinkingPrompts: [],
+    uncertainty: [],
+  };
+  const soap = aiSoapDraftToSoapDraft(aiDraft, patient, "2026-05-15");
+  const text = formatSoapDraft(soap);
+  if (!/^S:\n/m.test(text) || !/^O:\n/m.test(text) || !/^A\/P:\n/m.test(text) || !/^# MRSA\/Enterococcus bacteremia/m.test(text)) {
+    throw new Error(`SOAP-first text lost expected section/problem structure:\n${text}`);
+  }
+  if (!/Lab: .*WBC 12\.7/i.test(text) || !/Lab: .*Hb 9\.4.*from 10\.2/i.test(text) || !/CT neck\/chest/i.test(text)) {
+    throw new Error(`SOAP-first text lost lab trend or image study:\n${text}`);
+  }
+  if (/TLS \/ onc safety|trend TLS labs|Heme\/Onc safety/i.test(text)) {
+    throw new Error(`SOAP-first text leaked rule labels:\n${text}`);
+  }
+  const parsed = parseSoapText(text);
+  const patch = soapDraftToPatientPatch(parsed, patient, "2026-05-15");
+  if (!/Teicoplanin 5\/13-/i.test(patch.patient.plan) || !/CT neck\/chest/i.test(patch.patient.newImaging)) {
+    throw new Error(`SOAP save adapter lost concrete therapy/image:\n${patch.patient.plan}\n${patch.patient.newImaging}`);
+  }
+  if (patch.patient.tasks.length !== 2 || !patch.dailyNotePatch.assessmentPlanItems?.length) {
+    throw new Error("SOAP save adapter did not create task/AP fields for existing schema");
+  }
+  const fallbackPatient = {
+    ...patient,
+    rawLabText: "Cr 2.7, K 5.3",
+    newLabs: "Cr 2.7, K 5.3",
+    parsedLabItems: parseLabText("Cr 2.7, K 5.3"),
+  };
+  const fallbackSoap = patientToSoapDraft(fallbackPatient, [], "2026-05-15");
+  const fallbackLabText = fallbackSoap.oLines.join("\n");
+  if (/!Crit|Abn Lyte\/Renal|Trend Anemia|Anchor/i.test(fallbackLabText) || !/Lab: Cr 2\.7/i.test(fallbackLabText)) {
+    throw new Error(`SOAP fallback lab line still exposes parser labels: ${fallbackLabText}`);
+  }
+  const reviewedSoapText = [
+    "H5-113new 16189520 51/M",
+    "Dx: esophageal cancer w/ MRSA/Enterococcus bacteremia",
+    "PMH: hypopharyngeal SCC / esophageal SCC",
+    "Date: 2026-05-15",
+    "",
+    "S:",
+    "- afebrile, weak, no fever",
+    "",
+    "O:",
+    "- V/S: T 37.0 C, BP 100/69, P 99, RR 16, SpO2 100%",
+    "- Lab: WBC 12.7, Neu 88.9, Hb 9.4, K 3.0",
+    "- Image: CT neck/chest 5/13 persistent esophageal wall thickening/stable metastatic LAD",
+    "",
+    "A/P:",
+    "# MRSA/Enterococcus bacteremia",
+    "- Teicoplanin 5/13-, f/u B/C clearance, define duration/source",
+    "# SCC, J-tube nutrition",
+    "- maintain J-tube feeds; onc f/u",
+    "",
+    "Tasks:",
+    "- f/u repeat blood cultures from 5/15",
+    "- monitor port-A as possible source",
+    "",
+    "DC:",
+    "- IV abx course; J-tube feeding; OPD oncology",
+  ].join("\n");
+  const reviewedNote = { ...emptyDailyNote("2026-05-15"), soapText: reviewedSoapText, soapStatus: "reviewed", soapVersion: 1 };
+  const canonical = getCanonicalSoapText(patient, [reviewedNote], "2026-05-15");
+  if (canonical.source !== "selected" || canonical.text !== reviewedSoapText) {
+    throw new Error("Canonical SOAP did not prefer selected dailyNote.soapText");
+  }
+  const boardSoap = patientToSoapDraft(patient, [reviewedNote], "2026-05-15");
+  if (!/Teicoplanin 5\/13-/.test(boardSoap.apProblems.flatMap((problem) => problem.lines).join("\n"))) {
+    throw new Error("Board/Print SOAP draft did not read reviewed soapText first");
+  }
+  const savedPatch = soapTextToPatientPatch(reviewedSoapText, patient, "2026-05-15");
+  if (savedPatch.dailyNotePatch.soapText !== reviewedSoapText || savedPatch.dailyNotePatch.soapStatus !== "reviewed") {
+    throw new Error("Saving reviewed SOAP did not persist canonical soapText metadata");
+  }
+  const mergedLocalSoap = localRoundSoapFromPaste(patient, [reviewedNote], "2026-05-15", "5/16 B/C pending. Continue Teicoplanin 5/13-. CT neck/chest: stable LAD.");
+  if (!/B\/C pending|Teicoplanin|CT neck\/chest/i.test(mergedLocalSoap)) {
+    throw new Error(`Local demo SOAP merge lost treatment/pending/image facts:\n${mergedLocalSoap}`);
+  }
+  const highlighted = soapTextWithDerivedHighlights(reviewedSoapText);
+  if (!/!\- Teicoplanin 5\/13-/i.test(highlighted) || !/\[\[blue:.*OPD oncology/i.test(highlighted)) {
+    throw new Error(`Derived SOAP highlight did not mark infection/DC signals:\n${highlighted}`);
+  }
+  console.log("PASS SOAP-first adapter creates one editable note and saves to existing fields");
+  supplementalPasses += 1;
+} catch (error) {
+  failures.push({ name: "SOAP-first adapter creates one editable note and saves to existing fields", error: error instanceof Error ? error.message : String(error) });
+  console.error(`FAIL SOAP-first adapter creates one editable note and saves to existing fields: ${failures[failures.length - 1].error}`);
 }
 
 await server.close();

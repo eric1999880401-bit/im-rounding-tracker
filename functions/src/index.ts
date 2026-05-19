@@ -301,6 +301,17 @@ const aiDocumentDraftSchema = {
   },
 } as const;
 
+const roundSoapDraftSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["soapText", "warnings", "highlightHints"],
+  properties: {
+    soapText: stringSchema,
+    warnings: { type: "array", items: stringSchema },
+    highlightHints: { type: "array", items: stringSchema },
+  },
+} as const;
+
 const patientImportDraftSchema = {
   type: "object",
   additionalProperties: false,
@@ -424,6 +435,17 @@ interface CallableInput {
     activeProblems?: unknown;
     currentAssessmentPlan?: unknown;
   };
+}
+
+interface RoundSoapCallableInput {
+  patientId?: unknown;
+  selectedDate?: unknown;
+  sourceType?: unknown;
+  workflowMode?: unknown;
+  rawText?: unknown;
+  currentSoapBaseline?: unknown;
+  deidentifiedConfirmed?: unknown;
+  patientContext?: CallableInput["patientContext"];
 }
 
 interface DocumentCallableInput {
@@ -942,6 +964,10 @@ function makePrompt(sourceType: SourceType, rawText: string, patientContext: Rec
   ].join("\n");
   const intakeTargets = [
     "Messy chart extraction target:",
+    "- Product target is SOAP-first: pasted data should become one readable physician SOAP note, not many independent cards.",
+    "- Compose every SOAP-facing field so it can be printed in this exact order: header context, S, O with V/S/PE/Lab/Image, A/P with '# problem' logic, then Tasks/DC.",
+    "- Do not rely on rule labels as clinical judgment. Avoid labels such as Heme/Onc safety, TLS/onc safety, Cardio/HF/rhythm unless the source clearly supports the specific active problem.",
+    "- Lab text should preserve source values, dates, arrows/trends, and clinically meaningful abnormalities. Do not let generic lab categories override the pasted lab line.",
     "- First fill clinicalReasoning before composing SOAP-facing text.",
     "- clinicalReasoning.primaryRisk must answer: what would a covering IM physician need to know first, and what could deteriorate or change management today/overnight?",
     "- clinicalReasoning.whyThisMatters must cite short source facts from the pasted text or allowed context; every important conclusion needs a visible basis.",
@@ -1066,6 +1092,8 @@ function compactDailyNote(noteId: string, data: FirebaseFirestore.DocumentData) 
   const note = asPlainObject(data);
   return {
     date: String(note.date ?? noteId),
+    soapText: note.soapText ?? "",
+    soapStatus: note.soapStatus ?? "",
     redFlags: note.importantRedFlags ?? "",
     overnight: note.overnightEvents ?? "",
     subjective: note.subjectiveOrChiefConcern ?? "",
@@ -1183,6 +1211,82 @@ function makeDocumentPrompt(params: {
   ].join("\n");
 }
 
+function makeRoundSoapPrompt(params: {
+  sourceType: SourceType;
+  workflowMode: string;
+  selectedDate: string;
+  rawText: string;
+  currentSoapBaseline: string;
+  patientContext: Record<string, unknown>;
+  dailyNotes: Array<Record<string, unknown>>;
+}) {
+  const modeInstruction =
+    params.workflowMode === "dailyUpdate"
+      ? [
+          "Workflow mode: Daily update.",
+          "- Treat the current reviewed SOAP baseline as already clinician-reviewed and generally correct.",
+          "- Do not rewrite the whole note. Add or revise only new clinically meaningful V/S, labs, images, symptoms, course, A/P details, tasks, and DC blockers from pasted fields.",
+          "- If pasted text says a task/result is done or resolved, remove or update that task in the SOAP instead of carrying it forward.",
+          "- Do not change diagnosis/PMH/A/P structure unless today's pasted data clearly changes the clinical problem list.",
+        ].join("\n")
+      : params.workflowMode === "newSoap"
+        ? [
+            "Workflow mode: New SOAP.",
+            "- This is the first inpatient SOAP after admission. Use admission context plus pasted V/S/labs/images/course to write a complete first SOAP.",
+            "- Build a fresh A/P from active admission problems and today's objective data.",
+            "- Keep admission history concise; do not copy the full admission note.",
+          ].join("\n")
+        : [
+            "Workflow mode: Transfer / handoff SOAP.",
+            "- This is the receiving team's first SOAP after transfer or handoff.",
+            "- Synthesize admission context, prior SOAP/handoff, course, consults, labs, images, procedures, antibiotics, and current status into one usable SOAP.",
+            "- Distinguish resolved prior events from active receiving-team problems.",
+          ].join("\n");
+
+  return [
+    "Task:",
+    "Update one clinician-reviewed inpatient IM SOAP note from the pasted de-identified source text.",
+    "",
+    "Output format requirements:",
+    "- Return SOAP text only inside JSON soapText.",
+    "- Use this exact section order: header context, S:, O:, A/P:, Tasks:, DC:.",
+    "- Header should include bed/code/age-sex if known, Dx, PMH if high-yield, attending/date if useful.",
+    "- O must use fixed order V/S, PE, Lab, Image. Put imaging reports under Image, never PE.",
+    "- A/P must use '# problem' blocks. Each problem needs current status/evidence plus concrete plan.",
+    "- Tasks must be 3-6 maximum and only actionable/timed/pending items.",
+    "- DC only if disposition, discharge blockers, OPD, meds, certificates, or placement are relevant.",
+    "- Keep language concise, physician-style, and defensible. No rule labels, no dashboard tags, no code-like parser labels.",
+    "- Do not write generic tasks such as monitor closely, review VTE risk, trend TLS labs unless the source supports the exact issue.",
+    "- Preserve exact lab values, dates, antibiotics, cultures, image study names/dates, procedures, consults, and pending items.",
+    "- If lab parser/category would conflict with pasted lab line, trust pasted text and warn instead of rewriting values.",
+    "- If source says shock/hypotension resolved or latest BP stable, do not create active shock red flag/A/P.",
+    "- Red/high-risk facts can be marked with a leading ! in soapText; important therapies/pending items can be left as normal text.",
+    "",
+    modeInstruction,
+    "",
+    "Selected date:",
+    params.selectedDate || "(not provided)",
+    "",
+    "Source type:",
+    params.sourceType,
+    "",
+    "Workflow mode:",
+    params.workflowMode,
+    "",
+    "Allowed patient context:",
+    JSON.stringify(params.patientContext, null, 2),
+    "",
+    "Recent saved daily notes, newest last or selected by date when available:",
+    JSON.stringify(params.dailyNotes, null, 2),
+    "",
+    "Current reviewed SOAP baseline to update:",
+    params.currentSoapBaseline || "(none)",
+    "",
+    "Pasted de-identified source text:",
+    params.rawText,
+  ].join("\n");
+}
+
 export const analyzePatientBatchText = onCall(
   {
     secrets: [OPENAI_API_KEY],
@@ -1293,6 +1397,154 @@ export const analyzePatientBatchText = onCall(
   },
 );
 
+export const generateRoundSoap = onCall(
+  {
+    secrets: [OPENAI_API_KEY],
+    timeoutSeconds: 120,
+    memory: "512MiB",
+  },
+  async (request) => {
+    if (!request.auth) {
+      throw new HttpsError("unauthenticated", "Sign in is required before using SOAP generation.");
+    }
+
+    const data = request.data as RoundSoapCallableInput;
+    const uid = request.auth.uid;
+    const patientId = String(data.patientId ?? "").trim();
+    const selectedDate = truncateString(data.selectedDate, 20);
+    const sourceType = String(data.sourceType ?? "dailyUpdate") as SourceType;
+    const workflowModeValue = String(data.workflowMode ?? "dailyUpdate");
+    const workflowMode = ["dailyUpdate", "newSoap", "transferHandoff"].includes(workflowModeValue)
+      ? workflowModeValue
+      : "dailyUpdate";
+    const rawText = String(data.rawText ?? "").trim();
+    const currentSoapBaseline = truncateString(data.currentSoapBaseline, 12000);
+    const deidentifiedConfirmed = data.deidentifiedConfirmed === true;
+
+    if (!patientId) {
+      throw new HttpsError("invalid-argument", "patientId is required.");
+    }
+
+    if (!sourceTypes.has(sourceType)) {
+      throw new HttpsError("invalid-argument", "Invalid SOAP source type.");
+    }
+
+    if (!deidentifiedConfirmed) {
+      throw new HttpsError("failed-precondition", "Confirm that the pasted text is de-identified before SOAP generation.");
+    }
+
+    if (rawText.length < 10) {
+      throw new HttpsError("invalid-argument", "Paste more de-identified clinical text before SOAP generation.");
+    }
+
+    if (rawText.length > MAX_RAW_TEXT_CHARS) {
+      throw new HttpsError("invalid-argument", `Text is too long. Limit input to ${MAX_RAW_TEXT_CHARS} characters.`);
+    }
+
+    const patientRef = admin.firestore().doc(`users/${uid}/patients/${patientId}`);
+    const patientSnapshot = await patientRef.get();
+    if (!patientSnapshot.exists) {
+      throw new HttpsError("not-found", "Patient was not found for this signed-in user.");
+    }
+
+    const apiKey = getOpenAiApiKey();
+    if (!apiKey) {
+      throw new HttpsError("failed-precondition", "SOAP generation is not configured. Set OPENAI_API_KEY for Firebase Functions.");
+    }
+
+    const notesSnapshot = await patientRef.collection("dailyNotes").orderBy("date", "asc").get();
+    const dailyNotes = notesSnapshot.docs
+      .map((noteDoc) => compactDailyNote(noteDoc.id, noteDoc.data()))
+      .slice(-14);
+    const patientContext = {
+      ...compactPatientContext(patientSnapshot.data()),
+      ...(sanitizePatientContext(data.patientContext) ?? {}),
+    };
+    const model = getModel();
+    const openAiResponse = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model,
+        input: [
+          {
+            role: "system",
+            content: [
+              "You are a clinician-facing SOAP note generator for inpatient internal medicine rounds.",
+              "Return JSON only matching the supplied schema.",
+              "The user will edit before saving; do not write to patient data.",
+              "Your job is clinical judgment and concise wording, not structured dashboard extraction.",
+              "Produce one complete, readable, check-only SOAP note that can be used for rounds and print.",
+              "Do not include patient names, full MRNs, birthdays, phone numbers, addresses, or identifiers.",
+            ].join(" "),
+          },
+          {
+            role: "user",
+            content: makeRoundSoapPrompt({
+              sourceType,
+              workflowMode,
+              selectedDate,
+              rawText,
+              currentSoapBaseline,
+              patientContext,
+              dailyNotes,
+            }),
+          },
+        ],
+        text: {
+          format: {
+            type: "json_schema",
+            name: "round_soap_draft",
+            description: "Single SOAP text draft for clinician review before saving.",
+            strict: true,
+            schema: roundSoapDraftSchema,
+          },
+        },
+      }),
+    });
+
+    const responseBody = (await openAiResponse.json().catch(() => ({}))) as Record<string, unknown>;
+    if (!openAiResponse.ok) {
+      throw new HttpsError("internal", getOpenAiErrorMessage(openAiResponse.status, responseBody));
+    }
+
+    const refusal = extractRefusal(responseBody);
+    if (refusal) {
+      throw new HttpsError("failed-precondition", refusal);
+    }
+
+    const outputText = extractOutputText(responseBody);
+    if (!outputText) {
+      throw new HttpsError("internal", "OpenAI returned no SOAP draft.");
+    }
+
+    let parsedDraft: unknown;
+    try {
+      parsedDraft = JSON.parse(outputText);
+    } catch (error) {
+      logger.error("Failed to parse OpenAI round SOAP JSON", { error });
+      throw new HttpsError("internal", "OpenAI returned malformed SOAP JSON.");
+    }
+
+    const parsed = asPlainObject(parsedDraft);
+    const soapText = truncateString(parsed.soapText, 14000).trim();
+    if (!soapText) {
+      throw new HttpsError("internal", "OpenAI returned an empty SOAP draft.");
+    }
+
+    return {
+      draftId: admin.firestore().collection("_aiDraftIds").doc().id,
+      soapText,
+      warnings: Array.isArray(parsed.warnings) ? parsed.warnings.map((item) => truncateString(item, 240)).slice(0, 8) : [],
+      highlightHints: Array.isArray(parsed.highlightHints) ? parsed.highlightHints.map((item) => truncateString(item, 180)).slice(0, 12) : [],
+      model,
+    };
+  },
+);
+
 export const analyzeClinicalText = onCall(
   {
     secrets: [OPENAI_API_KEY],
@@ -1362,6 +1614,9 @@ export const analyzeClinicalText = onCall(
             content: [
               "You organize de-identified internal medicine clinical text into a SOAP draft.",
               "Return JSON only matching the supplied schema.",
+              "The app now displays your output as one editable SOAP note. Make each JSON field read as part of a concise human SOAP note, not as dashboard cards.",
+              "Target display order is header, S, O (V/S, PE, Lab, Image), A/P '# problem' blocks, Tasks, DC.",
+              "AI clinical judgment should choose the A/P and tasks. Deterministic rules are only guardrails and validators; do not expect the app to rescue vague or generic plans.",
               "Use AI clinical reasoning explicitly: identify the main current risk, evidence, ranked active problems, missing data, and noise before writing the SOAP-facing fields.",
               "clinicalReasoning is the source of truth for what matters; SOAP-facing fields must be concise projections of that reasoning, not freeform prose.",
               "If the patient's most important issue is risk after partial improvement, state it directly, e.g. resolved fever but persistent leukopenia, improving oxygenation but still on O2, AKI improving but K/Cr still unsafe.",

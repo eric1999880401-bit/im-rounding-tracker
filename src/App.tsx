@@ -319,6 +319,7 @@ function App() {
               isDemoMode={isDemoMode}
               onCreatePatient={createPatientHandler}
               onSavePatient={savePatientHandler}
+              onSaveDailyNote={saveDailyNoteHandler}
             />
           }
         />
@@ -329,6 +330,7 @@ function App() {
               patients={patients}
               dailyNotesByPatient={dailyNotesByPatient}
               dataLoading={dataLoading}
+              isDemoMode={isDemoMode}
               onSavePatient={savePatientHandler}
               onSaveDailyNote={saveDailyNoteHandler}
             />

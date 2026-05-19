@@ -10,6 +10,8 @@ interface PatientFormProps {
   onSubmit: () => void;
   submitLabel: string;
   showClinicalSections?: boolean;
+  showTeamService?: boolean;
+  showStatus?: boolean;
   onCancel?: () => void;
   onFieldBlur?: () => void;
   onCompositionStart?: () => void;
@@ -22,6 +24,8 @@ function PatientForm({
   onSubmit,
   submitLabel,
   showClinicalSections = true,
+  showTeamService = true,
+  showStatus = true,
   onCancel,
   onFieldBlur,
   onCompositionStart,
@@ -122,16 +126,18 @@ function PatientForm({
         />
       </label>
 
-      <label>
-        Team / Service
-        <input
-          value={patient.teamOrService}
-          onChange={(event) => updateField("teamOrService", event.target.value)}
-          onBlur={commitOnBlur}
-          onCompositionStart={onCompositionStart}
-          onCompositionEnd={handleCompositionEnd}
-        />
-      </label>
+      {showTeamService && (
+        <label>
+          Team / Service
+          <input
+            value={patient.teamOrService}
+            onChange={(event) => updateField("teamOrService", event.target.value)}
+            onBlur={commitOnBlur}
+            onCompositionStart={onCompositionStart}
+            onCompositionEnd={handleCompositionEnd}
+          />
+        </label>
+      )}
 
       <label>
         {t("field.admissionDate")}
@@ -143,18 +149,20 @@ function PatientForm({
         />
       </label>
 
-      <label>
-        Status
-        <select
-          value={patient.status}
-          onChange={(event) => updateField("status", event.target.value as PatientStatus)}
-          onBlur={commitOnBlur}
-        >
-          <option value="active">Active</option>
-          <option value="discharged">Discharged</option>
-          <option value="archived">Archived</option>
-        </select>
-      </label>
+      {showStatus && (
+        <label>
+          Status
+          <select
+            value={patient.status}
+            onChange={(event) => updateField("status", event.target.value as PatientStatus)}
+            onBlur={commitOnBlur}
+          >
+            <option value="active">Active</option>
+            <option value="discharged">Discharged</option>
+            <option value="archived">Archived</option>
+          </select>
+        </label>
+      )}
 
       <label className="checkbox-label">
         <input

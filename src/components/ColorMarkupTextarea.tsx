@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useRef, type ClipboardEvent } from "react";
 
 interface ColorMarkupTextareaProps {
   value: string;
@@ -6,6 +6,7 @@ interface ColorMarkupTextareaProps {
   onBlur?: () => void;
   onCompositionStart?: () => void;
   onCompositionEnd?: () => void;
+  onPaste?: (event: ClipboardEvent<HTMLTextAreaElement>) => void;
   placeholder?: string;
   className?: string;
 }
@@ -18,6 +19,7 @@ function ColorMarkupTextarea({
   onBlur,
   onCompositionStart,
   onCompositionEnd,
+  onPaste,
   placeholder,
   className,
 }: ColorMarkupTextareaProps) {
@@ -53,6 +55,7 @@ function ColorMarkupTextarea({
         onBlur={onBlur}
         onCompositionStart={onCompositionStart}
         onCompositionEnd={onCompositionEnd}
+        onPaste={onPaste}
         placeholder={placeholder}
       />
       <div className="color-toolbar" aria-label="Color selected text">

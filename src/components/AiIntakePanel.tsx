@@ -31,6 +31,7 @@ import {
   normalizeDateKey,
   nowIso,
 } from "../utils";
+import { aiSoapDraftToSoapDraft, formatSoapDraft, soapTextToPatientPatch } from "../soapDraft";
 
 const MAX_INPUT_CHARS = 18000;
 
@@ -780,6 +781,7 @@ function AiIntakePanel({ patient, selectedDate, onApplyPatient }: AiIntakePanelP
   const [draftId, setDraftId] = useState("");
   const [model, setModel] = useState("");
   const [reviewCards, setReviewCards] = useState<ReviewCard[]>([]);
+  const [soapPreviewText, setSoapPreviewText] = useState("");
 
   const rawText = useMemo(() => buildRawTextFromBlocks(sourceBlocks), [sourceBlocks]);
   const effectiveSourceType = useMemo(() => getEffectiveSourceType(sourceBlocks), [sourceBlocks]);
@@ -813,6 +815,7 @@ function AiIntakePanel({ patient, selectedDate, onApplyPatient }: AiIntakePanelP
   function startDailyUpdateMode() {
     setSourceBlocks([createSourceBlock("dailyUpdate")]);
     setReviewCards([]);
+    setSoapPreviewText("");
     setError("");
     setStatusMessage("Today's update mode: paste all new de-identified data, then review only meaningful changes before saving.");
   }
@@ -853,12 +856,13 @@ function AiIntakePanel({ patient, selectedDate, onApplyPatient }: AiIntakePanelP
       });
       const reviewDraft = sanitizeAiSoapDraftForReview(knowledgeDraft, rawText, effectiveSourceType);
       const nextCards = buildCards(reviewDraft, effectiveSourceType);
+      setSoapPreviewText(formatSoapDraft(aiSoapDraftToSoapDraft(reviewDraft, patient, selectedDate)));
       const preselectedCount = nextCards.filter((card) => card.status === "accepted").length;
       setReviewCards(nextCards);
       setStatusMessage(
         preselectedCount > 0
-          ? `AI draft + Clinical Knowledge review created. ${preselectedCount} likely relevant item(s) are pre-selected; review, edit if needed, then Apply. Draft ID: ${result.draftId}`
-          : `AI draft + Clinical Knowledge review created. Review before saving. Draft ID: ${result.draftId}`,
+          ? `SOAP preview created. ${preselectedCount} source item(s) are available in Advanced review. Edit the SOAP, then Save preview. Draft ID: ${result.draftId}`
+          : `SOAP preview created. Edit before saving. Draft ID: ${result.draftId}`,
       );
     } catch (nextError) {
       setError(getErrorMessage(nextError));
@@ -1279,6 +1283,26 @@ function AiIntakePanel({ patient, selectedDate, onApplyPatient }: AiIntakePanelP
     }
   }
 
+  async function applySoapPreview() {
+    setError("");
+    setStatusMessage("");
+    if (!soapPreviewText.trim()) {
+      setError("Generate or paste a SOAP preview before saving.");
+      return;
+    }
+
+    try {
+      const patch = soapTextToPatientPatch(soapPreviewText, patient, selectedDate);
+      await onApplyPatient(patch.patient, patch.dailyNotePatch);
+      setReviewCards((cards) =>
+        cards.map((card) => (card.status === "accepted" ? { ...card, status: "saved", isEditing: false } : card)),
+      );
+      setStatusMessage("SOAP preview saved to this patient and today's note.");
+    } catch (nextError) {
+      setError(getErrorMessage(nextError));
+    }
+  }
+
   return (
     <section className="panel ai-intake-panel">
       <div className="section-heading">
@@ -1403,8 +1427,32 @@ function AiIntakePanel({ patient, selectedDate, onApplyPatient }: AiIntakePanelP
       {statusMessage && <p className="status-message">{statusMessage}</p>}
       {model && <p className="muted">Model: {model}{draftId ? ` / Draft: ${draftId}` : ""}</p>}
 
+      {soapPreviewText && (
+        <section className="soap-preview-panel">
+          <div className="section-heading">
+            <div>
+              <h3>SOAP Preview</h3>
+              <p className="muted">Edit this one note. Save writes only after explicit Apply.</p>
+            </div>
+            <div className="form-actions">
+              <button type="button" onClick={() => void applySoapPreview()}>
+                Save SOAP preview
+              </button>
+            </div>
+          </div>
+          <textarea
+            className="soap-editor-textarea soap-preview-textarea"
+            value={soapPreviewText}
+            onChange={(event) => setSoapPreviewText(event.target.value)}
+            spellCheck={false}
+            rows={16}
+          />
+        </section>
+      )}
+
       {reviewCards.length > 0 && (
-        <div className="ai-draft-review">
+        <details className="ai-draft-review ai-draft-review-advanced">
+          <summary>Advanced source cards ({acceptedCount} selected / {pendingCount} review)</summary>
           <div className="section-heading">
             <div>
               <h3>Clinical Review Queue</h3>
@@ -1527,7 +1575,7 @@ function AiIntakePanel({ patient, selectedDate, onApplyPatient }: AiIntakePanelP
               </div>
             </section>
           ))}
-        </div>
+        </details>
       )}
     </section>
   );
