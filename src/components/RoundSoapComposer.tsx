@@ -3,10 +3,12 @@ import type { AiClinicalSourceType, DailyNote, Patient } from "../types";
 import { generateRoundSoap } from "../firebase/aiService";
 import { ClinicalText } from "./ClinicalText";
 import {
+  formatSoapTextForEditorStyle,
   getCanonicalSoapText,
   localRoundSoapFromPaste,
   normalizeSoapTextForEditor,
   soapTextToPatientPatch,
+  type SoapEditorFormat,
 } from "../soapDraft";
 import { emptyDailyNote, nowIso } from "../utils";
 import { SoapVisualPreview } from "./SoapVisualPreview";
@@ -88,6 +90,12 @@ const emptyTransferFields: TransferSoapFields = {
   other: "",
 };
 
+const soapFormatOptions: Array<{ value: SoapEditorFormat; label: string; helper: string }> = [
+  { value: "standard", label: "Dash SOAP", helper: "Canonical parser-safe format: section headers, # A/P problems, - lines." },
+  { value: "plain", label: "Plain SOAP", helper: "No bullet typing needed; A/P is numbered and still parses safely." },
+  { value: "compact", label: "Compact round", helper: "Short check-only version for print/board scanning." },
+];
+
 function patientContext(patient: Patient) {
   return {
     age: patient.age,
@@ -142,6 +150,7 @@ function RoundSoapComposer({
   const [newSoapFields, setNewSoapFields] = useState<NewSoapFields>(emptyNewSoapFields);
   const [transferFields, setTransferFields] = useState<TransferSoapFields>(emptyTransferFields);
   const [confirmed, setConfirmed] = useState(false);
+  const [soapFormat, setSoapFormat] = useState<SoapEditorFormat>("standard");
   const [soapText, setSoapText] = useState(canonical.text);
   const [dirty, setDirty] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -308,11 +317,11 @@ function RoundSoapComposer({
 
   function handleFormatSoap() {
     if (!soapText.trim() || isComposingRef.current) return;
-    const normalized = normalizeSoapTextForEditor(soapText);
+    const normalized = formatSoapTextForEditorStyle(soapText, soapFormat);
     setSoapText(normalized);
     setDirty(true);
     setError("");
-    setStatus("SOAP bullets normalized. Review, then Save reviewed SOAP.");
+    setStatus(`${soapFormatOptions.find((item) => item.value === soapFormat)?.label ?? "SOAP"} applied. Review, then Save reviewed SOAP.`);
   }
 
   return (
@@ -332,6 +341,13 @@ function RoundSoapComposer({
               </option>
             ))}
           </select>
+          <select value={soapFormat} onChange={(event) => setSoapFormat(event.target.value as SoapEditorFormat)} title="SOAP editor format">
+            {soapFormatOptions.map((item) => (
+              <option key={item.value} value={item.value}>
+                {item.label}
+              </option>
+            ))}
+          </select>
           <button type="button" className="secondary" onClick={() => {
             setSoapText(canonical.text);
             setDirty(false);
@@ -341,7 +357,7 @@ function RoundSoapComposer({
             Reset
           </button>
           <button type="button" className="secondary" disabled={!soapText.trim() || loading} onClick={handleFormatSoap}>
-            Format SOAP
+            Apply format
           </button>
           <button type="button" disabled={!soapText.trim() || loading} onClick={() => void handleSave()}>
             Save reviewed SOAP
@@ -608,7 +624,9 @@ function RoundSoapComposer({
       <div className="round-soap-editor-grid">
         <label>
           Reviewed SOAP
-          <span className="soap-editor-hint">Accepts -, !, *, bullet dots, and full-width symbols. Format/Save normalizes them.</span>
+          <span className="soap-editor-hint">
+            {soapFormatOptions.find((item) => item.value === soapFormat)?.helper} Save accepts -, #, !, *, 1., 1), bullet dots, and full-width symbols.
+          </span>
           <textarea
             className="soap-editor-textarea"
             value={soapText}

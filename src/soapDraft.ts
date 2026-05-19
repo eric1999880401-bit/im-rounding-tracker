@@ -32,6 +32,7 @@ export interface SoapDraftPatch {
 
 const SOAP_LINE_LIMIT = 140;
 const SOAP_VERSION = 1;
+export type SoapEditorFormat = "standard" | "plain" | "compact";
 
 function hasText(value: unknown) {
   return String(value ?? "").trim().length > 0;
@@ -405,8 +406,100 @@ export function formatSoapDraft(draft: SoapDraft) {
   return sections.join("\n\n").trim();
 }
 
+function compactSoapDraft(draft: SoapDraft): SoapDraft {
+  const preferredObjective = [
+    ...draft.oLines.filter((line) => /^(?:v\/s|vs|vitals?)\s*:/i.test(line)),
+    ...draft.oLines.filter((line) => /^lab\s*:/i.test(line)),
+    ...draft.oLines.filter((line) => /^(?:image|img)\s*:/i.test(line)),
+    ...draft.oLines.filter((line) => /^(?:pe|physical exam)\s*:/i.test(line)),
+    ...draft.oLines.filter((line) => !/^(?:v\/s|vs|vitals?|lab|image|img|pe|physical exam)\s*:/i.test(line)),
+  ];
+
+  const compactProblems = selectCompactApProblems(dedupeApProblems(draft.apProblems), 4);
+
+  return {
+    header: uniqueSoapLines(draft.header, 5, 120),
+    sLines: uniqueSoapLines(draft.sLines, 2, 100),
+    oLines: uniqueSoapLines(preferredObjective, 6, 120),
+    apProblems: compactProblems.map((problem) => ({
+        title: cleanSoapLine(problem.title, 72),
+        lines: uniqueSoapLines(problem.lines, 2, 120),
+      })),
+    taskLines: uniqueSoapLines(draft.taskLines, 5, 110),
+    dcLines: uniqueSoapLines(draft.dcLines, 3, 110),
+    warnings: uniqueSoapLines(draft.warnings, 2, 100),
+  };
+}
+
+function scoreApProblem(problem: SoapApProblem) {
+  const text = `${problem.title} ${problem.lines.join(" ")}`.toLowerCase();
+  let score = 0;
+  if (/\b(?:sepsis|bacteremia|pna|pneumonia|infection|abscess|abx|culture|cx)\b/.test(text)) score += 5;
+  if (/\b(?:resp|rf|hypox|oxygen|dyspnea|pleural effusion|chylothorax|thoracentesis|tap)\b/.test(text)) score += 5;
+  if (/\b(?:lft|liver|transaminitis|bilirubin|inr|coagulopathy|hepatitis|jaundice)\b/.test(text)) score += 5;
+  if (/\b(?:aki|renal|creatinine|cr|esrd|hd|hyperk|hypok|hypokalemia|hyperkalemia)\b/.test(text)) score += 4;
+  if (/\b(?:hb|anemia|bleed|bleeding|platelet|plt|transfusion)\b/.test(text)) score += 4;
+  if (/\b(?:thrombus|thrombosis|embol|dvt|pe)\b/.test(text)) score += 4;
+  if (/\b(?:cancer|carcinoma|scc|adenoca|adenocarcinoma|metasta|onc|chemo|rt)\b/.test(text)) score += 3;
+  if (/\b(?:review|consider|monitor|follow)\b/.test(text) && score === 0) score -= 1;
+  return score;
+}
+
+function selectCompactApProblems(problems: SoapApProblem[], maxItems: number) {
+  if (problems.length <= maxItems) return problems;
+  return problems
+    .map((problem, index) => ({ problem, index, score: scoreApProblem(problem) }))
+    .sort((a, b) => b.score - a.score || a.index - b.index)
+    .slice(0, maxItems)
+    .sort((a, b) => a.index - b.index)
+    .map((item) => item.problem);
+}
+
+export function formatSoapDraftForStyle(draft: SoapDraft, style: SoapEditorFormat = "standard") {
+  if (style === "standard") return formatSoapDraft(draft);
+
+  const next = style === "compact" ? compactSoapDraft(draft) : draft;
+  if (style === "compact") return formatSoapDraft(next);
+
+  const sections: string[] = [];
+  if (next.header.length > 0) sections.push(next.header.join("\n"));
+  sections.push(`S:\n${next.sLines.length > 0 ? next.sLines.join("\n") : "-"}`);
+  sections.push(`O:\n${next.oLines.length > 0 ? next.oLines.join("\n") : "-"}`);
+  sections.push(
+    `A/P:\n${
+      next.apProblems.length > 0
+        ? next.apProblems
+            .map((problem, index) => {
+              const body = problem.lines.join("; ");
+              return `${index + 1}. ${problem.title || "Problem"}${body ? `: ${body}` : ""}`;
+            })
+            .join("\n")
+        : "1. No active A/P"
+    }`,
+  );
+  if (next.taskLines.length > 0) sections.push(`Tasks:\n${next.taskLines.join("\n")}`);
+  if (next.dcLines.length > 0) sections.push(`DC:\n${next.dcLines.join("\n")}`);
+  if (next.warnings.length > 0) sections.push(`Warnings:\n${next.warnings.join("\n")}`);
+  return sections.join("\n\n").trim();
+}
+
+function normalizeSoapSymbols(value: string) {
+  return String(value ?? "")
+    .replace(/\uFEFF/g, "")
+    .replace(/[\uFF1A\uFE55]/g, ":")
+    .replace(/[\uFF1B]/g, ";")
+    .replace(/[\uFF01]/g, "!")
+    .replace(/[\uFF03]/g, "#")
+    .replace(/[\uFF0A\u2217]/g, "*")
+    .replace(/[\u2010-\u2015\u2212\uFE58\uFE63\uFF0D]/g, "-")
+    .replace(/[\u2022\u2023\u25E6\u2043\u2219\u00B7\u30FB\uFF65]/g, "-")
+    .replace(/\t/g, " ");
+}
+
 function stripBullet(value: string) {
-  let next = value.trim();
+  let next = normalizeSoapSymbols(value).trim();
+  const important = /^!+/.test(next);
+  next = next.replace(/^!+\s*/, "").trim();
   for (let index = 0; index < 4; index += 1) {
     const previous = next;
     next = next.replace(/^(?:[-*•‧・‣▪○●－–—]|[!！])+\s*/, "").trim();
@@ -415,8 +508,24 @@ function stripBullet(value: string) {
   return next;
 }
 
+function stripSoapBullet(value: string) {
+  let next = normalizeSoapSymbols(value).trim();
+  const important = /^!+/.test(next);
+  next = next.replace(/^!+\s*/, "").trim();
+  for (let index = 0; index < 4; index += 1) {
+    const previous = next;
+    next = next
+      .replace(/^(?:[-*]\s*)+/, "")
+      .replace(/^\(?\d{1,2}[\.)]\s+/, "")
+      .replace(/^\d{1,2}\s*[\u3001]\s*/, "")
+      .trim();
+    if (next === previous) break;
+  }
+  return important ? `! ${next}`.trim() : next;
+}
+
 function sectionRest(line: string, label: string) {
-  const normalized = stripBullet(line).replace(/[：﹕]/g, ":");
+  const normalized = stripSoapBullet(line).replace(/^!\s*/, "");
   const match = normalized.match(new RegExp(`^(?:${label})\\s*:\\s*(.*)$`, "i"));
   return match ? match[1].trim() : null;
 }
@@ -424,7 +533,7 @@ function sectionRest(line: string, label: string) {
 type SoapSection = "header" | "s" | "o" | "ap" | "tasks" | "dc" | "warnings";
 
 function sectionFromLine(line: string): { section: SoapSection; label: string; rest: string } | null {
-  const normalized = stripBullet(line).replace(/[：﹕]/g, ":");
+  const normalized = stripSoapBullet(line).replace(/^!\s*/, "");
   const match = normalized.match(/^(S|Subjective|O|Objective|A\/P|AP|Assessment\/Plan|Tasks?|TODO|To do|DC|Discharge|Warnings?)\s*(?::\s*(.*)|$)/i);
   if (!match) return null;
   const label = match[1].toLowerCase();
@@ -438,13 +547,27 @@ function sectionFromLine(line: string): { section: SoapSection; label: string; r
 }
 
 function problemHeadingText(line: string) {
-  const stripped = stripBullet(line).replace(/^＃/, "#").trim();
-  const match = stripped.match(/^#\s*(.+)$/);
-  return match ? cleanSoapLine(match[1], 90) : "";
+  const raw = normalizeSoapSymbols(line).trim().replace(/^!+\s*/, "");
+  const stripped = stripSoapBullet(line).trim().replace(/^!\s*/, "");
+  const hash = stripped.match(/^#+\s*(.+)$/);
+  if (hash) return cleanSoapLine(hash[1], 90);
+  const numbered = raw.match(/^\(?\d{1,2}[\.)]\s+([^:]{3,90})$/) ?? raw.match(/^\d{1,2}\s*[\u3001]\s*([^:]{3,90})$/);
+  return numbered ? cleanSoapLine(numbered[1], 90) : "";
+}
+
+function inlineApProblem(line: string) {
+  const stripped = stripSoapBullet(line);
+  const clean = stripped.replace(/^!+\s*/, "");
+  const match = clean.match(/^([^:]{3,80}):\s*(.+)$/);
+  if (!match) return null;
+  const title = cleanSoapLine(match[1], 72);
+  const body = cleanSoapLine(`${stripped.startsWith("!") ? "!" : ""}${match[2]}`, 130);
+  if (!title || !body || /^(?:s|o|a\/p|ap|tasks?|dc|v\/s|vs|pe|lab|image|img)$/i.test(title)) return null;
+  return { title, body };
 }
 
 function normalizedBulletLine(line: string) {
-  const stripped = stripBullet(line).replace(/^＃/, "#").trim();
+  const stripped = stripSoapBullet(line).trim();
   if (!stripped || stripped === "-") return "";
   return `- ${stripped.replace(/^[-*]\s*/, "").trim()}`;
 }
@@ -454,7 +577,7 @@ export function normalizeSoapTextForEditor(text: string) {
   let section: SoapSection = "header";
 
   function pushContent(raw: string) {
-    const content = stripBullet(raw).replace(/[：﹕]/g, ":").trim();
+    const content = stripSoapBullet(raw).trim();
     if (!content) return;
     if (section === "header") {
       lines.push(content);
@@ -462,7 +585,17 @@ export function normalizeSoapTextForEditor(text: string) {
     }
     if (section === "ap") {
       const heading = problemHeadingText(raw);
-      lines.push(heading ? `# ${heading}` : normalizedBulletLine(raw));
+      if (heading) {
+        lines.push(`# ${heading}`);
+        return;
+      }
+      const inline = inlineApProblem(raw);
+      if (inline) {
+        lines.push(`# ${inline.title}`);
+        lines.push(`- ${inline.body}`);
+        return;
+      }
+      lines.push(normalizedBulletLine(raw));
       return;
     }
     lines.push(normalizedBulletLine(raw));
@@ -494,6 +627,11 @@ export function normalizeSoapTextForEditor(text: string) {
     .trim();
 }
 
+export function formatSoapTextForEditorStyle(text: string, style: SoapEditorFormat = "standard") {
+  const normalized = normalizeSoapTextForEditor(text);
+  return formatSoapDraftForStyle(parseSoapText(normalized), style);
+}
+
 export function parseSoapText(text: string): SoapDraft {
   const draft: SoapDraft = { header: [], sLines: [], oLines: [], apProblems: [], taskLines: [], dcLines: [], warnings: [] };
   let section: "header" | "s" | "o" | "ap" | "tasks" | "dc" | "warnings" = "header";
@@ -508,7 +646,7 @@ export function parseSoapText(text: string): SoapDraft {
   }
 
   function addLine(rawLine: string) {
-    const line = stripBullet(rawLine);
+    const line = stripSoapBullet(rawLine);
     if (!line || line === "-") return;
     if (section === "s") draft.sLines.push(line);
     else if (section === "o") draft.oLines.push(line);
@@ -516,8 +654,15 @@ export function parseSoapText(text: string): SoapDraft {
     else if (section === "dc") draft.dcLines.push(line);
     else if (section === "warnings") draft.warnings.push(line);
     else if (section === "ap") {
-      if (/^#\s*/.test(line)) {
-        currentProblem = { title: cleanSoapLine(line.replace(/^#\s*/, ""), 80), lines: [] };
+      const heading = problemHeadingText(rawLine) || (line.startsWith("#") ? cleanSoapLine(line.replace(/^#\s*/, ""), 80) : "");
+      if (heading) {
+        currentProblem = { title: heading, lines: [] };
+        draft.apProblems.push(currentProblem);
+        return;
+      }
+      const inline = inlineApProblem(rawLine);
+      if (inline) {
+        currentProblem = { title: inline.title, lines: [inline.body] };
         draft.apProblems.push(currentProblem);
         return;
       }
@@ -570,7 +715,7 @@ export function parseSoapText(text: string): SoapDraft {
       if (warningRest) addLine(warningRest);
       return;
     }
-    if (/^#\s*/.test(stripBullet(line))) section = "ap";
+    if (problemHeadingText(line)) section = "ap";
     addLine(line);
   });
 
@@ -594,17 +739,18 @@ function splitObjectiveLines(oLines: string[]) {
 
   oLines.forEach((line) => {
     const clean = cleanSoapLine(line, 180);
+    const plain = clean.replace(/^!\s*/, "");
     if (!clean) return;
-    if (/^(?:v\/s|vs|vitals?)\s*:/i.test(clean) || /\bBP\b|\bSpO2\b|\bHR\b|\bRR\b|\bT\s*\d/i.test(clean)) {
-      vitalSigns.push(clean.replace(/^(?:v\/s|vs|vitals?)\s*:\s*/i, ""));
-    } else if (/^(?:sugar|blood sugar|bs)\s*:/i.test(clean)) {
-      bloodSugar.push(clean.replace(/^(?:sugar|blood sugar|bs)\s*:\s*/i, ""));
-    } else if (/^(?:pe|physical exam)\s*:/i.test(clean)) {
-      physicalExam.push(clean.replace(/^(?:pe|physical exam)\s*:\s*/i, ""));
-    } else if (/^lab\s*:/i.test(clean)) {
-      labSummary.push(clean.replace(/^lab\s*:\s*/i, ""));
-    } else if (/^(?:image|img)\s*:/i.test(clean) || /^(?:ct|mri|cxr|xray|x-ray|echo|sono|ultrasound)\b/i.test(clean)) {
-      imageSummary.push(clean.replace(/^(?:image|img)\s*:\s*/i, ""));
+    if (/^(?:v\/s|vs|vitals?)\s*:/i.test(plain) || /\bBP\b|\bSpO2\b|\bHR\b|\bRR\b|\bT\s*\d/i.test(plain)) {
+      vitalSigns.push(plain.replace(/^(?:v\/s|vs|vitals?)\s*:\s*/i, ""));
+    } else if (/^(?:sugar|blood sugar|bs)\s*:/i.test(plain)) {
+      bloodSugar.push(plain.replace(/^(?:sugar|blood sugar|bs)\s*:\s*/i, ""));
+    } else if (/^(?:pe|physical exam)\s*:/i.test(plain)) {
+      physicalExam.push(plain.replace(/^(?:pe|physical exam)\s*:\s*/i, ""));
+    } else if (/^lab\s*:/i.test(plain)) {
+      labSummary.push(plain.replace(/^lab\s*:\s*/i, ""));
+    } else if (/^(?:image|img)\s*:/i.test(plain) || /^(?:ct|mri|cxr|xray|x-ray|echo|sono|ultrasound)\b/i.test(plain)) {
+      imageSummary.push(plain.replace(/^(?:image|img)\s*:\s*/i, ""));
     } else {
       physicalExam.push(clean);
     }

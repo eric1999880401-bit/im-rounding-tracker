@@ -39,6 +39,8 @@ function stripArrow(text: string) {
 function displayClinicalText(text: string) {
   return text
     .replace(/^!+/, "")
+    .replace(/^(Lab:\s*)!?\s*(?:crit|critical|abn|abnormal|trend|anchor)\s+(?:infx|infection|lyte\/renal|renal\/lyte|anemia|heme|cardio|cardiac|liver|gi|nutrition|onc|tumor|glucose|endocrine|coag|other)\s*:\s*/i, "$1")
+    .replace(/^!?\s*(?:crit|critical|abn|abnormal|trend|anchor)\s+(?:infx|infection|lyte\/renal|renal\/lyte|anemia|heme|cardio|cardiac|liver|gi|nutrition|onc|tumor|glucose|endocrine|coag|other)\s*:\s*/i, "")
     .replace(/^\s*(?:critical|urgent)\s*:\s*/i, "* ")
     .replace(/\[\s*URGENT\s*\]\s*/gi, "* ")
     .replace(/\bhigh-normal\b/gi, "\u2197 nl")

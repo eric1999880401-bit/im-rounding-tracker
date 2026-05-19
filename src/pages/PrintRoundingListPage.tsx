@@ -107,6 +107,7 @@ function PrintRoundingListPage({
         labReports: 1,
         labItems: 4,
         images: 1,
+        apProblems: 3,
         tasks: 3,
         dcChars: 42,
       };
@@ -125,6 +126,7 @@ function PrintRoundingListPage({
         labReports: 1,
         labItems: 5,
         images: 1,
+        apProblems: 4,
         tasks: 3,
         dcChars: 54,
       };
@@ -142,6 +144,7 @@ function PrintRoundingListPage({
       labReports: 2,
       labItems: 7,
       images: 2,
+      apProblems: 5,
       tasks: 5,
       dcChars: 68,
     };
@@ -168,6 +171,8 @@ function PrintRoundingListPage({
   function displayPrintLine(value: string) {
     return removePrintEllipsis(cleanPrintLine(value)
       .replace(/^!+/, "")
+      .replace(/^(Lab:\s*)!?\s*(?:crit|critical|abn|abnormal|trend|anchor)\s+(?:infx|infection|lyte\/renal|renal\/lyte|anemia|heme|cardio|cardiac|liver|gi|nutrition|onc|tumor|glucose|endocrine|coag|other)\s*:\s*/i, "$1")
+      .replace(/^!?\s*(?:crit|critical|abn|abnormal|trend|anchor)\s+(?:infx|infection|lyte\/renal|renal\/lyte|anemia|heme|cardio|cardiac|liver|gi|nutrition|onc|tumor|glucose|endocrine|coag|other)\s*:\s*/i, "")
       .replace(/^(\w[\w/ ]{0,12}:\s*)!?\s*(?:critical|urgent)\s*:\s*/i, "$1* ")
       .replace(/^\s*(?:critical|urgent)\s*:\s*/i, "* ")
       .replace(/\b(?:critical|urgent)\s*:\s*/gi, "* ")
@@ -220,6 +225,7 @@ function PrintRoundingListPage({
       .replace(/^!+\s*/, "")
       .replace(/^\*\s*/, "")
       .replace(/^(?:crit|critical|abn|abnormal|anchor|trend)\s+/i, "")
+      .replace(/^(?:infx|infection|lyte\/renal|renal\/lyte|anemia|heme|cardio|cardiac|liver|gi|nutrition|onc|tumor|glucose|endocrine|coag|other)\s*:\s*/i, "")
       .trim();
 
     let kind = fallbackKind;
@@ -296,7 +302,11 @@ function PrintRoundingListPage({
   function cleanPrintTail(value: string) {
     let clean = value.replace(/\s+[+,;:-]\s*$/g, "").trim();
     for (let index = 0; index < 2; index += 1) {
-      clean = clean.replace(/\s+\b(?:if|and|or|with|without|w\/|for|to|from|of|the|a|an|when|as)\b\.?$/i, "").trim();
+      clean = clean
+        .replace(/\s+\b(?:if|and|or|with|without|w\/|for|to|from|of|the|a|an|when|as)\b\.?$/i, "")
+        .replace(/\s+\b(?:check|review|confirm|correct|verify|monitor|coordinate|consider|assess|treat|after|acute|s\/p)\b\.?$/i, "")
+        .replace(/\s*,\s*$/g, "")
+        .trim();
     }
     return clean;
   }
@@ -325,10 +335,11 @@ function PrintRoundingListPage({
     const limit = Math.max(8, maxChars);
     const words = clean.split(" ");
     const kept: string[] = [];
-    words.forEach((word) => {
+    for (const word of words) {
       const next = [...kept, word].join(" ");
-      if (next.length <= limit) kept.push(word);
-    });
+      if (next.length > limit) break;
+      kept.push(word);
+    }
     return cleanPrintTail(kept.join(" ") || clean.slice(0, limit).trim());
   }
 
@@ -742,15 +753,29 @@ function PrintRoundingListPage({
 
   function assessmentSoapText(patient: Patient) {
     const soap = patientToSoapDraft(patient, dailyNotesByPatient[patient.id] ?? [], todayKey());
+    const maxProblems = printLimits().apProblems;
     const apText = soap.apProblems
-      .map((problem) => [problem.title, problem.lines.join("; ")].filter(Boolean).join(": "))
+      .slice(0, maxProblems)
+      .map((problem) => {
+        const body = problem.lines
+          .slice(0, density === "ultra-compact" ? 1 : 2)
+          .map((line) => shortText(line, printLimits().detailChars))
+          .filter(Boolean)
+          .join(", ");
+        return shortText([problem.title, body].filter(Boolean).join(": "), printLimits().detailChars + 18);
+      })
       .join("\n");
     return apText || assessmentPlanSummaryText(patient) || issueSummary(patient) || diagnosisSummary(patient);
   }
 
   function taskDcText(patient: Patient) {
     const soap = patientToSoapDraft(patient, dailyNotesByPatient[patient.id] ?? [], todayKey());
-    return [...soap.taskLines, ...soap.dcLines.map((line) => (/^Prep:/i.test(line) ? line : `DC: ${line}`))]
+    const taskLimit = printLimits().tasks;
+    const dcLimit = density === "normal" ? 2 : 1;
+    return [
+      ...soap.taskLines.slice(0, taskLimit),
+      ...soap.dcLines.slice(0, dcLimit).map((line) => (/^Prep:/i.test(line) ? line : `DC: ${line}`)),
+    ]
       .filter(Boolean)
       .join("; ");
   }

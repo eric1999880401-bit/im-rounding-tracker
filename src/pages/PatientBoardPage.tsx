@@ -92,6 +92,7 @@ function classifyBoardVisualLine(line: string, fallbackKind: BoardVisualKind = "
   const text = (prefixMatch ? prefixMatch[2].trim() : withoutBang)
     .replace(/^!+\s*/, "")
     .replace(/^(?:crit|critical|abn|abnormal|anchor|trend)\s+/i, "")
+    .replace(/^(?:infx|infection|lyte\/renal|renal\/lyte|anemia|heme|cardio|cardiac|liver|gi|nutrition|onc|tumor|glucose|endocrine|coag|other)\s*:\s*/i, "")
     .trim();
 
   let kind = fallbackKind;
@@ -1414,8 +1415,8 @@ function PatientBoardPage({
                   <div className="board-soap-ap-list">
                     {soap.apProblems.slice(0, 4).map((problem) => (
                       <div className={boardProblemClass(problem.title, problem.lines)} key={`${problem.title}-${problem.lines.join("|")}`}>
-                        <strong>#{problem.title}</strong>
-                        {problem.lines.length > 0 && <span>{problem.lines.slice(0, 2).join("; ")}</span>}
+                        <strong>#{safeClinicalLine(problem.title, 56)}</strong>
+                        {problem.lines.length > 0 && <span>{safeClinicalLine(problem.lines.slice(0, 2).join("; "), 92)}</span>}
                       </div>
                     ))}
                     {soap.apProblems.length === 0 && <span className="muted">-</span>}

@@ -23,6 +23,7 @@ const { getRoundingDigest } = await server.ssrLoadModule("/src/roundingDigest.ts
 const {
   aiSoapDraftToSoapDraft,
   formatSoapDraft,
+  formatSoapTextForEditorStyle,
   getCanonicalSoapText,
   localRoundSoapFromPaste,
   normalizeSoapTextForEditor,
@@ -1201,28 +1202,27 @@ try {
   }
   const messySoap = [
     "H5-113new 51/M",
-    "* S: afebrile, weak",
-    "！O:",
-    "• V/S: BP 100/69, HR 99, SpO2 100%",
-    "－ Lab: Hb 7.6 from 9.4",
+    "* S： afebrile, weak",
+    "O：",
+    "• V/S： BP 100/69, HR 99, SpO2 100%",
+    "！ Lab： Hb 7.6 from 9.4",
     "! A/P:",
-    "＃ MRSA/Enterococcus bacteremia",
-    "！ Teicoplanin 5/13-, f/u B/C clearance",
-    "* Tasks: f/u repeat B/C",
-    "• DC: pending infection control",
+    "1. MRSA/Enterococcus bacteremia：Teicoplanin 5/13-, f/u B/C clearance",
+    "* Tasks: ! f/u repeat B/C",
+    "DC： pending infection control",
   ].join("\n");
   const normalizedSoap = normalizeSoapTextForEditor(messySoap);
   if (
     !/^S:\n- afebrile, weak/m.test(normalizedSoap) ||
     !/^O:\n- V\/S: BP 100\/69/m.test(normalizedSoap) ||
     !/^A\/P:\n# MRSA\/Enterococcus bacteremia\n- Teicoplanin/m.test(normalizedSoap) ||
-    !/^Tasks:\n- f\/u repeat B\/C/m.test(normalizedSoap) ||
-    /！|•|－|\n! /.test(normalizedSoap)
+    !/^Tasks:\n- ! f\/u repeat B\/C/m.test(normalizedSoap) ||
+    /[：﹕]/.test(normalizedSoap)
   ) {
     throw new Error(`SOAP bullet guard did not normalize messy symbols:\n${normalizedSoap}`);
   }
   const normalizedDraft = parseSoapText(normalizedSoap);
-  if (normalizedDraft.apProblems[0]?.title !== "MRSA/Enterococcus bacteremia" || normalizedDraft.taskLines[0] !== "f/u repeat B/C") {
+  if (normalizedDraft.apProblems[0]?.title !== "MRSA/Enterococcus bacteremia" || normalizedDraft.taskLines[0] !== "! f/u repeat B/C") {
     throw new Error(`SOAP bullet guard output did not parse cleanly:\n${JSON.stringify(normalizedDraft, null, 2)}`);
   }
   const legacyRedFlagPatient = {
@@ -1261,6 +1261,71 @@ try {
     "DC:",
     "- IV abx course; J-tube feeding; OPD oncology",
   ].join("\n");
+  const plainFormatted = formatSoapTextForEditorStyle(normalizedSoap, "plain");
+  if (!/^A\/P:\n1\. MRSA\/Enterococcus bacteremia: Teicoplanin/m.test(plainFormatted)) {
+    throw new Error(`SOAP plain format did not preserve parser-safe A/P:\n${plainFormatted}`);
+  }
+  const compactFormatted = formatSoapTextForEditorStyle(reviewedSoapText, "compact");
+  if ((compactFormatted.match(/^# /gm) ?? []).length > 4 || !/Teicoplanin 5\/13-/.test(compactFormatted)) {
+    throw new Error(`SOAP compact format did not cap A/P while preserving key therapy:\n${compactFormatted}`);
+  }
+  const organHeavySoapText = [
+    "CASE-LFT 77/M",
+    "Dx: PNA/sepsis w/ hypoxemic RF, AKI/elevated LFT",
+    "",
+    "S:",
+    "- Fever after weakness/cough",
+    "",
+    "O:",
+    "- Lab: lactate 25.3, Cr 30, INR 10.6",
+    "- Liver: elevated LFT, abd image no biliary dilatation/ascites",
+    "- Image: chest CT pleural effusion",
+    "",
+    "A/P:",
+    "# PNA/sepsis w/ hypoxemic RF",
+    "- P/F 92, lactate 25.3, confirm Cx/source/Abx, titrate O2",
+    "# R mouth floor SCC history",
+    "- pT2N2a ENE(+), background onc issue after acute illness",
+    "# AKI / renal safety",
+    "- Cr reported 30, verify value/unit, trend Cr/K/I/O",
+    "# Elevated LFT / coagulopathy",
+    "- Elevated LFT + INR 10.6, no biliary dilatation/ascites, trend LFT/INR",
+    "# Low-value generic plan",
+    "- review VTE risk and monitor closely",
+    "",
+    "Tasks:",
+    "- Repeat CBC/CMP/K/Cr/lactate/LFT/INR",
+  ].join("\n");
+  const organCompact = formatSoapTextForEditorStyle(organHeavySoapText, "compact");
+  if (!/Elevated LFT \/ coagulopathy/i.test(organCompact) || !/LFT\/INR/i.test(organCompact)) {
+    throw new Error(`SOAP compact format dropped elevated LFT/coag problem:\n${organCompact}`);
+  }
+  const pleuralSoapText = [
+    "CASE-PLEURAL 45/M",
+    "Dx: recurrent L parotid adenoCA, malignant pleural effusion/chylothorax, trach",
+    "",
+    "S:",
+    "- Dyspnea improved under trach",
+    "",
+    "O:",
+    "- CXR 5/18: BL CP angle blunting/pleural effusion",
+    "",
+    "A/P:",
+    "# Parotid adenoCA, palliative",
+    "- Skin/facial edema + malignant disease, symptom-focused care",
+    "# PNA / soft tissue infection",
+    "- WBC 17k -> 11.9, Betamycin + Levofloxacin x5d",
+    "# Trach/edema/hypoK",
+    "- monitor airway, Lasix edema, replace K 3.3",
+    "# Malignant pleural effusion/chylothorax, RF improving",
+    "- Tap 5/13 L1000/R1400, SpO2 100%, CXR better, PRN tap if dyspnea recurs",
+    "# Generic pain plan",
+    "- monitor symptoms",
+  ].join("\n");
+  const pleuralCompact = formatSoapTextForEditorStyle(pleuralSoapText, "compact");
+  if (!/Malignant pleural effusion\/chylothorax/i.test(pleuralCompact) || !/Tap 5\/13/i.test(pleuralCompact)) {
+    throw new Error(`SOAP compact format dropped malignant pleural effusion problem:\n${pleuralCompact}`);
+  }
   const reviewedNote = { ...emptyDailyNote("2026-05-15"), soapText: reviewedSoapText, soapStatus: "reviewed", soapVersion: 1 };
   const canonical = getCanonicalSoapText(patient, [reviewedNote], "2026-05-15");
   if (canonical.source !== "selected" || canonical.text !== reviewedSoapText) {
