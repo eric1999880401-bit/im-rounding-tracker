@@ -712,7 +712,13 @@ function PatientDetailPage({
     mode: "rounds",
     hideCompletedTasks: true,
   });
-  const headerRedFlags = simpleDetailRedFlags(headerDigest.redFlags);
+  const headerSoap = fallbackSoapTextFromPatient(currentPatient, patientNotes, selectedDate);
+  const headerRedFlags = simpleDetailRedFlags(
+    headerSoap
+      .split(/\r?\n/)
+      .find((line) => /^Red flags:/i.test(line.trim()))
+      ?.replace(/^Red flags:\s*/i, "") ?? "",
+  );
 
   return (
     <div className="page">

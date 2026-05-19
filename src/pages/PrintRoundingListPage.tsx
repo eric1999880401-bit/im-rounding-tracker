@@ -854,7 +854,7 @@ function PrintRoundingListPage({
             const soapForPrint = patientToSoapDraft(patient, dailyNotesByPatient[patient.id] ?? [], todayKey());
             const soapRedFlags = soapForPrint.header.find((line) => /^Red flags:/i.test(line))?.replace(/^Red flags:\s*/i, "") ?? "";
             const redFlags = compactList(
-              clinicalItems(soapRedFlags || patient.importantRedFlags).map(simpleRedFlagText),
+              clinicalItems(soapRedFlags).map(simpleRedFlagText),
               printLimits().redFlags,
               printLimits().detailChars,
             );

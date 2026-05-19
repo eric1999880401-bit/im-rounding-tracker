@@ -288,7 +288,6 @@ function patientToFallbackSoapDraft(patient: Patient, dailyNotes: DailyNote[] = 
       specificPmh(patient, snapshot.risks).length > 0 ? `PMH: ${specificPmh(patient, snapshot.risks).join(", ")}` : "",
       patient.attending ? `Attending: ${patient.attending}` : "",
       selectedDate ? `Date: ${selectedDate}` : "",
-      snapshot.redFlags.length > 0 ? `Red flags: ${snapshot.redFlags.slice(0, 3).join("; ")}` : "",
     ],
     7,
     150,

@@ -1198,11 +1198,20 @@ try {
   if (/!Crit|Abn Lyte\/Renal|Trend Anemia|Anchor/i.test(fallbackLabText) || !/Lab: Cr 2\.7/i.test(fallbackLabText)) {
     throw new Error(`SOAP fallback lab line still exposes parser labels: ${fallbackLabText}`);
   }
+  const legacyRedFlagPatient = {
+    ...fallbackPatient,
+    importantRedFlags: "! Strict I/O\n! recurrent fever or BP drop",
+  };
+  const legacyRedFlagSoap = patientToSoapDraft(legacyRedFlagPatient, [], "2026-05-15");
+  if (legacyRedFlagSoap.header.some((line) => /^Red flags:/i.test(line))) {
+    throw new Error(`Fallback SOAP should not promote legacy red flags into canonical header: ${legacyRedFlagSoap.header.join(" | ")}`);
+  }
   const reviewedSoapText = [
     "H5-113new 16189520 51/M",
     "Dx: esophageal cancer w/ MRSA/Enterococcus bacteremia",
     "PMH: hypopharyngeal SCC / esophageal SCC",
     "Date: 2026-05-15",
+    "Red flags: pending B/C clearance; Hb drop requiring transfusion",
     "",
     "S:",
     "- afebrile, weak, no fever",
@@ -1233,6 +1242,9 @@ try {
   const boardSoap = patientToSoapDraft(patient, [reviewedNote], "2026-05-15");
   if (!/Teicoplanin 5\/13-/.test(boardSoap.apProblems.flatMap((problem) => problem.lines).join("\n"))) {
     throw new Error("Board/Print SOAP draft did not read reviewed soapText first");
+  }
+  if (!boardSoap.header.some((line) => /^Red flags: pending B\/C clearance/i.test(line))) {
+    throw new Error("Reviewed SOAP red flags were not preserved from explicit soapText");
   }
   const savedPatch = soapTextToPatientPatch(reviewedSoapText, patient, "2026-05-15");
   if (savedPatch.dailyNotePatch.soapText !== reviewedSoapText || savedPatch.dailyNotePatch.soapStatus !== "reviewed") {
