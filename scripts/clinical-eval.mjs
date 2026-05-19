@@ -25,6 +25,7 @@ const {
   formatSoapDraft,
   getCanonicalSoapText,
   localRoundSoapFromPaste,
+  normalizeSoapTextForEditor,
   parseSoapText,
   patientToSoapDraft,
   soapDraftToPatientPatch,
@@ -1197,6 +1198,32 @@ try {
   const fallbackLabText = fallbackSoap.oLines.join("\n");
   if (/!Crit|Abn Lyte\/Renal|Trend Anemia|Anchor/i.test(fallbackLabText) || !/Lab: Cr 2\.7/i.test(fallbackLabText)) {
     throw new Error(`SOAP fallback lab line still exposes parser labels: ${fallbackLabText}`);
+  }
+  const messySoap = [
+    "H5-113new 51/M",
+    "* S: afebrile, weak",
+    "！O:",
+    "• V/S: BP 100/69, HR 99, SpO2 100%",
+    "－ Lab: Hb 7.6 from 9.4",
+    "! A/P:",
+    "＃ MRSA/Enterococcus bacteremia",
+    "！ Teicoplanin 5/13-, f/u B/C clearance",
+    "* Tasks: f/u repeat B/C",
+    "• DC: pending infection control",
+  ].join("\n");
+  const normalizedSoap = normalizeSoapTextForEditor(messySoap);
+  if (
+    !/^S:\n- afebrile, weak/m.test(normalizedSoap) ||
+    !/^O:\n- V\/S: BP 100\/69/m.test(normalizedSoap) ||
+    !/^A\/P:\n# MRSA\/Enterococcus bacteremia\n- Teicoplanin/m.test(normalizedSoap) ||
+    !/^Tasks:\n- f\/u repeat B\/C/m.test(normalizedSoap) ||
+    /！|•|－|\n! /.test(normalizedSoap)
+  ) {
+    throw new Error(`SOAP bullet guard did not normalize messy symbols:\n${normalizedSoap}`);
+  }
+  const normalizedDraft = parseSoapText(normalizedSoap);
+  if (normalizedDraft.apProblems[0]?.title !== "MRSA/Enterococcus bacteremia" || normalizedDraft.taskLines[0] !== "f/u repeat B/C") {
+    throw new Error(`SOAP bullet guard output did not parse cleanly:\n${JSON.stringify(normalizedDraft, null, 2)}`);
   }
   const legacyRedFlagPatient = {
     ...fallbackPatient,

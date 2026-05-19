@@ -406,12 +406,92 @@ export function formatSoapDraft(draft: SoapDraft) {
 }
 
 function stripBullet(value: string) {
-  return value.replace(/^[-*]\s*/, "").trim();
+  let next = value.trim();
+  for (let index = 0; index < 4; index += 1) {
+    const previous = next;
+    next = next.replace(/^(?:[-*•‧・‣▪○●－–—]|[!！])+\s*/, "").trim();
+    if (next === previous) break;
+  }
+  return next;
 }
 
 function sectionRest(line: string, label: string) {
-  const match = line.match(new RegExp(`^(?:${label})\\s*:\\s*(.*)$`, "i"));
+  const normalized = stripBullet(line).replace(/[：﹕]/g, ":");
+  const match = normalized.match(new RegExp(`^(?:${label})\\s*:\\s*(.*)$`, "i"));
   return match ? match[1].trim() : null;
+}
+
+type SoapSection = "header" | "s" | "o" | "ap" | "tasks" | "dc" | "warnings";
+
+function sectionFromLine(line: string): { section: SoapSection; label: string; rest: string } | null {
+  const normalized = stripBullet(line).replace(/[：﹕]/g, ":");
+  const match = normalized.match(/^(S|Subjective|O|Objective|A\/P|AP|Assessment\/Plan|Tasks?|TODO|To do|DC|Discharge|Warnings?)\s*(?::\s*(.*)|$)/i);
+  if (!match) return null;
+  const label = match[1].toLowerCase();
+  const rest = (match[2] ?? "").trim();
+  if (label === "s" || label === "subjective") return { section: "s", label: "S", rest };
+  if (label === "o" || label === "objective") return { section: "o", label: "O", rest };
+  if (label === "a/p" || label === "ap" || label === "assessment/plan") return { section: "ap", label: "A/P", rest };
+  if (label === "task" || label === "tasks" || label === "todo" || label === "to do") return { section: "tasks", label: "Tasks", rest };
+  if (label === "dc" || label === "discharge") return { section: "dc", label: "DC", rest };
+  return { section: "warnings", label: "Warnings", rest };
+}
+
+function problemHeadingText(line: string) {
+  const stripped = stripBullet(line).replace(/^＃/, "#").trim();
+  const match = stripped.match(/^#\s*(.+)$/);
+  return match ? cleanSoapLine(match[1], 90) : "";
+}
+
+function normalizedBulletLine(line: string) {
+  const stripped = stripBullet(line).replace(/^＃/, "#").trim();
+  if (!stripped || stripped === "-") return "";
+  return `- ${stripped.replace(/^[-*]\s*/, "").trim()}`;
+}
+
+export function normalizeSoapTextForEditor(text: string) {
+  const lines: string[] = [];
+  let section: SoapSection = "header";
+
+  function pushContent(raw: string) {
+    const content = stripBullet(raw).replace(/[：﹕]/g, ":").trim();
+    if (!content) return;
+    if (section === "header") {
+      lines.push(content);
+      return;
+    }
+    if (section === "ap") {
+      const heading = problemHeadingText(raw);
+      lines.push(heading ? `# ${heading}` : normalizedBulletLine(raw));
+      return;
+    }
+    lines.push(normalizedBulletLine(raw));
+  }
+
+  String(text ?? "").split(/\r?\n/).forEach((rawLine) => {
+    const raw = rawLine.trim();
+    if (!raw) {
+      if (lines.length > 0 && lines[lines.length - 1] !== "") lines.push("");
+      return;
+    }
+
+    const sectionLine = sectionFromLine(raw);
+    if (sectionLine) {
+      section = sectionLine.section;
+      if (lines.length > 0 && lines[lines.length - 1] !== "") lines.push("");
+      lines.push(`${sectionLine.label}:`);
+      if (sectionLine.rest) pushContent(sectionLine.rest);
+      return;
+    }
+
+    if (problemHeadingText(raw)) section = "ap";
+    pushContent(raw);
+  });
+
+  return lines
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 export function parseSoapText(text: string): SoapDraft {

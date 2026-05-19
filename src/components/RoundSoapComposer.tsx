@@ -5,6 +5,7 @@ import { ClinicalText } from "./ClinicalText";
 import {
   getCanonicalSoapText,
   localRoundSoapFromPaste,
+  normalizeSoapTextForEditor,
   soapTextToPatientPatch,
 } from "../soapDraft";
 import { emptyDailyNote, nowIso } from "../utils";
@@ -282,7 +283,7 @@ function RoundSoapComposer({
   }
 
   async function handleSave() {
-    const reviewedText = soapText.trim();
+    const reviewedText = normalizeSoapTextForEditor(soapText).trim();
     if (!reviewedText || isComposingRef.current) return;
 
     setLoading(true);
@@ -303,6 +304,15 @@ function RoundSoapComposer({
     } finally {
       setLoading(false);
     }
+  }
+
+  function handleFormatSoap() {
+    if (!soapText.trim() || isComposingRef.current) return;
+    const normalized = normalizeSoapTextForEditor(soapText);
+    setSoapText(normalized);
+    setDirty(true);
+    setError("");
+    setStatus("SOAP bullets normalized. Review, then Save reviewed SOAP.");
   }
 
   return (
@@ -329,6 +339,9 @@ function RoundSoapComposer({
             setError("");
           }}>
             Reset
+          </button>
+          <button type="button" className="secondary" disabled={!soapText.trim() || loading} onClick={handleFormatSoap}>
+            Format SOAP
           </button>
           <button type="button" disabled={!soapText.trim() || loading} onClick={() => void handleSave()}>
             Save reviewed SOAP
@@ -595,6 +608,7 @@ function RoundSoapComposer({
       <div className="round-soap-editor-grid">
         <label>
           Reviewed SOAP
+          <span className="soap-editor-hint">Accepts -, !, *, bullet dots, and full-width symbols. Format/Save normalizes them.</span>
           <textarea
             className="soap-editor-textarea"
             value={soapText}
