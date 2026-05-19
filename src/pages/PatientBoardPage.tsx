@@ -4,6 +4,7 @@ import type { AnalyzePatientBatchTextInput, DailyNote, DailyNotesByPatient, Pati
 import {
   createId,
   createTodayFromYesterday,
+  emptyDailyNote,
   emptyPatient,
   getActiveAttendingNames,
   getActivePatients,
@@ -33,7 +34,7 @@ import {
 } from "../components/icons";
 import { useT } from "../i18n";
 import { getRoundingDigest } from "../roundingDigest";
-import { patientToSoapDraft } from "../soapDraft";
+import { fallbackSoapTextFromPatient, patientToSoapDraft } from "../soapDraft";
 
 interface PageProps {
   patients: Patient[];
@@ -601,9 +602,13 @@ function PatientBoardPage({
   const [selectedDraftIds, setSelectedDraftIds] = useState<Set<string>>(new Set());
   const [bulkImportOpen, setBulkImportOpen] = useState(false);
   const [openSoapComposerPatientId, setOpenSoapComposerPatientId] = useState("");
+  const [soapMigrationStatus, setSoapMigrationStatus] = useState("");
   const attendingNames = getActiveAttendingNames(patients);
   const uniquePatients = Array.from(new Map(patients.map((patient) => [patient.id, patient])).values());
   const activeSourcePatients = getActivePatients(uniquePatients);
+  const soapMigrationCandidates = activeSourcePatients.filter(
+    (patient) => !(dailyNotesByPatient[patient.id] ?? []).some((note) => note.soapText?.trim()),
+  );
   const bulkTargetPatient = bulkImportMode === "existingInpatient" && bulkTargetPatientId
     ? activeSourcePatients.find((patient) => patient.id === bulkTargetPatientId)
     : undefined;
@@ -790,6 +795,37 @@ function PatientBoardPage({
     await onSavePatient({ ...patient, status, updatedAt: nowIso() });
   }
 
+  async function migrateLegacySoapNotes() {
+    if (soapMigrationCandidates.length === 0) {
+      setSoapMigrationStatus("No active patients need SOAP migration.");
+      return;
+    }
+    const confirmed = window.confirm(
+      `Create reviewed SOAP notes for ${soapMigrationCandidates.length} active patient(s) without SOAP text? Existing legacy A/P fields will be preserved.`,
+    );
+    if (!confirmed) return;
+    const selectedDate = todayKey();
+    const now = nowIso();
+    let saved = 0;
+    for (const patient of soapMigrationCandidates) {
+      const notes = dailyNotesByPatient[patient.id] ?? [];
+      const baseNote = notes.find((note) => note.date === selectedDate) ?? emptyDailyNote(selectedDate);
+      const soapText = fallbackSoapTextFromPatient(patient, notes, selectedDate);
+      await onSaveDailyNote(patient.id, {
+        ...baseNote,
+        date: selectedDate,
+        soapText,
+        soapStatus: "reviewed",
+        soapUpdatedAt: now,
+        soapVersion: 1,
+        createdAt: baseNote.createdAt || now,
+        updatedAt: now,
+      });
+      saved += 1;
+    }
+    setSoapMigrationStatus(`Created reviewed SOAP notes for ${saved} active patient${saved === 1 ? "" : "s"}.`);
+  }
+
   async function startToday(patientId: string) {
     const patient = patients.find((item) => item.id === patientId);
     if (!patient) return;
@@ -940,10 +976,18 @@ function PatientBoardPage({
       <header className="page-header">
         <div>
           <h2>{t("nav.patientBoard")}</h2>
+          {soapMigrationStatus && <p className="muted">{soapMigrationStatus}</p>}
         </div>
-        <button type="button" onClick={() => setShowForm(true)}>
-          {t("action.addPatient")}
-        </button>
+        <div className="form-actions">
+          {soapMigrationCandidates.length > 0 && (
+            <button type="button" className="secondary" onClick={() => void migrateLegacySoapNotes()}>
+              Migrate SOAP ({soapMigrationCandidates.length})
+            </button>
+          )}
+          <button type="button" onClick={() => setShowForm(true)}>
+            {t("action.addPatient")}
+          </button>
+        </div>
       </header>
 
       {showForm && (

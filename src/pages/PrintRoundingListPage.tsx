@@ -483,7 +483,6 @@ function PrintRoundingListPage({
     const text = [
       patient.activeProblems,
       ...getActiveProblemItems(patient),
-      ...patient.assessmentPlanItems.map((item) => `${item.problemTitle} ${item.assessmentSummary}`),
     ].join(" ");
     const lower = text.toLowerCase();
     const tags: string[] = [];
@@ -705,12 +704,6 @@ function PrintRoundingListPage({
       patient.assessment,
       patient.plan,
       patient.dischargePlan,
-      ...patient.assessmentPlanItems.flatMap((item) => [
-        item.problemTitle,
-        item.assessmentSummary,
-        ...item.evidenceOrCourseItems,
-        ...item.planItems,
-      ]),
       ...patient.tasks.map((task) => task.text),
     ].flatMap(clinicalItems);
     const importantPattern = /\b(abx|antibiotic|ceftriaxone|cefazolin|cefepime|ceftazidime|ampicillin|sulbactam|zosyn|piperacillin|tazobactam|vanco|vancomycin|meropenem|ertapenem|levofloxacin|ciprofloxacin|metronidazole|procedure|operation|surgery|biopsy|scope|egd|cfs|catheter|drain|stent|pci|ptca|intubation|extubation|central line|consult|referral|rehab|pt|ot|st|swallow|id|nephro|cardio|neuro|gi|gs|obgyn|urology)\b/i;
@@ -765,7 +758,7 @@ function PrintRoundingListPage({
         return shortText([problem.title, body].filter(Boolean).join(": "), printLimits().detailChars + 18);
       })
       .join("\n");
-    return apText || assessmentPlanSummaryText(patient) || issueSummary(patient) || diagnosisSummary(patient);
+    return apText || issueSummary(patient) || diagnosisSummary(patient);
   }
 
   function taskDcText(patient: Patient) {

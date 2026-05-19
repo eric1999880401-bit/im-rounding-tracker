@@ -433,7 +433,6 @@ interface CallableInput {
     sex?: unknown;
     pmh?: unknown;
     activeProblems?: unknown;
-    currentAssessmentPlan?: unknown;
   };
 }
 
@@ -509,7 +508,6 @@ function sanitizePatientContext(input: CallableInput["patientContext"]) {
     sex: String(input.sex ?? "").trim(),
     pmh: asStringArray(input.pmh),
     activeProblems: asStringArray(input.activeProblems),
-    currentAssessmentPlan: Array.isArray(input.currentAssessmentPlan) ? input.currentAssessmentPlan.slice(0, 20) : [],
   };
 }
 
@@ -1067,13 +1065,6 @@ function compactPatientContext(data: FirebaseFirestore.DocumentData | undefined)
     latestImages: patient.newImaging ?? "",
     latestAssessment: patient.assessment ?? "",
     latestPlan: patient.plan ?? "",
-    currentAssessmentPlan: Array.isArray(patient.assessmentPlanItems)
-      ? patient.assessmentPlanItems.slice(0, 12).map((item) => ({
-          problemTitle: asPlainObject(item).problemTitle ?? "",
-          assessmentSummary: asPlainObject(item).assessmentSummary ?? "",
-          planItems: asPlainObject(item).planItems ?? [],
-        }))
-      : [],
     currentTasks: Array.isArray(patient.tasks)
       ? patient.tasks
           .filter((task) => asPlainObject(task).done !== true)

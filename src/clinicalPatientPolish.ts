@@ -1,7 +1,7 @@
 import { applyClinicalKnowledgeToText, formatRuleBasedSbar, formatRuleBasedWeeklySummary } from "./clinicalKnowledge";
-import { cleanAssessmentPlanItems, specificAntibioticPlan } from "./clinicalFieldRouter";
+import { specificAntibioticPlan } from "./clinicalFieldRouter";
 import type { AssessmentPlanItem, DailyNote, GeneratedClinicalPlan, Patient, PatientTask, TaskCategory, TaskPriority } from "./types";
-import { nowIso, safeClinicalLine, textToItems } from "./utils";
+import { nowIso, safeClinicalLine } from "./utils";
 
 function cleanLine(value: string, maxChars = 220) {
   const clean = value
@@ -343,13 +343,6 @@ export function buildConcisePatientClinicalUpdate(patient: Patient, notes: Daily
     activeProblems: [patient.primaryDiagnosis, patient.activeProblems].filter(Boolean),
     today: selectedDate,
   });
-  const ruleItems = plan.problemBasedAP.map(ruleApToAssessmentPlanItem);
-  const existingItems = patient.assessmentPlanItems
-    .map(cleanExistingApItem)
-    .filter((item) => item.problemTitle && !isDuplicateOfRule(item, ruleItems));
-  const nextAssessmentPlanItems = cleanAssessmentPlanItems(dedupeByKey([...ruleItems, ...existingItems], (item) => item.problemTitle)
-    .slice(0, 6)
-    .map(finalSanitizeApItem), contextText);
   const redFlagLines = conciseRedFlagLines(plan);
   const ruleTasks = plan.todayTasks
     .filter((task) => shouldKeepGeneratedTask(task.text, contextText))
@@ -362,18 +355,14 @@ export function buildConcisePatientClinicalUpdate(patient: Patient, notes: Daily
   const sbar = formatRuleBasedSbar(plan);
   const weeklySummary = formatRuleBasedWeeklySummary(plan);
   const oneLiner = (sbar.match(/^Situation:\s*(.+)$/m)?.[1] ?? "").trim();
-  const activeProblems = nextAssessmentPlanItems.map((item) => item.problemTitle).filter(Boolean).join("\n");
 
   return {
     ...patient,
     oneLiner: oneLiner || patient.oneLiner,
-    activeProblems: activeProblems || patient.activeProblems,
-    activeProblemItems: activeProblems ? textToItems(activeProblems) : patient.activeProblemItems,
     importantRedFlags: redFlagLines.length > 0 ? redFlagLines.join("\n") : patient.importantRedFlags,
     tasks: nextTasks,
-    assessmentPlanItems: nextAssessmentPlanItems.length > 0 ? nextAssessmentPlanItems : patient.assessmentPlanItems,
-    generatedSbarNote: sbar || patient.generatedSbarNote,
-    generatedWeeklySummary: weeklySummary || patient.generatedWeeklySummary,
+    generatedSbarNote: patient.generatedSbarNote,
+    generatedWeeklySummary: patient.generatedWeeklySummary,
     updatedAt: nowIso(),
   };
 }

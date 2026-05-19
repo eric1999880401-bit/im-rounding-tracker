@@ -597,7 +597,26 @@ try {
     [],
     todayKey(),
   );
-  const digest = getRoundingDigest(patient, [], todayKey());
+  const icuReviewedSoap = [
+    "ICU-XFER 78/M",
+    "Dx: septic shock recovery w/ AKI/hyperK",
+    "",
+    "S:",
+    "- transfer from ICU, O2/aspiration concern",
+    "",
+    "O:",
+    "- Lab: Cr/K/Troponin/Hb/Plt active trends",
+    "- Culture: blood/sputum cultures pending",
+    "",
+    "A/P:",
+    "# AKI/hyperK after shock",
+    "- CRRT stopped, trend Cr/K/I/O, avoid nephrotoxins.",
+    "# Infection / aspiration risk",
+    "- Meropenem/vancomycin, f/u cultures and de-escalation.",
+    "# O2/bleeding risk",
+    "- Monitor O2, aspiration, Hb/Plt/bleeding.",
+  ].join("\n");
+  const digest = getRoundingDigest(patient, [{ ...emptyDailyNote(todayKey()), soapText: icuReviewedSoap }], { mode: "board" });
   const labFocus = getLabFocusSummary(patient, [], todayKey()).text;
   const sbar = formatRuleBasedSbar(applyClinicalKnowledgeToText(rawIcuTransfer));
   const labels = parsedLabs.map((item) => item.label).join("\n");
@@ -748,7 +767,7 @@ try {
   const preview = routePatientClinicalFields(dirtyPatient);
   const cleaned = preview.patient;
   const changedLabels = preview.changes.map((change) => change.label).join("\n");
-  if (!/Subjective|V\/S|Physical exam|Images|Active problems|A\/P/i.test(changedLabels)) {
+  if (!/Subjective|V\/S|Physical exam|Images|Active problems/i.test(changedLabels) || /A\/P/i.test(changedLabels)) {
     throw new Error(`cleanup preview did not identify expected dirty fields: ${changedLabels}`);
   }
   if (/BP 100\/69|SpO2/i.test(cleaned.subjectiveOrChiefConcern) || !/BP 100\/69|SpO2 100/i.test(cleaned.vitalSigns)) {
@@ -760,8 +779,11 @@ try {
   const cleanedAp = cleaned.assessmentPlanItems
     .map((item) => [item.problemTitle, item.assessmentSummary, ...item.planItems].join("\n"))
     .join("\n");
-  if (!/Teicoplanin/i.test(cleanedAp) || /review VTE\/bleed risk|UGIB|Cardio \/ HF \/ rhythm|Stroke \/ neuro/i.test(`${cleaned.activeProblems}\n${cleanedAp}`)) {
-    throw new Error(`cleanup A/P still noisy or missing Abx:\n${cleaned.activeProblems}\n${cleanedAp}`);
+  if (cleanedAp !== dirtyPatient.assessmentPlanItems.map((item) => [item.problemTitle, item.assessmentSummary, ...item.planItems].join("\n")).join("\n")) {
+    throw new Error(`cleanup mutated legacy A/P even though A/P is SOAP-only:\n${cleanedAp}`);
+  }
+  if (/UGIB|Cardio \/ HF \/ rhythm|Stroke \/ neuro/i.test(cleaned.activeProblems)) {
+    throw new Error(`cleanup active problems still noisy:\n${cleaned.activeProblems}`);
   }
   console.log("PASS Detail cleanup preview routes polluted fields without saving");
   supplementalPasses += 1;
@@ -917,32 +939,17 @@ try {
     [],
     todayKey(),
   );
-  const apText = patient.assessmentPlanItems
-    .map((item) => [item.problemTitle, item.assessmentSummary, ...item.evidenceOrCourseItems, ...item.planItems].join("\n"))
-    .join("\n");
-  if (/Heme\/onc safety context|verify fever\/ANC or immunosuppression|thrombosis\/bleeding tradeoff/i.test(apText)) {
-    throw new Error(`heme/onc A/P still uses verbose template wording: ${apText}`);
+  if (patient.assessmentPlanItems.length !== 0 || patient.plan.trim()) {
+    throw new Error(`rule polish created legacy A/P despite SOAP-only policy: ${JSON.stringify(patient.assessmentPlanItems)}\n${patient.plan}`);
   }
-  if (!/Teicoplanin/i.test(apText)) {
-    throw new Error(`infection A/P lost concrete antibiotic plan: ${apText}`);
+  if (/Heme\/onc safety|review VTE\/bleed risk|UGIB|transfusion|EGD|T&S/i.test([patient.generatedSbarNote, patient.generatedWeeklySummary].join("\n"))) {
+    throw new Error(`rule polish leaked generic A/P wording into generated docs:\n${patient.generatedSbarNote}\n${patient.generatedWeeklySummary}`);
   }
-  if (/review VTE\/bleed risk/i.test(apText)) {
-    throw new Error(`unsupported generic VTE/bleed plan survived: ${apText}`);
-  }
-  if (/UGIB|transfusion|EGD|T&S/i.test(apText)) {
-    throw new Error(`stable anemia created false GI bleed plan: ${apText}`);
-  }
-  if (/\b(if|and|or|with|for|to)$/im.test(apText) || /\bwith done\b/i.test(apText)) {
-    throw new Error(`A/P contains clipped sentence tail: ${apText}`);
-  }
-  if (!/MRSA\/Enterococcus bacteremia|SCC with J-tube|Onc/i.test(apText)) {
-    throw new Error(`heme/onc A/P lost concise clinical content: ${apText}`);
-  }
-  console.log("PASS Heme/onc A/P is concise and has no clipped tails");
+  console.log("PASS Rule polish does not create legacy A/P");
   supplementalPasses += 1;
 } catch (error) {
-  failures.push({ name: "Heme/onc A/P is concise and has no clipped tails", error: error instanceof Error ? error.message : String(error) });
-  console.error(`FAIL Heme/onc A/P is concise and has no clipped tails: ${failures[failures.length - 1].error}`);
+  failures.push({ name: "Rule polish does not create legacy A/P", error: error instanceof Error ? error.message : String(error) });
+  console.error(`FAIL Rule polish does not create legacy A/P: ${failures[failures.length - 1].error}`);
 }
 
 try {
@@ -986,9 +993,33 @@ try {
     ],
     updatedAt: nowIso(),
   };
-  const digest = getRoundingDigest(patient, [], { mode: "board", hideCompletedTasks: true });
+  const noSoapDigest = getRoundingDigest(patient, [], { mode: "board", hideCompletedTasks: true });
+  if (noSoapDigest.assessmentPlan.trim()) {
+    throw new Error(`digest used legacy/rule A/P without SOAP text: ${noSoapDigest.assessmentPlan}`);
+  }
+  const reviewedSoap = [
+    "TEST-BOARD 51/M",
+    "Dx: esophageal SCC w/ MRSA/Enterococcus bacteremia",
+    "",
+    "S:",
+    "- weak, afebrile",
+    "",
+    "O:",
+    "- Lab: WBC 12.7, Neu 88.9, Hb 9.4, K 3.0",
+    "- Image: CT neck/chest persistent esophageal wall thickening/metastatic LAD",
+    "",
+    "A/P:",
+    "# MRSA/Enterococcus bacteremia",
+    "- Teicoplanin 5/13-, f/u B/C clearance, define duration/source.",
+    "# SCC w/ J-tube nutrition",
+    "- maintain J-tube feeds, onc f/u.",
+    "",
+    "Tasks:",
+    "- f/u repeat blood cultures from 5/15",
+  ].join("\n");
+  const digest = getRoundingDigest(patient, [{ ...emptyDailyNote("2026-05-15"), soapText: reviewedSoap }], { mode: "board", hideCompletedTasks: true });
   if (!/MRSA\/Enterococcus bacteremia|Teicoplanin/i.test(digest.assessmentPlan)) {
-    throw new Error(`board/detail A/P lost concrete infection plan: ${digest.assessmentPlan}`);
+    throw new Error(`board/detail SOAP A/P lost concrete infection plan: ${digest.assessmentPlan}`);
   }
   if (/TLS\s*\/\s*onc safety|Heme\/Onc safety|review VTE\/bleed risk|UGIB|transfusion|EGD/i.test(digest.assessmentPlan)) {
     throw new Error(`board/detail A/P kept generic or false plans: ${digest.assessmentPlan}`);
@@ -1186,8 +1217,8 @@ try {
   if (!/Teicoplanin 5\/13-/i.test(patch.patient.plan) || !/CT neck\/chest/i.test(patch.patient.newImaging)) {
     throw new Error(`SOAP save adapter lost concrete therapy/image:\n${patch.patient.plan}\n${patch.patient.newImaging}`);
   }
-  if (patch.patient.tasks.length !== 2 || !patch.dailyNotePatch.assessmentPlanItems?.length) {
-    throw new Error("SOAP save adapter did not create task/AP fields for existing schema");
+  if (patch.patient.tasks.length !== 2 || patch.patient.assessmentPlanItems.length !== patient.assessmentPlanItems.length || patch.dailyNotePatch.assessmentPlanItems) {
+    throw new Error("SOAP save adapter should create tasks but preserve legacy A/P fields");
   }
   const fallbackPatient = {
     ...patient,

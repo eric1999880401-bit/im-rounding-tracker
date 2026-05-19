@@ -404,17 +404,6 @@ function PatientDetailPage({
     nextNote.parsedLabItems = mergeDailyNoteArrays(baseNote.parsedLabItems, acceptedNotePatch.parsedLabItems);
     nextNote.physicalExamEntries = mergeDailyNoteArrays(baseNote.physicalExamEntries, acceptedNotePatch.physicalExamEntries);
     nextNote.imageStudyEntries = mergeDailyNoteArrays(baseNote.imageStudyEntries, acceptedNotePatch.imageStudyEntries);
-    nextNote.assessmentPlanItems = mergeDailyNoteArrays(baseNote.assessmentPlanItems, acceptedNotePatch.assessmentPlanItems);
-
-    const carriedAssessmentPlanItems =
-      (previousNote?.assessmentPlanItems ?? []).filter((item) =>
-        item.isImportant || crisisCarryForwardScore(`${item.problemTitle} ${item.assessmentSummary} ${item.planItems.join(" ")}`) >= 4,
-      );
-    nextNote.assessmentPlanItems = mergeDailyNoteArrays(nextNote.assessmentPlanItems, carriedAssessmentPlanItems).map((item, index) => ({
-      ...item,
-      order: index,
-    }));
-
     if (acceptedNotePatch.labDate) nextNote.labDate = acceptedNotePatch.labDate;
     if (acceptedNotePatch.labReportTitle) nextNote.labReportTitle = acceptedNotePatch.labReportTitle;
     if ((acceptedNotePatch.labReports?.length ?? 0) > 0 || (acceptedNotePatch.parsedLabItems?.length ?? 0) > 0) {
@@ -430,25 +419,9 @@ function PatientDetailPage({
     const carriedRedFlags = previousNote?.importantRedFlags
       .split(/\r?\n/)
       .filter((line) => crisisCarryForwardScore(line) > 0) ?? [];
-    const carriedAssessmentPlanItems =
-      (previousNote?.assessmentPlanItems ?? []).filter((item) =>
-        item.isImportant || crisisCarryForwardScore(`${item.problemTitle} ${item.assessmentSummary} ${item.planItems.join(" ")}`) >= 4,
-      );
-    const existingPlanKeys = new Set(
-      nextPatient.assessmentPlanItems.map((item) => (item.problemTitle || item.assessmentSummary).toLowerCase().trim()),
-    );
     const safeNextPatient = {
       ...nextPatient,
       importantRedFlags: appendUniqueClinicalText(nextPatient.importantRedFlags, carriedRedFlags),
-      assessmentPlanItems: [
-        ...nextPatient.assessmentPlanItems,
-        ...carriedAssessmentPlanItems.filter((item) => {
-          const key = (item.problemTitle || item.assessmentSummary).toLowerCase().trim();
-          if (!key || existingPlanKeys.has(key)) return false;
-          existingPlanKeys.add(key);
-          return true;
-        }),
-      ].map((item, index) => ({ ...item, order: index })),
     };
     const acceptedNote = buildAiAcceptedDailyNote(acceptedNotePatch, previousNote ?? null);
 

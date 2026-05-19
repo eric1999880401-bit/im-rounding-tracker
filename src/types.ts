@@ -168,7 +168,6 @@ export interface AnalyzeClinicalTextInput {
     sex?: string;
     pmh?: string[];
     activeProblems?: string[];
-    currentAssessmentPlan?: unknown[];
   };
 }
 
@@ -192,7 +191,6 @@ export interface GenerateRoundSoapInput {
     sex?: string;
     pmh?: string[] | string;
     activeProblems?: string[] | string;
-    currentAssessmentPlan?: unknown[];
   };
 }
 

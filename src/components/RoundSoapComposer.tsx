@@ -102,7 +102,6 @@ function patientContext(patient: Patient) {
     sex: patient.sex,
     pmh: patient.underlyingDiseases,
     activeProblems: patient.activeProblems,
-    currentAssessmentPlan: patient.assessmentPlanItems,
   };
 }
 

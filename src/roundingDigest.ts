@@ -1,6 +1,6 @@
 import type { DailyNote, Patient } from "./types";
 import type { LabFocusSignal } from "./utils";
-import { cleanAssessmentPlanItems, specificAntibioticPlan } from "./clinicalFieldRouter";
+import { specificAntibioticPlan } from "./clinicalFieldRouter";
 import {
   formatDateLabel,
   getActiveProblemItems,
@@ -281,8 +281,9 @@ function hasVteBleedContext(context: string) {
   );
 }
 
-function cleanedApItemsForDigest(patient: Patient) {
-  return cleanAssessmentPlanItems(patient.assessmentPlanItems, patientDigestContext(patient));
+function cleanedApItemsForDigest(patient: Patient): Patient["assessmentPlanItems"] {
+  void patient;
+  return [];
 }
 
 function highlightedClinicalItems(value: string) {
@@ -789,7 +790,61 @@ function objectiveSummaryText(patient: Patient, maxItems: number, maxChars: numb
     .join("\n");
 }
 
-function assessmentPlanSummaryText(patient: Patient, maxItems: number, maxChars: number) {
+function latestSoapText(notes: DailyNote[]) {
+  const note = [...notes]
+    .sort((a, b) => b.date.localeCompare(a.date))
+    .find((item) => item.soapText?.trim());
+  return note?.soapText?.trim() ?? "";
+}
+
+function soapAssessmentPlanSummaryText(notes: DailyNote[], maxItems: number, maxChars: number) {
+  const soapText = latestSoapText(notes);
+  if (!soapText) return "";
+
+  const problems: string[] = [];
+  let inAp = false;
+  let currentTitle = "";
+  let currentLines: string[] = [];
+  const pushCurrent = () => {
+    if (!currentTitle && currentLines.length === 0) return;
+    const detail = currentLines[0] ? `: ${shortDigestText(currentLines[0], Math.max(20, maxChars - currentTitle.length - 2))}` : "";
+    problems.push(shortDigestText(`${currentTitle || "A/P"}${detail}`, maxChars));
+    currentTitle = "";
+    currentLines = [];
+  };
+
+  soapText.split(/\r?\n/).forEach((rawLine) => {
+    const line = cleanDigestLine(rawLine).replace(/^[-*]\s*/, "").trim();
+    if (/^A\/P\s*:/i.test(line)) {
+      inAp = true;
+      return;
+    }
+    if (inAp && /^(?:Tasks?|DC|Discharge|Warnings?)\s*:/i.test(line)) {
+      pushCurrent();
+      inAp = false;
+      return;
+    }
+    if (!inAp || !line) return;
+    const title = line.match(/^#\s*(.+)$/);
+    if (title) {
+      pushCurrent();
+      currentTitle = shortDigestText(title[1], Math.min(34, maxChars));
+      return;
+    }
+    currentLines.push(line);
+  });
+  pushCurrent();
+
+  return uniqueLines(problems).slice(0, maxItems).join("\n");
+}
+
+function assessmentPlanSummaryText(patient: Patient, notes: DailyNote[], maxItems: number, maxChars: number) {
+  const soapSummary = soapAssessmentPlanSummaryText(notes, maxItems, maxChars);
+  if (soapSummary || notes.some((note) => note.soapText?.trim())) return soapSummary;
+  return "";
+}
+
+function legacyAssessmentPlanSummaryText(patient: Patient, maxItems: number, maxChars: number) {
   const context = patientDigestContext(patient);
   const noTaskContext = patientDigestContext(patient, false);
 
@@ -1048,7 +1103,7 @@ export function getRoundingDigest(
   const subjective = subjectiveText(patient, limits.subjective, limits.detailChars);
   const objective = objectiveSummaryText(patient, limits.objective, limits.detailChars);
   const image = imageSummaryText(patient, limits.images, limits.detailChars);
-  const assessmentPlan = assessmentPlanSummaryText(patient, limits.ap, limits.detailChars);
+  const assessmentPlan = assessmentPlanSummaryText(patient, notes, limits.ap, limits.detailChars);
   const tasks = taskSummaryText(patient, options.hideCompletedTasks ?? true, limits.tasks, limits.detailChars, assessmentPlan);
   const discharge = dischargeText(patient, limits.detailChars);
   const urgentTasks = patient.tasks

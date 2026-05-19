@@ -543,7 +543,6 @@ export function routePatientClinicalFields(patient: Patient) {
   const nextImaging = cleanImageSummary(uniqueLines(patient.newImaging, fromSubjective.images, fromPe.images, fromImaging.images), context);
   const nextCourse = uniqueLines(patient.hospitalCourseHighlights, fromSubjective.course, fromPe.course);
   const nextActiveProblems = cleanActiveProblemText(patient.activeProblems, `${context}\n${nextImaging}\n${nextCourse}`);
-  const nextAssessmentPlanItems = cleanAssessmentPlanItems(patient.assessmentPlanItems, `${context}\n${nextImaging}\n${nextCourse}`);
   const nextTasks = patient.tasks.filter((task) => {
     if (/^rule-task-/.test(task.id) || looksLikeGeneratedTask(task.text)) {
       return shouldKeepImportTask(task.text, `${context}\n${nextImaging}\n${nextCourse}`);
@@ -559,14 +558,6 @@ export function routePatientClinicalFields(patient: Patient) {
   addChange(changes, "newImaging", "Images", patient.newImaging, nextImaging, "Condensed imaging to high-yield positives plus only relevant negatives.");
   addChange(changes, "hospitalCourseHighlights", "Course", patient.hospitalCourseHighlights, nextCourse, "Preserved treatments/procedures from mixed fields.");
   addChange(changes, "activeProblems", "Active problems", patient.activeProblems, nextActiveProblems, "Converted rule labels into clinical problem short phrases.");
-  addChange(
-    changes,
-    "assessmentPlanItems",
-    "A/P",
-    patient.assessmentPlanItems.map(apText).join("\n\n"),
-    nextAssessmentPlanItems.map(apText).join("\n\n"),
-    "Removed generic plans and kept concrete Abx/treatment plans.",
-  );
   addChange(changes, "tasks", "Tasks", taskPreviewText(patient.tasks), taskPreviewText(nextTasks), "Removed unsupported generic AI-generated tasks.");
 
   return {
@@ -581,7 +572,6 @@ export function routePatientClinicalFields(patient: Patient) {
       hospitalCourseHighlights: nextCourse,
       activeProblems: nextActiveProblems,
       activeProblemItems: nextActiveProblems.split(/\r?\n/).map((line) => line.trim()).filter(Boolean),
-      assessmentPlanItems: nextAssessmentPlanItems,
       tasks: nextTasks,
     },
     changes,

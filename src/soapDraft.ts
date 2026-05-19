@@ -148,6 +148,53 @@ function apProblemsFromText(value: string): SoapApProblem[] {
   return dedupeApProblems(problems).slice(0, 5);
 }
 
+function apProblemsFromLegacyItems(items: AssessmentPlanItem[]) {
+  return dedupeApProblems(
+    items.map((item) => ({
+      title: item.problemTitle || item.assessmentSummary,
+      lines: uniqueSoapLines(
+        [
+          item.assessmentSummary && item.assessmentSummary !== item.problemTitle ? item.assessmentSummary : "",
+          ...item.evidenceOrCourseItems,
+          ...item.planItems,
+        ],
+        3,
+        140,
+      ),
+    })),
+  ).slice(0, 5);
+}
+
+function noteHasLegacyAp(note?: DailyNote) {
+  return Boolean(
+    note &&
+      ((Array.isArray(note.assessmentPlanItems) && note.assessmentPlanItems.length > 0) ||
+        hasText(note.assessment) ||
+        hasText(note.plan)),
+  );
+}
+
+function legacyApProblemsFromFields(patient: Patient, dailyNotes: DailyNote[] = [], selectedDate = "") {
+  const selectedNote = dailyNotes.find((note) => note.date === selectedDate);
+  const legacyNote = noteHasLegacyAp(selectedNote)
+    ? selectedNote
+    : sortedNotes(dailyNotes).find((note) => !noteSoapText(note) && noteHasLegacyAp(note));
+
+  if (legacyNote?.assessmentPlanItems.length) return apProblemsFromLegacyItems(legacyNote.assessmentPlanItems);
+  if (patient.assessmentPlanItems.length > 0) return apProblemsFromLegacyItems(patient.assessmentPlanItems);
+
+  return apProblemsFromText(
+    [
+      legacyNote?.assessment,
+      legacyNote?.plan,
+      patient.assessment,
+      patient.plan,
+    ]
+      .filter(hasText)
+      .join("\n"),
+  );
+}
+
 function dedupeApProblems(problems: SoapApProblem[]) {
   const seen = new Set<string>();
   return problems
@@ -298,7 +345,7 @@ function patientToFallbackSoapDraft(patient: Patient, dailyNotes: DailyNote[] = 
     header,
     sLines: uniqueSoapLines([digest.subjective], 4, 120),
     oLines: makeObjectiveLines(digest.objective, digest.lab, digest.image),
-    apProblems: apProblemsFromText(digest.assessmentPlan),
+    apProblems: legacyApProblemsFromFields(patient, dailyNotes, selectedDate),
     taskLines: uniqueSoapLines([digest.tasks], 6, 120),
     dcLines: uniqueSoapLines([digest.discharge, prep ? `Prep: ${prep}` : ""], 4, 120),
     warnings: [],
@@ -813,7 +860,6 @@ export function soapDraftToPatientPatch(
   reviewedSoapText = formatSoapDraft(draft),
 ): SoapDraftPatch {
   const objective = splitObjectiveLines(draft.oLines);
-  const apItems = assessmentItemsFromSoapProblems(draft.apProblems);
   const apText = draft.apProblems
     .map((problem) => [`# ${problem.title}`, ...problem.lines.map((line) => `- ${line}`)].join("\n"))
     .join("\n");
@@ -829,7 +875,6 @@ export function soapDraftToPatientPatch(
     newImaging: objective.imageSummary.join("\n"),
     assessment: draft.apProblems.map((problem) => problem.title).join("\n"),
     plan: apText,
-    assessmentPlanItems: apItems,
     dischargePlan: draft.dcLines.join("\n"),
     tasks: tasksFromSoapLines(draft.taskLines, patient),
     updatedAt: now,
@@ -849,7 +894,6 @@ export function soapDraftToPatientPatch(
       assessment: nextPatient.assessment,
       plan: nextPatient.plan,
       dischargePlan: nextPatient.dischargePlan,
-      assessmentPlanItems: apItems,
       soapText: reviewedSoapText,
       soapStatus: "reviewed",
       soapUpdatedAt: now,

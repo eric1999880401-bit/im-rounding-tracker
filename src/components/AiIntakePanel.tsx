@@ -3,7 +3,6 @@ import { analyzeClinicalText } from "../firebase/aiService";
 import { applyClinicalKnowledgeToAiSoapDraft } from "../clinicalKnowledge";
 import { sanitizeAiSoapDraftForReview } from "../aiDraftSanitizer";
 import {
-  cleanAssessmentPlanItems,
   cleanImageSummary,
   isBedsidePhysicalExamLine,
   isImageLine,
@@ -600,7 +599,7 @@ function initialReviewStatus(
 
   if (sourceType === "dailyUpdate" || sourceType === "mixed" || sourceType === "progress" || sourceType === "consult" || sourceType === "nursing") {
     if (kind === "vital" || kind === "bloodSugar" || kind === "redFlag" || kind === "task") return "accepted";
-    if ((kind === "lab" || kind === "image" || kind === "physicalExam" || kind === "assessmentPlan") && (objectFlag(value, "isImportant") || objectFlag(value, "isAbnormal") || hasActionableSignal(value))) {
+    if ((kind === "lab" || kind === "image" || kind === "physicalExam") && (objectFlag(value, "isImportant") || objectFlag(value, "isAbnormal") || hasActionableSignal(value))) {
       return "accepted";
     }
     if ((kind === "importantSymptom" || kind === "importantOvernightEvent") && hasActionableSignal(value)) return "accepted";
@@ -639,7 +638,7 @@ function buildCards(draft: AiSoapDraft, sourceType: AiClinicalSourceType): Revie
   safeArray(draft.dischargeIssues).forEach((issue, index) =>
     addCard("Tasks / Discharge", `Discharge issue ${index + 1}`, "dischargeIssue", issue, "string"),
   );
-  safeArray(draft.assessmentPlan).forEach((item, index) => addCard("Assessment / Plan", `Problem ${index + 1}`, "assessmentPlan", item));
+  // A/P is now SOAP-only. Structured assessmentPlan JSON stays available only through the SOAP preview.
   safeArray(draft.objective.vitals).forEach((vital, index) => addCard("Objective Data", `Vital ${index + 1}`, "vital", vital));
   safeArray(draft.objective.bloodSugars).forEach((bloodSugar, index) =>
     addCard("Objective Data", `Blood sugar ${index + 1}`, "bloodSugar", bloodSugar),
@@ -843,7 +842,6 @@ function AiIntakePanel({ patient, selectedDate, onApplyPatient }: AiIntakePanelP
           sex: patient.sex,
           pmh: getUnderlyingDiseaseItems(patient),
           activeProblems: getActiveProblemItems(patient),
-          currentAssessmentPlan: patient.assessmentPlanItems,
         },
       });
 
@@ -950,13 +948,11 @@ function AiIntakePanel({ patient, selectedDate, onApplyPatient }: AiIntakePanelP
     const parsedLabItems: ParsedLabItem[] = [];
     const physicalExamEntries: PhysicalExamEntry[] = [];
     const imageStudyEntries: ImageStudyEntry[] = [];
-    const assessmentPlanItems: AssessmentPlanItem[] = [];
     const tasks: PatientTask[] = [];
     const aiThinkingPrompts = [...safeArray(patient.aiThinkingPrompts)];
     const oneLiners: string[] = [];
     const admissionSummaries: string[] = [];
     const isbarHandoffs: string[] = [];
-    let nextAssessmentOrder = safeArray(patient.assessmentPlanItems).length;
 
     parsedCards.forEach(({ card, value }) => {
       if (card.kind === "oneLiner" && typeof value === "string") {
@@ -1064,22 +1060,6 @@ function AiIntakePanel({ patient, selectedDate, onApplyPatient }: AiIntakePanelP
         });
       }
 
-      if (card.kind === "assessmentPlan") {
-        const item = value as AiSoapDraft["assessmentPlan"][number];
-        assessmentPlanItems.push({
-          id: createId("ap"),
-          problemTitle: String(item.problemTitle ?? ""),
-          assessmentSummary: String(item.assessmentSummary ?? ""),
-          evidenceOrCourseItems: safeArray(item.evidenceOrCourseItems).map(String).filter(hasText),
-          planItems: safeArray(item.planItems).map(String).filter(hasText),
-          category: "activeProblem",
-          isImportant: Boolean(item.isImportant),
-          color: "",
-          order: nextAssessmentOrder,
-        });
-        nextAssessmentOrder += 1;
-      }
-
       if (card.kind === "redFlag") {
         const item = value as AiSoapDraft["redFlags"][number];
         redFlagLines.push(`!${[item.text, item.reason ? `Reason: ${item.reason}` : ""].filter(hasText).join(" - ")}`);
@@ -1184,22 +1164,6 @@ function AiIntakePanel({ patient, selectedDate, onApplyPatient }: AiIntakePanelP
         appendUniqueLines("", routedSubjectiveLines),
       ].join("\n"),
     ).split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-    const cleanedAssessmentPlanItems = cleanAssessmentPlanItems(
-      assessmentPlanItems,
-      [
-        patient.primaryDiagnosis,
-        patient.activeProblems,
-        patient.hospitalCourseHighlights,
-        patient.rawLabText,
-        patient.newLabs,
-        patient.newImaging,
-        appendUniqueLines("", routedLabSummaryLines),
-        appendUniqueLines("", cleanedImageSummaryLines),
-        appendUniqueLines("", routedVitalLines),
-        tasks.map((task) => task.text).join("\n"),
-      ].join("\n"),
-    );
-
     const nextPatient: Patient = {
       ...patient,
       oneLiner: oneLiners.map(String).map((line) => line.trim()).filter(Boolean).slice(-1)[0] ?? patient.oneLiner,
@@ -1220,7 +1184,6 @@ function AiIntakePanel({ patient, selectedDate, onApplyPatient }: AiIntakePanelP
       parsedLabItems: uniqueParsedLabItems([...safeArray(patient.parsedLabItems), ...parsedLabItems]),
       physicalExamEntries: mergePhysicalExamEntries(safeArray(patient.physicalExamEntries), physicalExamEntries),
       imageStudyEntries: mergeImageStudyEntries(safeArray(patient.imageStudyEntries), imageStudyEntries),
-      assessmentPlanItems: mergeAssessmentPlanItems(safeArray(patient.assessmentPlanItems), cleanedAssessmentPlanItems),
       tasks: mergeTasks(safeArray(patient.tasks), tasks.filter((task) => task.text.trim())),
       aiThinkingPrompts: mergeThinkingPrompts(safeArray(patient.aiThinkingPrompts), aiThinkingPrompts),
       updatedAt: now,
@@ -1268,10 +1231,6 @@ function AiIntakePanel({ patient, selectedDate, onApplyPatient }: AiIntakePanelP
     if (imageStudyEntries.length > 0) {
       acceptedNotePatch.imageStudyEntries = imageStudyEntries;
     }
-    if (cleanedAssessmentPlanItems.length > 0) {
-      acceptedNotePatch.assessmentPlanItems = cleanedAssessmentPlanItems;
-    }
-
     try {
       await onApplyPatient(nextPatient, acceptedNotePatch);
       setReviewCards((cards) =>
