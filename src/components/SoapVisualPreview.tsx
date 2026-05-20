@@ -19,7 +19,7 @@ function toneClass(tone: ClinicalLineTone) {
 function VisualLine({ label, text, fallbackKind = "other" }: { label?: string; text: string; fallbackKind?: ClinicalLineKind }) {
   const classified = classifyClinicalLine(text, { fallbackKind });
   return (
-    <div className={`soap-preview-line soap-preview-line-${toneClass(classified.tone)}`}>
+    <div className={`soap-preview-line soap-preview-line-${classified.kind} soap-preview-line-${toneClass(classified.tone)}`}>
       {(label || classified.label) && <span className="soap-preview-line-label">{label || classified.label}</span>}
       <div className="soap-preview-line-text">
         <ClinicalText value={highlighted(text)} maxCharsPerLine={140} />
@@ -86,7 +86,7 @@ export function SoapVisualPreview({ value, compact = false }: SoapVisualPreviewP
 
       <div className="soap-preview-grid">
         <Section title="S" badge={`${draft.sLines.length || 0}`}>
-          {draft.sLines.length > 0 ? draft.sLines.map((line, index) => <VisualLine key={`${line}-${index}`} text={line} />) : <EmptyLine />}
+          {draft.sLines.length > 0 ? draft.sLines.map((line, index) => <VisualLine key={`${line}-${index}`} text={line} fallbackKind="s" />) : <EmptyLine />}
         </Section>
 
         <Section title="O" badge={`${draft.oLines.length || 0}`}>
@@ -125,11 +125,11 @@ export function SoapVisualPreview({ value, compact = false }: SoapVisualPreviewP
         </Section>
 
         <Section title="Tasks" badge={`${draft.taskLines.length || 0}`}>
-          {draft.taskLines.length > 0 ? draft.taskLines.map((line, index) => <VisualLine key={`${line}-${index}`} text={line} />) : <EmptyLine text="No pending task" />}
+          {draft.taskLines.length > 0 ? draft.taskLines.map((line, index) => <VisualLine key={`${line}-${index}`} text={line} fallbackKind="task" />) : <EmptyLine text="No pending task" />}
         </Section>
 
         <Section title="DC" badge={`${draft.dcLines.length || 0}`}>
-          {draft.dcLines.length > 0 ? draft.dcLines.map((line, index) => <VisualLine key={`${line}-${index}`} text={line} />) : <EmptyLine text="No DC item" />}
+          {draft.dcLines.length > 0 ? draft.dcLines.map((line, index) => <VisualLine key={`${line}-${index}`} text={line} fallbackKind="dc" />) : <EmptyLine text="No DC item" />}
         </Section>
       </div>
     </div>

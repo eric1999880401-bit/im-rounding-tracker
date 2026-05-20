@@ -18,7 +18,6 @@ interface StructuredSoapEditorProps {
 
 const toneOptions: Array<{ value: ClinicalLineTone; label: string }> = [
   { value: "plain", label: "Normal" },
-  { value: "info", label: "Info" },
   { value: "important", label: "Important" },
   { value: "critical", label: "Critical" },
 ];
@@ -53,6 +52,10 @@ function moveLine(lines: SoapEditorLine[], id: string, direction: -1 | 1) {
   return next;
 }
 
+function editableTone(tone: ClinicalLineTone): ClinicalLineTone {
+  return tone === "critical" || tone === "important" ? tone : "plain";
+}
+
 function LineEditor({
   line,
   showKind,
@@ -74,33 +77,43 @@ function LineEditor({
 }) {
   return (
     <div className={`structured-soap-line structured-soap-line-${line.tone}`}>
-      {showKind && (
-        <select value={line.kind} onChange={(event) => onChange({ ...line, kind: event.target.value as ClinicalLineKind })} title="Line type">
-          {objectiveKindOptions.map((option) => (
-            <option value={option.value} key={option.value}>
-              {option.label}
-            </option>
-          ))}
-        </select>
-      )}
-      <select value={line.tone} onChange={(event) => onChange({ ...line, tone: event.target.value as ClinicalLineTone })} title="Importance">
-        {toneOptions.map((option) => (
-          <option value={option.value} key={option.value}>
-            {option.label}
-          </option>
-        ))}
-      </select>
       <textarea
+        className="structured-soap-line-text"
         value={line.text}
         onChange={(event) => onChange({ ...line, text: event.target.value })}
         onCompositionStart={onCompositionStart}
         onCompositionEnd={onCompositionEnd}
         rows={1}
       />
-      <div className="structured-soap-line-actions">
-        <button type="button" className="secondary compact-button" onClick={onMoveUp} title="Move up">↑</button>
-        <button type="button" className="secondary compact-button" onClick={onMoveDown} title="Move down">↓</button>
-        <button type="button" className="secondary compact-button" onClick={onRemove} title="Remove">×</button>
+      <div className="structured-soap-line-meta">
+        <div className="structured-soap-line-selects">
+          {showKind && (
+            <select value={line.kind} onChange={(event) => onChange({ ...line, kind: event.target.value as ClinicalLineKind })} title="Line type" aria-label="Line type">
+              {objectiveKindOptions.map((option) => (
+                <option value={option.value} key={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          )}
+          <select
+            value={editableTone(line.tone)}
+            onChange={(event) => onChange({ ...line, tone: event.target.value as ClinicalLineTone })}
+            title="Highlight level"
+            aria-label="Highlight level"
+          >
+            {toneOptions.map((option) => (
+              <option value={option.value} key={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="structured-soap-line-actions">
+          <button type="button" className="secondary compact-button" onClick={onMoveUp} title="Move up">↑</button>
+          <button type="button" className="secondary compact-button" onClick={onMoveDown} title="Move down">↓</button>
+          <button type="button" className="secondary compact-button" onClick={onRemove} title="Remove">×</button>
+        </div>
       </div>
     </div>
   );
@@ -179,25 +192,36 @@ function ProblemEditor({
   return (
     <article className={`structured-soap-problem structured-soap-line-${problem.tone}`}>
       <div className="structured-soap-problem-heading">
-        <span className="structured-soap-problem-index">#{index + 1}</span>
-        <select value={problem.tone} onChange={(event) => onChange({ ...problem, tone: event.target.value as ClinicalLineTone })} title="Problem importance">
-          {toneOptions.map((option) => (
-            <option value={option.value} key={option.value}>
-              {option.label}
-            </option>
-          ))}
-        </select>
-        <input
-          value={problem.title}
-          onChange={(event) => onChange({ ...problem, title: event.target.value })}
-          onCompositionStart={onCompositionStart}
-          onCompositionEnd={onCompositionEnd}
-          placeholder="Problem title"
-        />
-        <div className="structured-soap-line-actions">
-          <button type="button" className="secondary compact-button" onClick={onMoveUp} title="Move problem up">↑</button>
-          <button type="button" className="secondary compact-button" onClick={onMoveDown} title="Move problem down">↓</button>
-          <button type="button" className="secondary compact-button" onClick={onRemove} title="Remove problem">×</button>
+        <div className="structured-soap-problem-title-row">
+          <span className="structured-soap-problem-index">#{index + 1}</span>
+          <input
+            value={problem.title}
+            onChange={(event) => onChange({ ...problem, title: event.target.value })}
+            onCompositionStart={onCompositionStart}
+            onCompositionEnd={onCompositionEnd}
+            placeholder="Problem title"
+          />
+        </div>
+        <div className="structured-soap-line-meta">
+          <div className="structured-soap-line-selects">
+            <select
+              value={editableTone(problem.tone)}
+              onChange={(event) => onChange({ ...problem, tone: event.target.value as ClinicalLineTone })}
+              title="Problem highlight level"
+              aria-label="Problem highlight level"
+            >
+              {toneOptions.map((option) => (
+                <option value={option.value} key={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="structured-soap-line-actions">
+            <button type="button" className="secondary compact-button" onClick={onMoveUp} title="Move problem up">↑</button>
+            <button type="button" className="secondary compact-button" onClick={onMoveDown} title="Move problem down">↓</button>
+            <button type="button" className="secondary compact-button" onClick={onRemove} title="Remove problem">×</button>
+          </div>
         </div>
       </div>
       {lines.map((line) => (

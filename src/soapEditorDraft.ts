@@ -54,7 +54,7 @@ function makeLine(value: string, fallbackKind: ClinicalLineKind): SoapEditorLine
   return {
     id: createId("soap-line"),
     text: withoutTonePrefix(classified.text),
-    tone: classified.tone,
+    tone: classified.tone === "info" ? "plain" : classified.tone,
     kind: lockedKind ? fallbackKind : classified.kind === "other" ? fallbackKind : classified.kind,
   };
 }
@@ -64,7 +64,7 @@ function makeProblem(problem: SoapApProblem): SoapEditorProblem {
   return {
     id: createId("soap-ap"),
     title: withoutTonePrefix(problem.title || "Problem"),
-    tone: classified.tone === "plain" ? "info" : classified.tone,
+    tone: classified.tone === "info" ? "plain" : classified.tone,
     lines: problem.lines.map((line) => makeLine(line, "ap")),
   };
 }

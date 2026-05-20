@@ -117,10 +117,6 @@ function importantSignal(text: string, kind: ClinicalLineKind) {
   );
 }
 
-function infoSignal(_text: string, kind: ClinicalLineKind) {
-  return kind === "vs" || kind === "pe" || kind === "image" || kind === "header";
-}
-
 export function classifyClinicalLine(value: string, options: ClassifyClinicalLineOptions = {}): ClassifiedClinicalLine {
   const fallbackKind = options.fallbackKind ?? "other";
   const source = String(value ?? "").trim();
@@ -136,9 +132,7 @@ export function classifyClinicalLine(value: string, options: ClassifyClinicalLin
         ? "important"
         : forcedTone === "info"
           ? "info"
-        : infoSignal(source, kind)
-          ? "info"
-          : "plain";
+        : "plain";
 
   return {
     kind,
