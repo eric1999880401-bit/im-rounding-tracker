@@ -104,6 +104,7 @@ function explicitTone(value: string): ClinicalLineTone | null {
 function criticalSignal(text: string, kind: ClinicalLineKind) {
   return (
     /\b(shock|sepsis|septic|hypotension|desat|hypox|active bleed|melena|hematemesis|stroke|ich|neutropenic fever|positive culture|b\/c|bcx|mrsa|enterococcus)\b/i.test(text) ||
+    /\b(norepi|norepinephrine|dopamine|dobutamine|vasopressin|epinephrine|insulin drip|heparin drip)\b/i.test(text) ||
     /\b(lactate\s*(?:[4-9]|\d{2,})|troponin\s*(?:\+|positive|elevated)|inr\s*(?:[3-9]|\d{2,}))\b/i.test(text) ||
     (kind === "lab" && /\b(k\s*(?:[0-2](?:\.\d+)?|[6-9](?:\.\d+)?)|hb\s*(?:[0-7](?:\.\d+)?)|na\s*(?:1[01]\d|[0-9]\d)|wbc\s*(?:[2-9]\d|[0-2](?:\.\d+)?)|plt\s*(?:[0-4]\d)|cr\s*(?:[2-9](?:\.\d+)?|\d{2,}))\b/i.test(text)) ||
     (kind === "vs" && /\b(bp\s*[5-8]\d\/|spo2\s*[0-8]\d|rr\s*[3-9]\d|t\s*3[89]\.|hr\s*1[3-9]\d)\b/i.test(text))
@@ -112,7 +113,7 @@ function criticalSignal(text: string, kind: ClinicalLineKind) {
 
 function importantSignal(text: string, kind: ClinicalLineKind) {
   return (
-    /\b(teicoplanin|vancomycin|cefepime|ceftriaxone|cefazolin|zosyn|pip\/tazo|meropenem|ertapenem|levofloxacin|abx|antibiotic|culture|pending|f\/u|repeat|consult|source control|biopsy|operation|surgery|thoracentesis|paracentesis|tap|drain|j-tube|ng|dc|discharge|opd|certificate|placement)\b/i.test(text) ||
+    /\b(teicoplanin|vancomycin|cefepime|ceftriaxone|cefazolin|zosyn|pip\/tazo|meropenem|ertapenem|levofloxacin|abx|antibiotic|culture|pending|f\/u|repeat|consult|source control|biopsy|operation|surgery|thoracentesis|paracentesis|tap|drain|j-tube|ng|dc|discharge|opd|certificate|placement|anticoag|antiplatelet|heparin|apixaban|warfarin|aspirin|clopidogrel|hold|resume|insulin|lasix|furosemide|steroid|methylpred|prednisolone|oxygen|bronchodilator|tube feed|ivf|kcl)\b/i.test(text) ||
     (kind === "image" && /\b(effusion|chylothorax|tumou?r|mass|metasta|obstruction|perforation|infarct|stenosis|pneumonia|abscess|edema)\b/i.test(text)) ||
     (kind === "task" || kind === "dc")
   );

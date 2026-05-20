@@ -21,6 +21,7 @@ import { useT } from "../i18n";
 import { getRoundingDigest } from "../roundingDigest";
 import { patientToSoapDraft } from "../soapDraft";
 import { classifyClinicalLine, type ClinicalLineKind } from "../clinicalLineClassifier";
+import { formatMedicationOrderLinesForDisplay } from "../medicationOrderParser";
 import {
   isDcSoapLineVisible,
   isLayoutSectionVisible,
@@ -29,6 +30,7 @@ import {
   isSoapHeaderLineVisible,
   isTaskSoapLineVisible,
   normalizeRoundingLayoutPreferences,
+  stripOrderLinePrefix,
 } from "../userPreferences";
 
 interface PageProps {
@@ -236,7 +238,7 @@ function PrintRoundingListPage({
     return {
       kind: classified.kind,
       label: classified.kind === "task" ? (isOrderSoapLine(source) ? "藥囑" : "T") : classified.label,
-      text: removePrintEllipsis(classified.text),
+      text: removePrintEllipsis(isOrderSoapLine(source) ? stripOrderLinePrefix(classified.text) : classified.text),
       tone: classified.tone,
     };
   }
@@ -744,8 +746,13 @@ function PrintRoundingListPage({
     const soap = patientToSoapDraft(patient, dailyNotesByPatient[patient.id] ?? [], todayKey());
     const taskLimit = printLimits().tasks;
     const dcLimit = density === "normal" ? 2 : 1;
+    const visibleTaskSourceLines = soap.taskLines.filter((line) => isTaskSoapLineVisible(line, roundingLayout));
+    const orderLines = visibleTaskSourceLines.filter(isOrderSoapLine);
+    const taskLines = visibleTaskSourceLines.filter((line) => !isOrderSoapLine(line));
+    const displayOrderLines = formatMedicationOrderLinesForDisplay(orderLines, roundingLayout.orderDisplayMode, Math.min(taskLimit, density === "normal" ? 6 : 4));
     return [
-      ...soap.taskLines.filter((line) => isTaskSoapLineVisible(line, roundingLayout)).slice(0, taskLimit),
+      ...displayOrderLines,
+      ...taskLines.slice(0, Math.max(taskLimit - displayOrderLines.length, 0)),
       ...soap.dcLines.filter((line) => isDcSoapLineVisible(line, roundingLayout)).slice(0, dcLimit).map((line) => (/^Prep:/i.test(line) ? line : `DC: ${line}`)),
     ]
       .filter(Boolean)

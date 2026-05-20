@@ -9,10 +9,19 @@ import {
   soapTextToPatientPatch,
   type SoapEditorFormat,
 } from "../soapDraft";
-import { editorDraftToSoapText, parseSoapTextToEditorDraft } from "../soapEditorDraft";
+import { editorDraftToSoapText, emptySoapEditorLine, parseSoapTextToEditorDraft } from "../soapEditorDraft";
 import { emptyDailyNote, nowIso } from "../utils";
 import { SoapVisualPreview } from "./SoapVisualPreview";
 import StructuredSoapEditor from "./StructuredSoapEditor";
+import { isOrderSoapLine } from "../userPreferences";
+import MedicationOrderReviewPanel, { type MedicationOrderSummaryLine } from "./MedicationOrderReviewPanel";
+import {
+  acceptSoapDeltaSection,
+  guardRoundSoapDelta,
+  restoreSoapDeltaSection,
+  type SoapDeltaReview,
+  type SoapDeltaSection,
+} from "../soapDeltaGuardrails";
 
 interface RoundSoapComposerProps {
   patient: Patient;
@@ -104,6 +113,19 @@ const soapFormatOptions: Array<{ value: SoapEditorFormat; label: string; helper:
   { value: "compact", label: "Compact round", helper: "Short check-only version for print/board scanning." },
 ];
 
+const deltaSectionLabels: Record<SoapDeltaSection, string> = {
+  header: "Header",
+  s: "S",
+  vs: "V/S",
+  pe: "PE",
+  lab: "Lab",
+  image: "Image",
+  ap: "A/P",
+  orders: "藥囑",
+  tasks: "Tasks",
+  dc: "DC",
+};
+
 function patientContext(patient: Patient) {
   return {
     age: patient.age,
@@ -167,6 +189,7 @@ function RoundSoapComposer({
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
   const [warnings, setWarnings] = useState<string[]>([]);
+  const [deltaReview, setDeltaReview] = useState<SoapDeltaReview | null>(null);
   const isComposingRef = useRef(false);
   const externalSoapRevisionRef = useRef(externalSoapRevision);
   const soapText = editorDraftToSoapText(editorDraft);
@@ -176,6 +199,7 @@ function RoundSoapComposer({
     const nextDraft = parseSoapTextToEditorDraft(canonical.text);
     setEditorDraft(nextDraft);
     setRawSoapText(editorDraftToSoapText(nextDraft));
+    setDeltaReview(null);
   }, [canonical.text, dirty]);
 
   useEffect(() => {
@@ -189,6 +213,7 @@ function RoundSoapComposer({
     setDirty(true);
     setError("");
     setWarnings([]);
+    setDeltaReview(null);
     setStatus(externalSoapStatus || "External SOAP draft loaded. Review, then Save reviewed SOAP.");
   }, [externalSoapRevision, externalSoapStatus, externalSoapText]);
 
@@ -222,7 +247,7 @@ function RoundSoapComposer({
       sourceSection("V/S", dailyFields.vitals),
       sourceSection("Lab", dailyFields.labs),
       sourceSection("Image", dailyFields.images),
-      sourceSection("Orders / meds", dailyFields.orders),
+      sourceSection("藥囑", dailyFields.orders),
       sourceSection("Other update / task / course", dailyFields.other),
     ].filter(Boolean).join("\n\n").trim();
   }
@@ -233,7 +258,7 @@ function RoundSoapComposer({
       sourceSection("V/S", newSoapFields.vitals),
       sourceSection("Lab", newSoapFields.labs),
       sourceSection("Image", newSoapFields.images),
-      sourceSection("Orders / meds", newSoapFields.orders),
+      sourceSection("藥囑", newSoapFields.orders),
       sourceSection("Description / other", newSoapFields.other),
     ].filter(Boolean).join("\n\n").trim();
   }
@@ -245,7 +270,7 @@ function RoundSoapComposer({
       sourceSection("V/S", transferFields.vitals),
       sourceSection("Lab", transferFields.labs),
       sourceSection("Image", transferFields.images),
-      sourceSection("Orders / meds", transferFields.orders),
+      sourceSection("藥囑", transferFields.orders),
       sourceSection("Description / other", transferFields.other),
     ].filter(Boolean).join("\n\n").trim();
   }
@@ -254,6 +279,35 @@ function RoundSoapComposer({
     if (workflowMode === "newSoap") return composeNewSoapText();
     if (workflowMode === "transferHandoff") return composeTransferText();
     return composeDailyUpdateText();
+  }
+
+  function currentSourceFields() {
+    if (workflowMode === "newSoap") return newSoapFields;
+    if (workflowMode === "transferHandoff") return transferFields;
+    return dailyFields;
+  }
+
+  function currentOrderSourceText() {
+    if (workflowMode === "newSoap") return newSoapFields.orders;
+    if (workflowMode === "transferHandoff") return transferFields.orders;
+    return dailyFields.orders;
+  }
+
+  function applyMedicationOrderSummaries(lines: MedicationOrderSummaryLine[]) {
+    const taskOnlyLines = editorDraft.taskLines.filter((line) => line.subtype !== "order" && !isOrderSoapLine(line.text));
+    const nextOrderLines = lines.map((line) => ({
+      ...emptySoapEditorLine("task"),
+      text: line.text,
+      tone: line.tone,
+      subtype: "order" as const,
+    }));
+    const nextDraft = { ...editorDraft, taskLines: [...nextOrderLines, ...taskOnlyLines] };
+    setEditorDraft(nextDraft);
+    setRawSoapText(editorDraftToSoapText(nextDraft));
+    setDirty(true);
+    setError("");
+    setStatus("藥囑摘要 applied to local SOAP draft. Save reviewed SOAP to write Firestore.");
+    setDeltaReview(null);
   }
 
   function clearSourceText() {
@@ -267,6 +321,7 @@ function RoundSoapComposer({
     setError("");
     setStatus("");
     setWarnings([]);
+    setDeltaReview(null);
 
     if (!confirmed) {
       setError("Confirm the pasted text is de-identified before generating SOAP.");
@@ -300,12 +355,24 @@ function RoundSoapComposer({
             userStyleProfile: aiStyleProfile,
           });
 
-      const nextDraft = parseSoapTextToEditorDraft(result.soapText.trim() || canonical.text);
+      const guarded = guardRoundSoapDelta({
+        workflowMode,
+        baselineText: soapText || canonical.text,
+        candidateText: result.soapText.trim() || canonical.text,
+        sourceFields: currentSourceFields(),
+        candidateWarnings: result.warnings ?? [],
+      });
+      const nextDraft = parseSoapTextToEditorDraft(guarded.acceptedText);
       setEditorDraft(nextDraft);
       setRawSoapText(editorDraftToSoapText(nextDraft));
       setDirty(true);
-      setWarnings(result.warnings ?? []);
-      setStatus(`SOAP preview generated (${result.model}). Edit, then Save reviewed SOAP.`);
+      setWarnings([...guarded.warnings, ...guarded.highRiskWarnings]);
+      setDeltaReview(guarded);
+      setStatus(
+        guarded.highRiskWarnings.length > 0
+          ? `SOAP preview generated (${result.model}); high-risk unrelated AI changes were held.`
+          : `SOAP preview generated (${result.model}). Edit, then Save reviewed SOAP.`,
+      );
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : "SOAP generation failed. No data was saved.");
     } finally {
@@ -331,6 +398,7 @@ function RoundSoapComposer({
       setRawSoapText(editorDraftToSoapText(nextDraft));
       clearSourceText();
       setDirty(false);
+      setDeltaReview(null);
       setStatus("Reviewed SOAP saved. Board, Details, and Print now read this note.");
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : "Saving SOAP failed.");
@@ -347,7 +415,38 @@ function RoundSoapComposer({
     setRawSoapText(editorDraftToSoapText(nextDraft));
     setDirty(true);
     setError("");
+    setDeltaReview(null);
     setStatus(`${soapFormatOptions.find((item) => item.value === soapFormat)?.label ?? "SOAP"} applied. Review, then Save reviewed SOAP.`);
+  }
+
+  function loadDeltaSoapText(nextText: string, nextStatus: string) {
+    const nextDraft = parseSoapTextToEditorDraft(nextText);
+    setEditorDraft(nextDraft);
+    setRawSoapText(editorDraftToSoapText(nextDraft));
+    setDirty(true);
+    setStatus(nextStatus);
+  }
+
+  function acceptAllDeltaChanges() {
+    if (!deltaReview) return;
+    loadDeltaSoapText(deltaReview.candidateText, "Accepted full AI draft into local SOAP. Review, then Save reviewed SOAP.");
+  }
+
+  function rejectAllDeltaChanges() {
+    if (!deltaReview) return;
+    loadDeltaSoapText(deltaReview.baselineText, "Rejected AI draft and restored baseline SOAP locally.");
+  }
+
+  function acceptDeltaSection(section: SoapDeltaSection) {
+    if (!deltaReview) return;
+    const nextText = acceptSoapDeltaSection(editorDraftToSoapText(editorDraft), deltaReview.candidateText, section);
+    loadDeltaSoapText(nextText, `${deltaSectionLabels[section]} accepted from AI draft locally.`);
+  }
+
+  function restoreDeltaSection(section: SoapDeltaSection) {
+    if (!deltaReview) return;
+    const nextText = restoreSoapDeltaSection(editorDraftToSoapText(editorDraft), deltaReview.baselineText, section);
+    loadDeltaSoapText(nextText, `${deltaSectionLabels[section]} restored from baseline locally.`);
   }
 
   return (
@@ -358,6 +457,9 @@ function RoundSoapComposer({
           <p className="muted">
             Source: {canonical.source === "fallback" ? "legacy fields fallback" : `${canonical.sourceDate} reviewed SOAP`}
           </p>
+          <span className={isDemoMode ? "ai-callable-pill ai-callable-demo" : "ai-callable-pill"}>
+            {isDemoMode ? "AI: demo local merge" : "AI: Firebase callable"}
+          </span>
         </div>
         <div className="form-actions">
           <select value={workflowMode} onChange={(event) => setWorkflowMode(event.target.value as WorkflowMode)}>
@@ -381,6 +483,7 @@ function RoundSoapComposer({
             setDirty(false);
             setStatus("");
             setError("");
+            setDeltaReview(null);
           }}>
             Reset
           </button>
@@ -675,6 +778,12 @@ function RoundSoapComposer({
         </div>
       )}
 
+      <MedicationOrderReviewPanel
+        compact={compact}
+        sourceText={currentOrderSourceText()}
+        onApply={applyMedicationOrderSummaries}
+      />
+
       <div className="round-soap-generate-row">
         <label className="checkbox-label">
           <input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} />
@@ -692,6 +801,46 @@ function RoundSoapComposer({
           <strong>Warnings</strong>
           <ClinicalText value={warnings.join("\n")} maxLines={4} />
         </div>
+      )}
+
+      {deltaReview && deltaReview.changedSections.length > 0 && (
+        <section className="soap-delta-panel">
+          <div className="soap-delta-heading">
+            <div>
+              <strong>Changed sections</strong>
+              <p className="muted">
+                Daily update applies safe section changes first. Use Accept all only after review.
+              </p>
+            </div>
+            <div className="form-actions">
+              <button type="button" className="secondary compact-button" onClick={rejectAllDeltaChanges}>
+                Reject all
+              </button>
+              <button type="button" className="secondary compact-button" onClick={acceptAllDeltaChanges}>
+                Accept all
+              </button>
+            </div>
+          </div>
+          <div className="soap-delta-section-list">
+            {deltaReview.changedSections.map((section) => (
+              <article className={`soap-delta-section soap-delta-${section.risk}`} key={`${section.id}-${section.reason}-${section.blocked}`}>
+                <div>
+                  <strong>{section.label}</strong>
+                  <span>{section.blocked ? "Held" : "Applied"}</span>
+                  <p>{section.reason}</p>
+                </div>
+                <div className="form-actions">
+                  <button type="button" className="secondary compact-button" onClick={() => restoreDeltaSection(section.id)}>
+                    Restore baseline
+                  </button>
+                  <button type="button" className="secondary compact-button" onClick={() => acceptDeltaSection(section.id)}>
+                    Accept AI section
+                  </button>
+                </div>
+              </article>
+            ))}
+          </div>
+        </section>
       )}
 
       <div className="round-soap-editor-grid">

@@ -36,6 +36,7 @@ import { useT } from "../i18n";
 import { getRoundingDigest } from "../roundingDigest";
 import { fallbackSoapTextFromPatient, patientToSoapDraft } from "../soapDraft";
 import { classifyClinicalLine, type ClinicalLineKind } from "../clinicalLineClassifier";
+import { formatMedicationOrderLinesForDisplay } from "../medicationOrderParser";
 import {
   isDcSoapLineVisible,
   isLayoutSectionVisible,
@@ -44,6 +45,7 @@ import {
   isSoapHeaderLineVisible,
   isTaskSoapLineVisible,
   normalizeRoundingLayoutPreferences,
+  stripOrderLinePrefix,
 } from "../userPreferences";
 
 interface PageProps {
@@ -98,10 +100,11 @@ function normalizeTaskCategory(value: string): TaskCategory {
 function classifyBoardVisualLine(line: string, fallbackKind: BoardVisualKind = "other") {
   const useLockKind = fallbackKind !== "other";
   const classified = classifyClinicalLine(line, { fallbackKind, lockKind: useLockKind });
+  const isOrder = fallbackKind === "task" && isOrderSoapLine(line);
   return {
     kind: classified.kind,
-    label: fallbackKind === "task" && isOrderSoapLine(line) ? "藥囑" : classified.label,
-    text: safeClinicalLine(classified.text, fallbackKind === "ap" ? 140 : 76),
+    label: isOrder ? "藥囑" : classified.label,
+    text: safeClinicalLine(isOrder ? stripOrderLinePrefix(classified.text) : classified.text, fallbackKind === "ap" ? 140 : 76),
     tone: classified.tone,
   };
 }
@@ -1394,6 +1397,11 @@ function PatientBoardPage({
               .join("； ");
             const visibleTaskSourceLines = soap.taskLines.filter((line) => isTaskSoapLineVisible(line, roundingLayout));
             const visibleOrderLines = visibleTaskSourceLines.filter(isOrderSoapLine);
+            const displayOrderLines = formatMedicationOrderLinesForDisplay(
+              visibleOrderLines,
+              roundingLayout.orderDisplayMode,
+              roundingLayout.boardDensity === "normal" ? 6 : 4,
+            );
             const visibleTaskLines = visibleTaskSourceLines.filter((line) => !isOrderSoapLine(line));
             const visibleDcLines = (soap.dcLines.length > 0 ? soap.dcLines : patient.dischargeTargetDate ? [`Target: ${patient.dischargeTargetDate}`] : [])
               .filter((line) => isDcSoapLineVisible(line, roundingLayout));
@@ -1478,7 +1486,7 @@ function PatientBoardPage({
                     {isLayoutSectionVisible(roundingLayout, "orders") && (
                       <div className="board-subsection patient-board-orders">
                         <span className="board-label">藥囑</span>
-                        {renderBoardVisualLines(visibleOrderLines, "無藥囑", "task", 3)}
+                        {renderBoardVisualLines(displayOrderLines, roundingLayout.orderDisplayMode === "collapsed" ? "藥囑已收起" : "無藥囑", "task", 4)}
                       </div>
                     )}
                     {isLayoutSectionVisible(roundingLayout, "tasks") && (

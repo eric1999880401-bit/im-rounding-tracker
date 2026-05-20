@@ -61,9 +61,10 @@ function makeLine(value: string, fallbackKind: ClinicalLineKind): SoapEditorLine
 }
 
 function looksLikeOrderLine(value: string) {
-  const text = String(value ?? "").trim();
+  const text = String(value ?? "").trim().replace(/^!!?\s*/, "").replace(/^\*\s*/, "");
   return (
     /^\s*(?:order|orders?|meds?|藥囑)\s*[:：]/i.test(text) ||
+    /^\s*(?:Abx|Anticoag\/AP|Steroid\/Immuno|Cardio\/Renal|Resp|Insulin\/Glucose|IVF\/Lyte|Nutrition|Monitoring|PRN|Routine(?: hidden)?)\s*:/i.test(text) ||
     /\b(?:order|check|replace|repeat|trend|monitor|start|stop|hold|resume|continue|complete|taper|titrate|wean)\b/i.test(text) ||
     (/\b(?:iv|po|sc|im|mg|mcg|g|unit|units|q\d+h|qd|bid|tid|qid|prn|stat|x\s*\d+\s*d(?:ay)?s?)\b/i.test(text) &&
       /\b(?:abx|antibiotic|cef|vanco|teico|levo|cipro|mero|tazo|zosyn|morphine|fentanyl|lasix|furosemide|heparin|insulin|ppi|pantoprazole|steroid|methylpred|prednisolone)\b/i.test(text))

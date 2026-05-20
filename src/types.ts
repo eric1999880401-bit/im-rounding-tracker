@@ -14,6 +14,7 @@ export type TaskCategory =
   | "other";
 
 export type PrintDensity = "normal" | "compact" | "ultra-compact";
+export type OrderDisplayMode = "summary" | "category" | "collapsed";
 
 export type SortMode = "bed" | "dischargeDate" | "urgentFirst";
 
@@ -496,6 +497,7 @@ export interface RoundingLayoutPreferences {
   preset: RoundingLayoutPreset;
   visibleSections: Record<RoundingLayoutSection, boolean>;
   apDisplayMode: "separate" | "merged";
+  orderDisplayMode: OrderDisplayMode;
   printDensity: PrintDensity;
   boardDensity: PrintDensity;
 }

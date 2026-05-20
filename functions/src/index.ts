@@ -1262,9 +1262,14 @@ function makeRoundSoapPrompt(params: {
       ? [
           "Workflow mode: Daily update.",
           "- Treat the current reviewed SOAP baseline as already clinician-reviewed and generally correct.",
-          "- Do not rewrite the whole note. Add or revise only new clinically meaningful V/S, labs, images, symptoms, course, A/P details, tasks, and DC blockers from pasted fields.",
+          "- Do not rewrite the whole note. Add or revise only new clinically meaningful V/S, labs, images, symptoms, course, A/P details, tasks, orders, and DC blockers from pasted fields.",
+          "- If the pasted source contains only V/S, update only O/V/S unless those vitals create a new safety issue.",
+          "- If the pasted source contains only Lab, update only O/Lab and, when needed, append a short status/plan phrase under the matching existing A/P problem title. Do not rebuild the whole A/P.",
+          "- If the pasted source contains only Image, update only O/Image with study/date/key finding. Never move image reports into PE.",
+          "- If the pasted source contains only orders/medications, update only Tasks/Order summaries. Do not create new A/P problems from orders alone.",
           "- If pasted text says a task/result is done or resolved, remove or update that task in the SOAP instead of carrying it forward.",
           "- Do not change diagnosis/PMH/A/P structure unless today's pasted data clearly changes the clinical problem list.",
+          "- Preserve existing A/P problem titles by default. Only add a new problem if today's pasted text clearly supports a new active problem.",
         ].join("\n")
       : params.workflowMode === "newSoap"
         ? [
@@ -1306,6 +1311,8 @@ function makeRoundSoapPrompt(params: {
     "- If source says shock/hypotension resolved or latest BP stable, do not create active shock red flag/A/P.",
     "- Red/high-risk facts can be marked with a leading ! in soapText; important therapies/pending items can be left as normal text.",
     "- If user style profile is provided, match the user's writing style: wording density, shorthand habit, A/P organization, section order, and task phrasing.",
+    "- Treat styleSummary and preferredTerms as strong voice guidance: imitate the reviewed SOAP style and abbreviations when clinically safe, instead of defaulting to generic textbook prose.",
+    "- If currentSoapBaseline exists, preserve its A/P title style, term choices, terse wording, and task phrasing unless the pasted source clearly requires a change.",
     "- Treat typical A/P problem count and line limit only as weak density hints, not as targets. Clinical correctness and the user's reviewed baseline style matter more than exact numbers.",
     "",
     modeInstruction,

@@ -8,6 +8,7 @@ import {
   type SoapEditorProblem,
 } from "../soapEditorDraft";
 import { isOrderSoapLine } from "../userPreferences";
+import MedicationOrderReviewPanel, { type MedicationOrderSummaryLine } from "./MedicationOrderReviewPanel";
 
 interface StructuredSoapEditorProps {
   draft: SoapEditorDraft;
@@ -280,6 +281,15 @@ export function StructuredSoapEditor({
   const problems = draft.apProblems.length > 0 ? draft.apProblems : [emptySoapEditorProblem()];
   const orderLines = draft.taskLines.filter(isEditorOrderLine);
   const taskOnlyLines = draft.taskLines.filter((line) => !isEditorOrderLine(line));
+  const applyOrderSummaries = (lines: MedicationOrderSummaryLine[]) => {
+    const nextOrderLines = lines.map((line) => ({
+      ...emptySoapEditorLine("task"),
+      text: line.text,
+      tone: line.tone,
+      subtype: "order" as const,
+    }));
+    updateDraft({ taskLines: [...nextOrderLines, ...taskOnlyLines] });
+  };
 
   return (
     <div className={compact ? "structured-soap-editor structured-soap-editor-compact" : "structured-soap-editor"}>
@@ -338,6 +348,11 @@ export function StructuredSoapEditor({
         onChange={(nextOrderLines) => updateDraft({ taskLines: [...asOrderLines(nextOrderLines), ...taskOnlyLines] })}
         onCompositionStart={onCompositionStart}
         onCompositionEnd={onCompositionEnd}
+      />
+      <MedicationOrderReviewPanel
+        compact={compact}
+        sourceText={orderLines.map((line) => line.text).join("\n")}
+        onApply={applyOrderSummaries}
       />
       <SectionEditor
         title="Tasks"

@@ -47,6 +47,16 @@ const {
   normalizeRoundingLayoutPreferences,
   visibleSectionsForPreset,
 } = await server.ssrLoadModule("/src/userPreferences.ts");
+const {
+  formatMedicationOrderLinesForDisplay,
+  parseMedicationOrders,
+  summarizeMedicationOrders,
+} = await server.ssrLoadModule("/src/medicationOrderParser.ts");
+const {
+  acceptSoapDeltaSection,
+  guardRoundSoapDelta,
+  restoreSoapDeltaSection,
+} = await server.ssrLoadModule("/src/soapDeltaGuardrails.ts");
 
 function haystack(plan) {
   return [
@@ -1458,6 +1468,159 @@ try {
 }
 
 try {
+  const baselineSoap = [
+    "7A-01 IM-A01 67/F",
+    "Dx: PNA w/ bacteremia",
+    "PMH: CKD3",
+    "Date: 2026-05-20",
+    "",
+    "S:",
+    "- cough improving",
+    "",
+    "O:",
+    "- V/S: BP 112/70, HR 88, SpO2 96% RA",
+    "- PE: mild RLL crackles",
+    "- Lab: WBC 13.0, Hb 9.4, Cr 1.6",
+    "- Image: CXR 5/20 RLL opacity improving",
+    "",
+    "A/P:",
+    "# PNA / bacteremia",
+    "- Ceftriaxone 5/19-, f/u B/C clearance and de-escalation.",
+    "# AKI on CKD",
+    "- Cr 1.6, trend renal/lytes and I/O.",
+    "",
+    "Tasks:",
+    "- f/u B/C result",
+    "- Order: VS q4h",
+    "",
+    "DC:",
+    "- Pending: afebrile, Cx clearance, OPD meds.",
+  ].join("\n");
+  const unsafeVitalsCandidate = [
+    "7A-01 IM-A01 67/F",
+    "Dx: new sepsis shock",
+    "PMH: CKD3",
+    "Date: 2026-05-20",
+    "",
+    "S:",
+    "- worse dyspnea and fever",
+    "",
+    "O:",
+    "- V/S: BP 108/66, HR 92, SpO2 97% RA",
+    "- PE: clear breath sounds",
+    "- Lab: WBC normalized",
+    "",
+    "A/P:",
+    "# Sepsis shock",
+    "- Stop Ceftriaxone, no culture follow-up needed.",
+    "",
+    "Tasks:",
+    "- no pending tasks",
+  ].join("\n");
+  const vitalsOnly = guardRoundSoapDelta({
+    workflowMode: "dailyUpdate",
+    baselineText: baselineSoap,
+    candidateText: unsafeVitalsCandidate,
+    sourceFields: { vitals: "BP 108/66 HR 92 SpO2 97% RA" },
+    candidateWarnings: ["AI generated draft"],
+  });
+  if (!/V\/S: BP 108\/66, HR 92, SpO2 97% RA/i.test(vitalsOnly.acceptedText)) {
+    throw new Error(`Vitals-only update did not apply V/S:\n${vitalsOnly.acceptedText}`);
+  }
+  if (!/cough improving/i.test(vitalsOnly.acceptedText) || !/Ceftriaxone 5\/19-/i.test(vitalsOnly.acceptedText) || !/Pending: afebrile/i.test(vitalsOnly.acceptedText)) {
+    throw new Error(`Vitals-only update rewrote protected baseline sections:\n${vitalsOnly.acceptedText}`);
+  }
+  if (/new sepsis shock|Stop Ceftriaxone|no pending tasks/i.test(vitalsOnly.acceptedText)) {
+    throw new Error(`Vitals-only update accepted unrelated AI content:\n${vitalsOnly.acceptedText}`);
+  }
+  if (!vitalsOnly.changedSections.some((section) => section.id === "ap" && section.blocked) || !vitalsOnly.changedSections.some((section) => section.id === "header" && section.blocked)) {
+    throw new Error(`Vitals-only guard did not flag blocked high-risk sections: ${JSON.stringify(vitalsOnly.changedSections)}`);
+  }
+  if (!vitalsOnly.highRiskWarnings.some((warning) => /A\/P change blocked|Header\/Dx\/PMH/i.test(warning))) {
+    throw new Error(`Vitals-only guard did not surface readable high-risk warnings: ${JSON.stringify(vitalsOnly.highRiskWarnings)}`);
+  }
+
+  const labCandidate = [
+    "7A-01 IM-A01 67/F",
+    "Dx: PNA w/ bacteremia",
+    "PMH: CKD3",
+    "Date: 2026-05-20",
+    "",
+    "S:",
+    "- cough improving",
+    "",
+    "O:",
+    "- V/S: BP 112/70, HR 88, SpO2 96% RA",
+    "- PE: mild RLL crackles",
+    "- Lab: WBC 10.2 from 13.0, Hb 9.4 stable, Cr 2.0 from 1.6",
+    "- Image: CXR 5/20 RLL opacity improving",
+    "",
+    "A/P:",
+    "# PNA / bacteremia",
+    "- WBC improving, f/u B/C clearance.",
+    "# AKI on CKD",
+    "- Cr 2.0 from 1.6, trend renal/lytes and I/O.",
+    "# New CHF",
+    "- Start diuresis.",
+    "",
+    "Tasks:",
+    "- f/u B/C result",
+    "- Order: VS q4h",
+    "",
+    "DC:",
+    "- Pending: afebrile, Cx clearance, OPD meds.",
+  ].join("\n");
+  const labOnly = guardRoundSoapDelta({
+    workflowMode: "dailyUpdate",
+    baselineText: baselineSoap,
+    candidateText: labCandidate,
+    sourceFields: { labs: "WBC 10.2 from 13.0, Hb 9.4 stable, Cr 2.0 from 1.6" },
+  });
+  if (!/Lab: WBC 10\.2 from 13\.0, Hb 9\.4 stable, Cr 2\.0 from 1\.6/i.test(labOnly.acceptedText)) {
+    throw new Error(`Lab-only update did not apply lab trend:\n${labOnly.acceptedText}`);
+  }
+  if (!/# PNA \/ bacteremia[\s\S]*Ceftriaxone 5\/19-[\s\S]*WBC improving[\s\S]*# AKI on CKD[\s\S]*Cr 2\.0 from 1\.6/i.test(labOnly.acceptedText)) {
+    throw new Error(`Lab-only update did not merge facts under existing A/P titles:\n${labOnly.acceptedText}`);
+  }
+  if (/New CHF|Start diuresis/i.test(labOnly.acceptedText)) {
+    throw new Error(`Lab-only update accepted unsupported new A/P problem:\n${labOnly.acceptedText}`);
+  }
+
+  const ordersCandidate = baselineSoap.replace("- Order: VS q4h", "- Order: Ceftriaxone 5/19-, VS q4h, KCl replacement").replace("- Ceftriaxone 5/19-, f/u B/C clearance and de-escalation.", "- Broad new A/P rewrite.");
+  const ordersOnly = guardRoundSoapDelta({
+    workflowMode: "dailyUpdate",
+    baselineText: baselineSoap,
+    candidateText: ordersCandidate,
+    sourceFields: { orders: "Ceftriaxone 5/19-, VS q4h, KCl replacement" },
+  });
+  if (!/Order: Ceftriaxone 5\/19-, VS q4h, KCl replacement/i.test(ordersOnly.acceptedText) || !/Ceftriaxone 5\/19-, f\/u B\/C clearance/i.test(ordersOnly.acceptedText)) {
+    throw new Error(`Orders-only update did not isolate order changes from A/P:\n${ordersOnly.acceptedText}`);
+  }
+  const acceptedAp = acceptSoapDeltaSection(vitalsOnly.acceptedText, unsafeVitalsCandidate, "ap");
+  if (!/Stop Ceftriaxone/i.test(acceptedAp)) {
+    throw new Error(`Accept section did not apply candidate A/P for manual override:\n${acceptedAp}`);
+  }
+  const restoredVs = restoreSoapDeltaSection(vitalsOnly.acceptedText, baselineSoap, "vs");
+  if (!/V\/S: BP 112\/70, HR 88, SpO2 96% RA/i.test(restoredVs) || /BP 108\/66/i.test(restoredVs)) {
+    throw new Error(`Restore section did not restore baseline V/S:\n${restoredVs}`);
+  }
+  const transferCandidate = guardRoundSoapDelta({
+    workflowMode: "transferHandoff",
+    baselineText: baselineSoap,
+    candidateText: unsafeVitalsCandidate,
+    sourceFields: { admission: "PNA admission", lastSoap: baselineSoap, vitals: "BP 108/66" },
+  });
+  if (transferCandidate.acceptedText !== transferCandidate.candidateText || !transferCandidate.changedSections.some((section) => section.id === "ap")) {
+    throw new Error("Transfer/New SOAP guard should allow full candidate draft but still report changed sections.");
+  }
+  console.log("PASS AI SOAP delta guardrails preserve reviewed baseline unless source supports changes");
+  supplementalPasses += 1;
+} catch (error) {
+  failures.push({ name: "AI SOAP delta guardrails preserve reviewed baseline unless source supports changes", error: error instanceof Error ? error.message : String(error) });
+  console.error(`FAIL AI SOAP delta guardrails preserve reviewed baseline unless source supports changes: ${failures[failures.length - 1].error}`);
+}
+
+try {
   const lockedAp = classifyClinicalLine("Lab: Cr 2.7, Hb 8.7, INR 10; CXR improved", { fallbackKind: "ap", lockKind: true });
   const objectiveLab = classifyClinicalLine("Lab: Cr 2.7, Hb 8.7, INR 10", { fallbackKind: "lab" });
   if (lockedAp.kind !== "ap" || lockedAp.label !== "A/P" || !/^Lab:/i.test(lockedAp.text)) {
@@ -1468,9 +1631,12 @@ try {
   }
 
   const visibleSections = { ...visibleSectionsForPreset("compactSoap"), objectiveImages: false, tasks: false, dcBarriers: false, dcPrep: true };
-  const layout = normalizeRoundingLayoutPreferences({ preset: "compactSoap", visibleSections, apDisplayMode: "merged" });
+  const layout = normalizeRoundingLayoutPreferences({ preset: "compactSoap", visibleSections, apDisplayMode: "merged", orderDisplayMode: "category" });
   if (layout.apDisplayMode !== "merged") {
     throw new Error("A/P display mode setting was not preserved");
+  }
+  if (layout.orderDisplayMode !== "category") {
+    throw new Error("Order display mode setting was not preserved");
   }
   if (isObjectiveSoapLineVisible("Image: CXR: improved opacity", layout)) {
     throw new Error("O Image remained visible after objectiveImages was disabled");
@@ -1481,7 +1647,7 @@ try {
   if (isTaskSoapLineVisible("f/u CBC tomorrow", layout) || !isTaskSoapLineVisible("Order: VS q4h", layout) || !isTaskSoapLineVisible("Complete Levofloxacin PO x5 days", layout)) {
     throw new Error("Order/task layout filtering did not separate orders from tasks");
   }
-  if (!isOrderSoapLine("Complete Levofloxacin PO x5 days") || isOrderSoapLine("f/u CBC tomorrow")) {
+  if (!isOrderSoapLine("Complete Levofloxacin PO x5 days") || !isOrderSoapLine("Abx: Teicoplanin 5/13-") || isOrderSoapLine("f/u CBC tomorrow")) {
     throw new Error("Order detection did not catch medication orders without promoting routine tasks");
   }
   if (isDcSoapLineVisible("Barrier: oxygen requirement", layout) || !isDcSoapLineVisible("Pending: meds/OPD/certificate", layout)) {
@@ -1519,6 +1685,78 @@ try {
 } catch (error) {
   failures.push({ name: "Layout preferences lock print labels and build abstract AI style profile", error: error instanceof Error ? error.message : String(error) });
   console.error(`FAIL Layout preferences lock print labels and build abstract AI style profile: ${failures[failures.length - 1].error}`);
+}
+
+try {
+  const noisyOrders = [
+    "2026/05/13 Teicoplanin 400 mg IV qd 5/13-",
+    "Levofloxacin 500 mg PO qd x5 days",
+    "Piperacillin/tazobactam stop after culture review",
+    "Pantoprazole 40 mg IV qd",
+    "Senna 2 tab HS",
+    "Vitamin B complex 1# PO qd",
+    "Heparin SC hold for tap",
+    "Resume aspirin after bleeding review",
+    "Methylprednisolone 40 mg IV q12h",
+    "Lasix 20 mg IV stat",
+    "Norepinephrine drip titrate",
+    "O2 nasal cannula 3 L/min keep SpO2 > 92%",
+    "Berodual neb q6h",
+    "Insulin regular sliding scale AC/HS",
+    "D50W 2 amp IV stat if hypoglycemia",
+    "D5W 500 mL IV q12h",
+    "KCl replacement 20 mEq IV",
+    "Tube feeding 1500 kcal/day",
+    "VS q4h",
+    "I/O q8h",
+    "Morphine 5 mg IV PRN dyspnea",
+    "Acetaminophen 500 mg PO PRN fever",
+    "Metoclopramide 10 mg IV PRN nausea",
+    "Amlodipine 5 mg PO qd",
+    "Atorvastatin 20 mg PO qn",
+    "Lactulose 30 mL PO tid",
+    "Calcium carbonate 1 tab PO tid",
+    "Folic acid 1 tab PO qd",
+    "Mosapride 5 mg PO tid",
+    "Normal saline flush for line care",
+  ].join("\n");
+  const parsedOrders = parseMedicationOrders(noisyOrders);
+  if (parsedOrders.length < 20) {
+    throw new Error(`Order parser dropped too many lines: ${parsedOrders.length}`);
+  }
+  const summaries = summarizeMedicationOrders(parsedOrders, { maxLines: 6, mode: "summary" });
+  if (summaries.length > 6) {
+    throw new Error(`Order summary exceeded print-friendly limit: ${summaries.join("\n")}`);
+  }
+  if (!summaries.some((line) => /Abx:.*Teicoplanin.*Levofloxacin/i.test(line))) {
+    throw new Error(`Order summary lost antibiotics/date/course signal:\n${summaries.join("\n")}`);
+  }
+  if (!summaries.some((line) => /Anticoag\/AP:.*heparin.*hold/i.test(line))) {
+    throw new Error(`Order summary lost anticoag hold signal:\n${summaries.join("\n")}`);
+  }
+  if (!summaries.some((line) => /Steroid\/Immuno:.*Methylpred/i.test(line)) || !summaries.some((line) => /Insulin\/Glucose:.*Insulin/i.test(line))) {
+    throw new Error(`Order summary lost steroid or insulin signal:\n${summaries.join("\n")}`);
+  }
+  if (summaries.some((line) => /Pantoprazole|Senna|Vitamin B/i.test(line))) {
+    throw new Error(`Routine meds leaked into high-yield order summary:\n${summaries.join("\n")}`);
+  }
+  const routineHidden = parsedOrders.filter((order) => order.hiddenReason).map((order) => order.displayText).join("\n");
+  if (!/Pantoprazole/i.test(routineHidden) || !/Senna/i.test(routineHidden) || !/Vitamin B/i.test(routineHidden)) {
+    throw new Error(`Routine hidden list did not keep retrievable low-yield meds:\n${routineHidden}`);
+  }
+  const displayLines = formatMedicationOrderLinesForDisplay(
+    ["Order: Teicoplanin 400 mg IV qd 5/13-", "Order: Pantoprazole 40 mg IV qd", "Order: Morphine 5 mg IV PRN dyspnea"],
+    "summary",
+    6,
+  );
+  if (!displayLines.some((line) => /Abx:.*Teicoplanin/i.test(line)) || !displayLines.some((line) => /PRN:.*Morphine/i.test(line)) || displayLines.some((line) => /Pantoprazole/i.test(line))) {
+    throw new Error(`Order display formatting did not hide routine meds while keeping high-yield PRN:\n${displayLines.join("\n")}`);
+  }
+  console.log("PASS Medication order cleaner summarizes noisy HIS orders without saving raw text");
+  supplementalPasses += 1;
+} catch (error) {
+  failures.push({ name: "Medication order cleaner summarizes noisy HIS orders without saving raw text", error: error instanceof Error ? error.message : String(error) });
+  console.error(`FAIL Medication order cleaner summarizes noisy HIS orders without saving raw text: ${failures[failures.length - 1].error}`);
 }
 
 await server.close();

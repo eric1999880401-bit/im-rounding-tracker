@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { parseSoapText, soapTextWithDerivedHighlights } from "../soapDraft";
 import { ClinicalText } from "./ClinicalText";
 import { classifyClinicalLine, type ClinicalLineKind, type ClinicalLineTone } from "../clinicalLineClassifier";
+import { formatMedicationOrderLinesForDisplay } from "../medicationOrderParser";
 import type { RoundingLayoutPreferences } from "../types";
 import {
   isDcSoapLineVisible,
@@ -10,6 +11,7 @@ import {
   isOrderSoapLine,
   isSoapHeaderLineVisible,
   isTaskSoapLineVisible,
+  stripOrderLinePrefix,
 } from "../userPreferences";
 
 interface SoapVisualPreviewProps {
@@ -28,12 +30,14 @@ function toneClass(tone: ClinicalLineTone) {
 
 function VisualLine({ label, text, fallbackKind = "other" }: { label?: string; text: string; fallbackKind?: ClinicalLineKind }) {
   const classified = classifyClinicalLine(text, { fallbackKind, lockKind: fallbackKind !== "other" });
-  const displayLabel = label || (fallbackKind === "task" && isOrderSoapLine(text) ? "藥囑" : classified.label);
+  const isOrder = fallbackKind === "task" && isOrderSoapLine(text);
+  const displayLabel = label || (isOrder ? "藥囑" : classified.label);
+  const displayText = isOrder ? stripOrderLinePrefix(text) : text;
   return (
     <div className={`soap-preview-line soap-preview-line-${classified.kind} soap-preview-line-${toneClass(classified.tone)}`}>
       {displayLabel && <span className="soap-preview-line-label">{displayLabel}</span>}
       <div className="soap-preview-line-text">
-        <ClinicalText value={highlighted(text)} maxCharsPerLine={140} />
+        <ClinicalText value={highlighted(displayText)} maxCharsPerLine={140} />
       </div>
     </div>
   );
@@ -73,6 +77,7 @@ export function SoapVisualPreview({ value, compact = false, layoutPreferences }:
   const apProblems = isLayoutSectionVisible(layoutPreferences, "assessmentPlan") ? draft.apProblems : [];
   const visibleTaskSourceLines = draft.taskLines.filter((line) => isTaskSoapLineVisible(line, layoutPreferences));
   const orderLines = visibleTaskSourceLines.filter(isOrderSoapLine);
+  const displayOrderLines = formatMedicationOrderLinesForDisplay(orderLines, layoutPreferences?.orderDisplayMode ?? "summary", compact ? 4 : 6);
   const taskLines = visibleTaskSourceLines.filter((line) => !isOrderSoapLine(line));
   const dcLines = draft.dcLines.filter((line) => isDcSoapLineVisible(line, layoutPreferences));
   const hasObjectiveSections =
@@ -165,8 +170,8 @@ export function SoapVisualPreview({ value, compact = false, layoutPreferences }:
         )}
 
         {isLayoutSectionVisible(layoutPreferences, "orders") && (
-          <Section title="藥囑" badge={`${orderLines.length || 0}`}>
-            {orderLines.length > 0 ? orderLines.map((line, index) => <VisualLine key={`${line}-${index}`} text={line} fallbackKind="task" />) : <EmptyLine text="無藥囑" />}
+          <Section title="藥囑" badge={`${displayOrderLines.length || 0}`}>
+            {displayOrderLines.length > 0 ? displayOrderLines.map((line, index) => <VisualLine key={`${line}-${index}`} text={line} fallbackKind="task" />) : <EmptyLine text={layoutPreferences?.orderDisplayMode === "collapsed" ? "藥囑已收起" : "無藥囑"} />}
           </Section>
         )}
 

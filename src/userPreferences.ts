@@ -1,5 +1,6 @@
 import type {
   DailyNotesByPatient,
+  OrderDisplayMode,
   Patient,
   PrintDensity,
   RoundingLayoutPreferences,
@@ -10,6 +11,7 @@ import type {
 } from "./types";
 import { parseSoapText } from "./soapDraft";
 import { classifyClinicalLine } from "./clinicalLineClassifier";
+import { stripOrderLinePrefix } from "./medicationOrderParser";
 
 export const roundingLayoutSections: Array<{ id: RoundingLayoutSection; label: string }> = [
   { id: "redFlags", label: "Red flag (AI)" },
@@ -62,6 +64,7 @@ export const defaultRoundingLayoutPreferences: RoundingLayoutPreferences = {
   preset: "compactSoap",
   visibleSections: visibleSectionsForPreset("compactSoap"),
   apDisplayMode: "separate",
+  orderDisplayMode: "summary",
   printDensity: "compact",
   boardDensity: "compact",
 };
@@ -80,6 +83,10 @@ function normalizePreset(value: unknown): RoundingLayoutPreset {
   return value === "fullSoap" || value === "taskDcFocused" ? value : "compactSoap";
 }
 
+function normalizeOrderDisplayMode(value: unknown): OrderDisplayMode {
+  return value === "category" || value === "collapsed" ? value : "summary";
+}
+
 export function normalizeRoundingLayoutPreferences(value: unknown): RoundingLayoutPreferences {
   const source = (value && typeof value === "object" ? value : {}) as Partial<RoundingLayoutPreferences>;
   const preset = normalizePreset(source.preset);
@@ -91,6 +98,7 @@ export function normalizeRoundingLayoutPreferences(value: unknown): RoundingLayo
       roundingLayoutSections.map((section) => [section.id, typeof customVisible[section.id] === "boolean" ? customVisible[section.id] : base[section.id]]),
     ) as Record<RoundingLayoutSection, boolean>,
     apDisplayMode: source.apDisplayMode === "merged" ? "merged" : "separate",
+    orderDisplayMode: normalizeOrderDisplayMode(source.orderDisplayMode),
     printDensity: normalizePrintDensity(source.printDensity, defaultRoundingLayoutPreferences.printDensity),
     boardDensity: normalizePrintDensity(source.boardDensity, defaultRoundingLayoutPreferences.boardDensity),
   };
@@ -123,14 +131,18 @@ export function isObjectiveSoapLineVisible(line: string, layout: RoundingLayoutP
 }
 
 export function isOrderSoapLine(line: string) {
-  const text = line.trim();
+  const text = line.trim().replace(/^!!?\s*/, "").replace(/^\*\s*/, "");
   return (
     /^\s*(?:order|orders?|meds?|藥囑)\s*[:：]/i.test(text) ||
+    /^\s*藥囑已收起\b/i.test(text) ||
+    /^\s*(?:Abx|Anticoag\/AP|Steroid\/Immuno|Cardio\/Renal|Resp|Insulin\/Glucose|IVF\/Lyte|Nutrition|Monitoring|PRN|Routine(?: hidden)?)\s*:/i.test(text) ||
     /\b(?:order|check|replace|repeat|trend|monitor|start|stop|hold|resume|continue|complete|taper|titrate|wean)\b/i.test(text) ||
     (/\b(?:iv|po|sc|im|mg|mcg|g|unit|units|q\d+h|qd|bid|tid|qid|prn|stat|x\s*\d+\s*d(?:ay)?s?)\b/i.test(text) &&
       /\b(?:abx|antibiotic|cef|vanco|teico|levo|cipro|mero|tazo|zosyn|morphine|fentanyl|lasix|furosemide|heparin|insulin|ppi|pantoprazole|steroid|methylpred|prednisolone)\b/i.test(text))
   );
 }
+
+export { stripOrderLinePrefix };
 
 export function isTaskSoapLineVisible(line: string, layout: RoundingLayoutPreferences | undefined) {
   return isOrderSoapLine(line) ? isLayoutSectionVisible(layout, "orders") : isLayoutSectionVisible(layout, "tasks");

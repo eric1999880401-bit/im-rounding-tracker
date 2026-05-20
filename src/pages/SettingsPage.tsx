@@ -1,4 +1,4 @@
-import type { LanguagePreference, PrintDensity, RoundingLayoutPreset, UserPreferences, ThemePreference } from "../types";
+import type { LanguagePreference, OrderDisplayMode, PrintDensity, RoundingLayoutPreset, UserPreferences, ThemePreference } from "../types";
 import { useT } from "../i18n";
 import {
   layoutPresetLabels,
@@ -112,6 +112,14 @@ function SettingsPage({ preferences, userName, onChange, onRefreshAiStyleProfile
             <select value={roundingLayout.apDisplayMode} onChange={(event) => updateLayout({ apDisplayMode: event.target.value as typeof roundingLayout.apDisplayMode })}>
               <option value="separate">分開 problem 顯示</option>
               <option value="merged">合併成簡短清單</option>
+            </select>
+          </label>
+          <label>
+            藥囑顯示
+            <select value={roundingLayout.orderDisplayMode} onChange={(event) => updateLayout({ orderDisplayMode: event.target.value as OrderDisplayMode })}>
+              <option value="summary">重點摘要</option>
+              <option value="category">分類摘要</option>
+              <option value="collapsed">完整收起</option>
             </select>
           </label>
           <div className="layout-section-grid span-2">
