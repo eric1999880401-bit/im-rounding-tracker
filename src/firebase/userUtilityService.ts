@@ -6,10 +6,12 @@ import {
   orderBy,
   query,
   setDoc,
+  getDoc,
   type FirestoreError,
 } from "firebase/firestore";
-import type { MiscTask, PhonebookContact, StudyTopic } from "../types";
+import type { MiscTask, PhonebookContact, StudyTopic, UserPreferences } from "../types";
 import { db } from "./firebase";
+import { normalizeUserPreferences } from "../userPreferences";
 
 function sanitizeForFirestore(value: unknown): unknown {
   if (value === undefined) return "";
@@ -116,6 +118,27 @@ export function deleteMiscTask(uid: string, id: string) {
 
 export function saveStudyTopic(uid: string, topic: StudyTopic) {
   return setDoc(userDocument(uid, "studyTopics", topic.id), sanitizeForFirestore(topic) as Record<string, unknown>);
+}
+
+export function subscribeToUserPreferences(
+  uid: string,
+  onData: (preferences: UserPreferences) => void,
+  onError: (error: FirestoreError) => void,
+) {
+  return onSnapshot(userDocument(uid, "settings", "preferences"), (snapshot) => {
+    if (snapshot.exists()) {
+      onData(normalizeUserPreferences(snapshot.data()));
+    }
+  }, onError);
+}
+
+export async function loadUserPreferences(uid: string) {
+  const snapshot = await getDoc(userDocument(uid, "settings", "preferences"));
+  return snapshot.exists() ? normalizeUserPreferences(snapshot.data()) : undefined;
+}
+
+export function saveUserPreferences(uid: string, preferences: UserPreferences) {
+  return setDoc(userDocument(uid, "settings", "preferences"), sanitizeForFirestore(normalizeUserPreferences(preferences)) as Record<string, unknown>, { merge: true });
 }
 
 export function deleteStudyTopic(uid: string, id: string) {

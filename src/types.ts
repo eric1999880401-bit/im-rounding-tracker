@@ -186,6 +186,7 @@ export interface GenerateRoundSoapInput {
   rawText: string;
   currentSoapBaseline: string;
   deidentifiedConfirmed: boolean;
+  userStyleProfile?: UserAiStyleProfile;
   patientContext?: {
     age?: string | number;
     sex?: string;
@@ -477,10 +478,41 @@ export type DailyNotesByPatient = Record<string, DailyNote[]>;
 
 export type ThemePreference = "light" | "dark" | "system";
 export type LanguagePreference = "en" | "zh-TW";
+export type RoundingLayoutPreset = "compactSoap" | "fullSoap" | "taskDcFocused";
+export type RoundingLayoutSection =
+  | "redFlags"
+  | "subjective"
+  | "objectiveVitals"
+  | "objectivePhysicalExam"
+  | "objectiveLabs"
+  | "objectiveImages"
+  | "assessmentPlan"
+  | "orders"
+  | "tasks"
+  | "dcBarriers"
+  | "dcPrep";
+
+export interface RoundingLayoutPreferences {
+  preset: RoundingLayoutPreset;
+  visibleSections: Record<RoundingLayoutSection, boolean>;
+  printDensity: PrintDensity;
+  boardDensity: PrintDensity;
+}
+
+export interface UserAiStyleProfile {
+  apProblemCount: number;
+  apLineLimit: number;
+  preferredTerms: string[];
+  taskStyle: "concise" | "checklist" | "detailed";
+  sectionOrder: string[];
+  updatedAt: string;
+}
 
 export interface UserPreferences {
   theme: ThemePreference;
   language: LanguagePreference;
+  roundingLayout: RoundingLayoutPreferences;
+  aiStyleProfile?: UserAiStyleProfile;
 }
 
 export interface PhonebookContact {

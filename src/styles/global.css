@@ -3605,6 +3605,32 @@ tbody tr:last-child td {
   color: var(--danger-text);
 }
 
+.layout-section-grid {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+}
+
+.layout-section-option {
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+}
+
+.ai-style-profile-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.ai-style-profile-summary span {
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 5px 8px;
+}
+
 .round-soap-preview {
   background: var(--surface-muted);
   border: 1px solid var(--border);

@@ -1,6 +1,6 @@
 import { Link } from "react-router-dom";
 import { useEffect, useState } from "react";
-import type { AnalyzePatientBatchTextInput, DailyNote, DailyNotesByPatient, Patient, PatientImportDraft, SortMode, TaskCategory, TaskPriority } from "../types";
+import type { AnalyzePatientBatchTextInput, DailyNote, DailyNotesByPatient, Patient, PatientImportDraft, SortMode, TaskCategory, TaskPriority, UserPreferences } from "../types";
 import {
   createId,
   createTodayFromYesterday,
@@ -36,10 +36,19 @@ import { useT } from "../i18n";
 import { getRoundingDigest } from "../roundingDigest";
 import { fallbackSoapTextFromPatient, patientToSoapDraft } from "../soapDraft";
 import { classifyClinicalLine, type ClinicalLineKind } from "../clinicalLineClassifier";
+import {
+  isDcSoapLineVisible,
+  isLayoutSectionVisible,
+  isObjectiveSoapLineVisible,
+  isSoapHeaderLineVisible,
+  isTaskSoapLineVisible,
+  normalizeRoundingLayoutPreferences,
+} from "../userPreferences";
 
 interface PageProps {
   patients: Patient[];
   dailyNotesByPatient?: DailyNotesByPatient;
+  preferences: UserPreferences;
   dataLoading: boolean;
   dataError: string;
   isDemoMode?: boolean;
@@ -86,7 +95,8 @@ function normalizeTaskCategory(value: string): TaskCategory {
 }
 
 function classifyBoardVisualLine(line: string, fallbackKind: BoardVisualKind = "other") {
-  const classified = classifyClinicalLine(line, { fallbackKind });
+  const useLockKind = fallbackKind !== "other";
+  const classified = classifyClinicalLine(line, { fallbackKind, lockKind: useLockKind });
   return {
     kind: classified.kind,
     label: classified.label,
@@ -546,6 +556,7 @@ function localDemoImportDrafts(rawText: string, existingPatients: Patient[]): Pa
 function PatientBoardPage({
   patients,
   dailyNotesByPatient = {},
+  preferences,
   dataLoading,
   dataError,
   isDemoMode = false,
@@ -554,6 +565,7 @@ function PatientBoardPage({
   onSaveDailyNote,
 }: PageProps) {
   const t = useT();
+  const roundingLayout = normalizeRoundingLayoutPreferences(preferences.roundingLayout);
   const [showForm, setShowForm] = useState(false);
   const [draftPatient, setDraftPatient] = useState<Patient>(emptyPatient());
   const [sortMode, setSortMode] = useState<SortMode>("bed");
@@ -1366,10 +1378,18 @@ function PatientBoardPage({
         <div className="patient-board-grid">
           {activePatients.map((patient) => {
             const soap = patientToSoapDraft(patient, dailyNotesByPatient[patient.id] ?? [], todayKey());
-            const redFlagLine = soap.header.find((line) => /^Red flags:/i.test(line))?.replace(/^Red flags:\s*/i, "") ?? "";
+            const redFlagLine = isLayoutSectionVisible(roundingLayout, "redFlags")
+              ? soap.header.find((line) => /^Red flags:/i.test(line))?.replace(/^Red flags:\s*/i, "") ?? ""
+              : "";
             const contextLines = soap.header.filter(
-              (line) => !/^Red flags:|^Date:|^Attending:/i.test(line) && !line.includes(patient.patientCode),
+              (line) => isSoapHeaderLineVisible(line, roundingLayout) && !/^Red flags:|^Date:|^Attending:/i.test(line) && !line.includes(patient.patientCode),
             );
+            const visibleSubjectiveLines = isLayoutSectionVisible(roundingLayout, "subjective") ? soap.sLines : [];
+            const visibleObjectiveLines = soap.oLines.filter((line) => isObjectiveSoapLineVisible(line, roundingLayout));
+            const visibleApProblems = isLayoutSectionVisible(roundingLayout, "assessmentPlan") ? soap.apProblems : [];
+            const visibleTaskLines = soap.taskLines.filter((line) => isTaskSoapLineVisible(line, roundingLayout));
+            const visibleDcLines = (soap.dcLines.length > 0 ? soap.dcLines : patient.dischargeTargetDate ? [`Target: ${patient.dischargeTargetDate}`] : [])
+              .filter((line) => isDcSoapLineVisible(line, roundingLayout));
             const pendingTaskCount = pendingTasks(patient).length;
             const urgentTaskCount = pendingTasks(patient).filter(
               (task) => task.priority === "urgent" || task.text.trim().startsWith("!"),
@@ -1410,50 +1430,61 @@ function PatientBoardPage({
                   </div>
                 </section>
 
-                <section className="patient-board-section patient-board-soap-main">
-                  <div className="board-soap-row">
-                    <span className="board-label">S</span>
-                    {renderBoardVisualLines(soap.sLines, "-", "s", 2)}
-                  </div>
-                  <div className="board-soap-row">
-                    <span className="board-label">O</span>
-                    {renderBoardVisualLines(soap.oLines, "-", "other", 5)}
-                  </div>
-                </section>
-
-                <section className="patient-board-section patient-board-soap-ap">
-                  <span className="board-label">A/P</span>
-                  <div className="board-soap-ap-list">
-                    {soap.apProblems.slice(0, 4).map((problem) => (
-                      <div className={boardProblemClass(problem.title, problem.lines)} key={`${problem.title}-${problem.lines.join("|")}`}>
-                        <strong>#{safeClinicalLine(problem.title, 56)}</strong>
-                        {problem.lines.length > 0 && <span>{safeClinicalLine(problem.lines.slice(0, 2).join("; "), 92)}</span>}
+                {(isLayoutSectionVisible(roundingLayout, "subjective") || visibleObjectiveLines.length > 0) && (
+                  <section className="patient-board-section patient-board-soap-main">
+                    {isLayoutSectionVisible(roundingLayout, "subjective") && (
+                      <div className="board-soap-row">
+                        <span className="board-label">S</span>
+                        {renderBoardVisualLines(visibleSubjectiveLines, "-", "s", 2)}
                       </div>
-                    ))}
-                    {soap.apProblems.length === 0 && <span className="muted">-</span>}
-                  </div>
-                </section>
-
-                <section className="patient-board-section patient-board-tasks-dc">
-                  <div className="patient-board-task-heading">
-                    <span className="board-label">Tasks / DC</span>
-                    <span>
-                      {urgentTaskCount > 0 && <span className="badge urgent">{urgentTaskCount} urgent</span>}{" "}
-                      <span>{pendingTaskCount} pending</span>
-                    </span>
-                  </div>
-                  {renderBoardVisualLines(soap.taskLines, "No pending tasks", "task", 4)}
-                  <div className="board-subsection patient-board-discharge">
-                    <span className="board-label">DC</span>
-                    {renderBoardVisualLines(
-                      soap.dcLines.length > 0 ? soap.dcLines : patient.dischargeTargetDate ? [`Target: ${patient.dischargeTargetDate}`] : [],
-                      "TBD",
-                      "dc",
-                      2,
                     )}
-                    {dischargeReminder(patient) && <div className="important-line">{dischargeReminder(patient)}</div>}
-                  </div>
-                </section>
+                    {visibleObjectiveLines.length > 0 && (
+                      <div className="board-soap-row">
+                        <span className="board-label">O</span>
+                        {renderBoardVisualLines(visibleObjectiveLines, "-", "other", 5)}
+                      </div>
+                    )}
+                  </section>
+                )}
+
+                {isLayoutSectionVisible(roundingLayout, "assessmentPlan") && (
+                  <section className="patient-board-section patient-board-soap-ap">
+                    <span className="board-label">A/P</span>
+                    <div className="board-soap-ap-list">
+                      {visibleApProblems.slice(0, roundingLayout.boardDensity === "normal" ? 5 : 4).map((problem) => (
+                        <div className={boardProblemClass(problem.title, problem.lines)} key={`${problem.title}-${problem.lines.join("|")}`}>
+                          <strong>#{safeClinicalLine(problem.title, 56)}</strong>
+                          {problem.lines.length > 0 && <span>{safeClinicalLine(problem.lines.slice(0, 2).join("; "), 92)}</span>}
+                        </div>
+                      ))}
+                      {visibleApProblems.length === 0 && <span className="muted">-</span>}
+                    </div>
+                  </section>
+                )}
+
+                {(isLayoutSectionVisible(roundingLayout, "orders") || isLayoutSectionVisible(roundingLayout, "tasks") || isLayoutSectionVisible(roundingLayout, "dcBarriers") || isLayoutSectionVisible(roundingLayout, "dcPrep")) && (
+                  <section className="patient-board-section patient-board-tasks-dc">
+                    {(isLayoutSectionVisible(roundingLayout, "orders") || isLayoutSectionVisible(roundingLayout, "tasks")) && (
+                      <>
+                        <div className="patient-board-task-heading">
+                          <span className="board-label">Tasks / DC</span>
+                          <span>
+                            {urgentTaskCount > 0 && <span className="badge urgent">{urgentTaskCount} urgent</span>}{" "}
+                            <span>{pendingTaskCount} pending</span>
+                          </span>
+                        </div>
+                        {renderBoardVisualLines(visibleTaskLines, "No pending tasks", "task", 4)}
+                      </>
+                    )}
+                    {(isLayoutSectionVisible(roundingLayout, "dcBarriers") || isLayoutSectionVisible(roundingLayout, "dcPrep")) && (
+                      <div className="board-subsection patient-board-discharge">
+                        <span className="board-label">DC</span>
+                        {renderBoardVisualLines(visibleDcLines, "TBD", "dc", 2)}
+                        {dischargeReminder(patient) && isLayoutSectionVisible(roundingLayout, "dcPrep") && <div className="important-line">{dischargeReminder(patient)}</div>}
+                      </div>
+                    )}
+                  </section>
+                )}
               </div>
 
               <footer className="patient-board-card-actions">
@@ -1540,6 +1571,8 @@ function PatientBoardPage({
                     selectedDate={todayKey()}
                     isDemoMode={isDemoMode}
                     compact
+                    layoutPreferences={roundingLayout}
+                    aiStyleProfile={preferences.aiStyleProfile}
                     onSavePatient={onSavePatient}
                     onSaveDailyNote={onSaveDailyNote}
                   />

@@ -444,6 +444,7 @@ interface RoundSoapCallableInput {
   rawText?: unknown;
   currentSoapBaseline?: unknown;
   deidentifiedConfirmed?: unknown;
+  userStyleProfile?: unknown;
   patientContext?: CallableInput["patientContext"];
 }
 
@@ -508,6 +509,20 @@ function sanitizePatientContext(input: CallableInput["patientContext"]) {
     sex: String(input.sex ?? "").trim(),
     pmh: asStringArray(input.pmh),
     activeProblems: asStringArray(input.activeProblems),
+  };
+}
+
+function sanitizeUserStyleProfile(input: unknown) {
+  if (!input || typeof input !== "object") return undefined;
+  const source = input as Record<string, unknown>;
+  const allowedTerms = new Set(["w/", "s/p", "r/o", "f/u", "Abx", "Cx", "B/C", "PNA", "RF", "AKI", "CKD", "ESRD", "HD", "CT", "CXR", "TTE", "OPD", "DC", "PRN"]);
+  const taskStyle = String(source.taskStyle ?? "concise");
+  return {
+    apProblemCount: Math.max(1, Math.min(6, Number(source.apProblemCount) || 4)),
+    apLineLimit: Math.max(1, Math.min(3, Number(source.apLineLimit) || 2)),
+    preferredTerms: asStringArray(source.preferredTerms).filter((term) => allowedTerms.has(term)).slice(0, 12),
+    taskStyle: ["concise", "checklist", "detailed"].includes(taskStyle) ? taskStyle : "concise",
+    sectionOrder: asStringArray(source.sectionOrder).filter((item) => ["Header", "S", "O", "A/P", "Tasks", "DC"].includes(item)).slice(0, 6),
   };
 }
 
@@ -1232,6 +1247,7 @@ function makeRoundSoapPrompt(params: {
   rawText: string;
   currentSoapBaseline: string;
   patientContext: Record<string, unknown>;
+  userStyleProfile?: ReturnType<typeof sanitizeUserStyleProfile>;
   dailyNotes: Array<Record<string, unknown>>;
 }) {
   const modeInstruction =
@@ -1282,6 +1298,7 @@ function makeRoundSoapPrompt(params: {
     "- If lab parser/category would conflict with pasted lab line, trust pasted text and warn instead of rewriting values.",
     "- If source says shock/hypotension resolved or latest BP stable, do not create active shock red flag/A/P.",
     "- Red/high-risk facts can be marked with a leading ! in soapText; important therapies/pending items can be left as normal text.",
+    "- If user style profile is provided, follow it for problem count, A/P line limit, abbreviation preference, and task style unless patient safety requires clearer wording.",
     "",
     modeInstruction,
     "",
@@ -1296,6 +1313,9 @@ function makeRoundSoapPrompt(params: {
     "",
     "Allowed patient context:",
     JSON.stringify(params.patientContext, null, 2),
+    "",
+    "User style profile, abstract only; do not infer patient facts from it:",
+    JSON.stringify(params.userStyleProfile ?? {}, null, 2),
     "",
     "Recent saved daily notes, newest last or selected by date when available:",
     JSON.stringify(params.dailyNotes, null, 2),
@@ -1481,6 +1501,7 @@ export const generateRoundSoap = onCall(
       ...compactPatientContext(patientSnapshot.data()),
       ...(sanitizePatientContext(data.patientContext) ?? {}),
     };
+    const userStyleProfile = sanitizeUserStyleProfile(data.userStyleProfile);
     const model = getModel();
     const openAiResponse = await fetch("https://api.openai.com/v1/responses", {
       method: "POST",
@@ -1511,6 +1532,7 @@ export const generateRoundSoap = onCall(
               rawText,
               currentSoapBaseline,
               patientContext,
+              userStyleProfile,
               dailyNotes,
             }),
           },

@@ -16,6 +16,7 @@ export type ClinicalLineKind =
 interface ClassifyClinicalLineOptions {
   fallbackKind?: ClinicalLineKind;
   explicitTone?: ClinicalLineTone;
+  lockKind?: boolean;
 }
 
 export interface ClassifiedClinicalLine {
@@ -120,11 +121,13 @@ function importantSignal(text: string, kind: ClinicalLineKind) {
 export function classifyClinicalLine(value: string, options: ClassifyClinicalLineOptions = {}): ClassifiedClinicalLine {
   const fallbackKind = options.fallbackKind ?? "other";
   const source = String(value ?? "").trim();
-  const { kind, body } = inferredKind(source, fallbackKind);
-  const displayText = normalizeClinicalDisplayText(body || source);
+  const inferred = inferredKind(source, fallbackKind);
+  const kind = options.lockKind ? fallbackKind : inferred.kind;
+  const signalKind = inferred.kind;
+  const displayText = normalizeClinicalDisplayText((options.lockKind ? stripClinicalMarkup(source) : inferred.body) || source);
   const forcedTone = options.explicitTone ?? explicitTone(source);
-  const critical = fallbackKind === "red" || criticalSignal(source, kind);
-  const important = importantSignal(source, kind);
+  const critical = fallbackKind === "red" || criticalSignal(source, signalKind);
+  const important = importantSignal(source, signalKind);
   const tone =
     forcedTone === "critical" || critical
       ? "critical"

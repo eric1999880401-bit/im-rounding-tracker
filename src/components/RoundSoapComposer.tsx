@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { AiClinicalSourceType, DailyNote, Patient } from "../types";
+import type { AiClinicalSourceType, DailyNote, Patient, RoundingLayoutPreferences, UserAiStyleProfile } from "../types";
 import { generateRoundSoap } from "../firebase/aiService";
 import { ClinicalText } from "./ClinicalText";
 import {
@@ -25,6 +25,8 @@ interface RoundSoapComposerProps {
   externalSoapText?: string;
   externalSoapRevision?: number;
   externalSoapStatus?: string;
+  layoutPreferences?: RoundingLayoutPreferences;
+  aiStyleProfile?: UserAiStyleProfile;
 }
 
 type WorkflowMode = "dailyUpdate" | "newSoap" | "transferHandoff";
@@ -143,6 +145,8 @@ function RoundSoapComposer({
   externalSoapText = "",
   externalSoapRevision = 0,
   externalSoapStatus = "",
+  layoutPreferences,
+  aiStyleProfile,
 }: RoundSoapComposerProps) {
   const canonical = getCanonicalSoapText(patient, dailyNotes, selectedDate);
   const [workflowMode, setWorkflowMode] = useState<WorkflowMode>("dailyUpdate");
@@ -285,6 +289,7 @@ function RoundSoapComposer({
             currentSoapBaseline: soapText || canonical.text,
             deidentifiedConfirmed: true,
             patientContext: patientContext(patient),
+            userStyleProfile: aiStyleProfile,
           });
 
       const nextDraft = parseSoapTextToEditorDraft(result.soapText.trim() || canonical.text);
@@ -679,7 +684,7 @@ function RoundSoapComposer({
           </details>
         </section>
         <section className="round-soap-preview" aria-label="Highlighted SOAP preview">
-          <SoapVisualPreview value={soapText} compact={compact} />
+          <SoapVisualPreview value={soapText} compact={compact} layoutPreferences={layoutPreferences} />
         </section>
       </div>
 

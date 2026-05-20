@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import type { DailyNote, DailyNotesByPatient, Patient } from "../types";
+import type { DailyNote, DailyNotesByPatient, Patient, UserPreferences } from "../types";
 import PatientForm from "../components/PatientForm";
 import AdmissionBriefForm from "../components/AdmissionBriefForm";
 import DailyNoteForm from "../components/DailyNoteForm";
@@ -35,10 +35,12 @@ import {
 } from "../utils";
 import { getRoundingDigest } from "../roundingDigest";
 import { fallbackSoapTextFromPatient, soapPreviewTextFromPatient, soapTextToPatientPatch } from "../soapDraft";
+import { normalizeRoundingLayoutPreferences } from "../userPreferences";
 
 interface PageProps {
   patients: Patient[];
   dailyNotesByPatient?: DailyNotesByPatient;
+  preferences: UserPreferences;
   dataLoading?: boolean;
   isDemoMode?: boolean;
   onSavePatient: (patient: Patient) => Promise<void>;
@@ -192,6 +194,7 @@ function mergeDailyNoteArrays<T>(existing: T[] = [], additions: T[] = []) {
 function PatientDetailPage({
   patients,
   dailyNotesByPatient = {},
+  preferences,
   dataLoading = false,
   isDemoMode = false,
   onSavePatient,
@@ -199,6 +202,7 @@ function PatientDetailPage({
 }: PageProps) {
   const t = useT();
   const { patientId } = useParams();
+  const roundingLayout = normalizeRoundingLayoutPreferences(preferences.roundingLayout);
   const sourcePatient = patients.find((item) => item.id === patientId);
   const [selectedDate, setSelectedDate] = useState(todayKey());
   const patientNotes = patientId ? dailyNotesByPatient[patientId] ?? [] : [];
@@ -676,6 +680,8 @@ function PatientDetailPage({
           externalSoapText={externalSoapDraft.text}
           externalSoapRevision={externalSoapDraft.revision}
           externalSoapStatus={externalSoapDraft.status}
+          layoutPreferences={roundingLayout}
+          aiStyleProfile={preferences.aiStyleProfile}
         />
       </section>
     );

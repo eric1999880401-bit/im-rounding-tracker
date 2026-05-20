@@ -19,19 +19,20 @@ import {
   deleteStudyTopic,
   saveMiscTask,
   savePhonebookContact,
+  saveUserPreferences,
   saveStudyTopic,
+  subscribeToUserPreferences,
   subscribeToMiscTasks,
   subscribeToPhonebook,
   subscribeToStudyTopics,
 } from "./firebase/userUtilityService";
 import { I18nProvider } from "./i18n";
 import { mockPatients } from "./data/mockPatients";
-
-const defaultPreferences: UserPreferences = { theme: "system", language: "en" };
+import { buildUserAiStyleProfile, defaultPreferences, normalizeUserPreferences } from "./userPreferences";
 
 function loadPreferences() {
   try {
-    return { ...defaultPreferences, ...JSON.parse(localStorage.getItem("im-rounding-preferences") ?? "{}") };
+    return normalizeUserPreferences({ ...defaultPreferences, ...JSON.parse(localStorage.getItem("im-rounding-preferences") ?? "{}") });
   } catch {
     return defaultPreferences;
   }
@@ -87,11 +88,37 @@ function App() {
     return `${action} failed. Firestore did not save the change: ${message}`;
   }
 
+  function handlePreferencesChange(nextPreferences: UserPreferences) {
+    const normalized = normalizeUserPreferences(nextPreferences);
+    setPreferences(normalized);
+    if (!isDemoMode && user) {
+      void saveUserPreferences(user.uid, normalized).catch((error) => {
+        setDataError(formatSyncError("Saving preferences", error));
+      });
+    }
+  }
+
+  function refreshAiStyleProfile() {
+    handlePreferencesChange({
+      ...preferences,
+      aiStyleProfile: buildUserAiStyleProfile(patients, dailyNotesByPatient),
+    });
+  }
+
   useEffect(() => {
     localStorage.setItem("im-rounding-preferences", JSON.stringify(preferences));
     document.documentElement.dataset.theme = preferences.theme;
     document.documentElement.dataset.language = preferences.language;
   }, [preferences]);
+
+  useEffect(() => {
+    if (isDemoMode || !user) return;
+    return subscribeToUserPreferences(
+      user.uid,
+      (nextPreferences) => setPreferences(nextPreferences),
+      (error) => setDataError(formatSyncError("Loading preferences", error)),
+    );
+  }, [isDemoMode, user]);
 
   useEffect(() => {
     if (isDemoMode) {
@@ -314,6 +341,7 @@ function App() {
             <PatientBoardPage
               patients={patients}
               dailyNotesByPatient={dailyNotesByPatient}
+              preferences={preferences}
               dataLoading={dataLoading}
               dataError={dataError}
               isDemoMode={isDemoMode}
@@ -329,6 +357,7 @@ function App() {
             <PatientDetailPage
               patients={patients}
               dailyNotesByPatient={dailyNotesByPatient}
+              preferences={preferences}
               dataLoading={dataLoading}
               isDemoMode={isDemoMode}
               onSavePatient={savePatientHandler}
@@ -350,6 +379,7 @@ function App() {
             <PrintRoundingListPage
               patients={patients}
               dailyNotesByPatient={dailyNotesByPatient}
+              preferences={preferences}
               phonebook={phonebook}
               miscTasks={miscTasks}
               studyTopics={studyTopics}
@@ -372,7 +402,8 @@ function App() {
             <SettingsPage
               preferences={preferences}
               userName={sessionUserName}
-              onChange={setPreferences}
+              onChange={handlePreferencesChange}
+              onRefreshAiStyleProfile={refreshAiStyleProfile}
               onSwitchUser={isDemoMode ? exitDemoMode : signOutCurrentUser}
             />
           }

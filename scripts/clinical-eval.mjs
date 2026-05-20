@@ -38,6 +38,14 @@ const { sanitizeAiSoapDraftForReview } = await server.ssrLoadModule("/src/aiDraf
 const { routePatientImportDraft, routePatientClinicalFields } = await server.ssrLoadModule("/src/clinicalFieldRouter.ts");
 const { classifyClinicalLine } = await server.ssrLoadModule("/src/clinicalLineClassifier.ts");
 const { editorDraftToSoapText, lintSoapEditorDraft, parseSoapTextToEditorDraft } = await server.ssrLoadModule("/src/soapEditorDraft.ts");
+const {
+  buildUserAiStyleProfile,
+  isDcSoapLineVisible,
+  isObjectiveSoapLineVisible,
+  isTaskSoapLineVisible,
+  normalizeRoundingLayoutPreferences,
+  visibleSectionsForPreset,
+} = await server.ssrLoadModule("/src/userPreferences.ts");
 
 function haystack(plan) {
   return [
@@ -1432,6 +1440,61 @@ try {
 } catch (error) {
   failures.push({ name: "Structured SOAP editor normalizes symbols and shares clinical severity", error: error instanceof Error ? error.message : String(error) });
   console.error(`FAIL Structured SOAP editor normalizes symbols and shares clinical severity: ${failures[failures.length - 1].error}`);
+}
+
+try {
+  const lockedAp = classifyClinicalLine("Lab: Cr 2.7, Hb 8.7, INR 10; CXR improved", { fallbackKind: "ap", lockKind: true });
+  const objectiveLab = classifyClinicalLine("Lab: Cr 2.7, Hb 8.7, INR 10", { fallbackKind: "lab" });
+  if (lockedAp.kind !== "ap" || lockedAp.label !== "A/P" || !/^Lab:/i.test(lockedAp.text)) {
+    throw new Error(`A/P section was not label-locked: ${JSON.stringify(lockedAp)}`);
+  }
+  if (objectiveLab.kind !== "lab" || objectiveLab.label !== "LAB") {
+    throw new Error(`Objective lab did not remain LAB: ${JSON.stringify(objectiveLab)}`);
+  }
+
+  const visibleSections = { ...visibleSectionsForPreset("compactSoap"), objectiveImages: false, tasks: false, dcBarriers: false, dcPrep: true };
+  const layout = normalizeRoundingLayoutPreferences({ preset: "compactSoap", visibleSections });
+  if (isObjectiveSoapLineVisible("Image: CXR: improved opacity", layout)) {
+    throw new Error("O Image remained visible after objectiveImages was disabled");
+  }
+  if (!isObjectiveSoapLineVisible("Lab: Cr 2.7", layout)) {
+    throw new Error("O Lab was hidden unexpectedly");
+  }
+  if (isTaskSoapLineVisible("f/u CBC tomorrow", layout) || !isTaskSoapLineVisible("Order: VS q4h", layout)) {
+    throw new Error("Order/task layout filtering did not separate orders from tasks");
+  }
+  if (isDcSoapLineVisible("Barrier: oxygen requirement", layout) || !isDcSoapLineVisible("Pending: meds/OPD/certificate", layout)) {
+    throw new Error("DC barrier/prep layout filtering was incorrect");
+  }
+
+  const stylePatient = { ...emptyPatient(), id: "style-patient" };
+  const styleNote = {
+    ...emptyDailyNote("2026-05-20"),
+    soapStatus: "reviewed",
+    soapText: [
+      "7A-01 IM-A01 67/F",
+      "S:",
+      "- better",
+      "O:",
+      "- Lab: WBC 12, Cr 1.2",
+      "A/P:",
+      "# PNA improving",
+      "- Abx, f/u Cx, wean O2.",
+      "# AKI",
+      "- Cr improving, f/u BMP.",
+      "Tasks:",
+      "- f/u Cx",
+    ].join("\n"),
+  };
+  const profile = buildUserAiStyleProfile([stylePatient], { [stylePatient.id]: [styleNote] });
+  if (profile.apProblemCount !== 2 || profile.apLineLimit !== 1 || !profile.preferredTerms.includes("Abx") || !profile.preferredTerms.includes("f/u")) {
+    throw new Error(`Style profile did not abstract reviewed SOAP style: ${JSON.stringify(profile)}`);
+  }
+  console.log("PASS Layout preferences lock print labels and build abstract AI style profile");
+  supplementalPasses += 1;
+} catch (error) {
+  failures.push({ name: "Layout preferences lock print labels and build abstract AI style profile", error: error instanceof Error ? error.message : String(error) });
+  console.error(`FAIL Layout preferences lock print labels and build abstract AI style profile: ${failures[failures.length - 1].error}`);
 }
 
 await server.close();
