@@ -249,12 +249,13 @@ function PrintRoundingListPage({
       <div className="print-visual-list">
         {items.map((item, index) => {
           const visual = classifyPrintVisualItem(item, fallbackKind);
+          const visualLabel = visual.label.includes("亙") ? "藥囑" : visual.label;
           return (
             <div
               className={`print-visual-row print-visual-${visual.kind} print-visual-${visual.tone}`}
-              key={`${keyPrefix}-${visual.label}-${visual.text}-${index}`}
+              key={`${keyPrefix}-${visualLabel}-${visual.text}-${index}`}
             >
-              <span className="print-visual-label">{visual.label}</span>
+              <span className="print-visual-label">{visualLabel}</span>
               <span className="print-visual-text">{visual.text}</span>
             </div>
           );
@@ -281,8 +282,9 @@ function PrintRoundingListPage({
     let clean = value.replace(/\s+[+,;:-]\s*$/g, "").trim();
     for (let index = 0; index < 2; index += 1) {
       clean = clean
-        .replace(/\s+\b(?:if|and|or|with|without|w\/|for|to|from|of|the|a|an|when|as)\b\.?$/i, "")
-        .replace(/\s+\b(?:check|review|confirm|correct|verify|monitor|coordinate|consider|assess|treat|after|acute|s\/p)\b\.?$/i, "")
+        .replace(/\s+(?:w\/|!+)\.?$/i, "")
+        .replace(/\s+\b(?:if|and|or|with|without|for|to|from|of|the|a|an|when|as|no)\b\.?$/i, "")
+        .replace(/\s+\b(?:check|review|confirm|correct|verify|monitor|coordinate|consider|assess|treat|after|acute|s\/p|ct|mri|cxr|image)\b\.?$/i, "")
         .replace(/\s*,\s*$/g, "")
         .trim();
     }
@@ -764,7 +766,7 @@ function PrintRoundingListPage({
       isLayoutSectionVisible(roundingLayout, "orders") ? "藥囑" : "",
       isLayoutSectionVisible(roundingLayout, "tasks") ? "Tasks" : "",
       isLayoutSectionVisible(roundingLayout, "dcBarriers") || isLayoutSectionVisible(roundingLayout, "dcPrep") ? "DC" : "",
-    ].filter(Boolean).join(" / ") || "Tasks / DC";
+    ].filter(Boolean).map((item) => (item.includes("亙") ? "藥囑" : item)).join(" / ") || "Tasks / DC";
   }
 
   function blockField(label: string, value: ReactNode) {

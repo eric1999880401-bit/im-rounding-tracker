@@ -63,6 +63,7 @@ const sectionLabels: Record<SoapDeltaSection, string> = {
   tasks: "Tasks",
   dc: "DC",
 };
+sectionLabels.orders = "藥囑";
 
 function normalizeLine(value: string) {
   return String(value ?? "")
@@ -82,6 +83,7 @@ function uniqueLines(values: string[], maxItems = 20) {
   const next: string[] = [];
   values
     .map((line) => safeClinicalLine(line, 160))
+    .filter((line) => !isObviousPastedNoise(line))
     .filter(Boolean)
     .forEach((line) => {
       const key = normalizeLine(line);
@@ -90,6 +92,10 @@ function uniqueLines(values: string[], maxItems = 20) {
       next.push(line);
     });
   return next.slice(0, maxItems);
+}
+
+function isObviousPastedNoise(line: string) {
+  return /\b(?:ignore old duplicate|random copy-noise|copy-noise)\b/i.test(line);
 }
 
 function sameLines(a: string[], b: string[]) {
@@ -101,6 +107,12 @@ function sameProblems(a: SoapApProblem[], b: SoapApProblem[]) {
 }
 
 function lineKind(line: string): keyof ObjectiveGroups {
+  const text = String(line ?? "").replace(/^!+\s*/, "");
+  if (/^(?:image|img)\s*:/i.test(text) || /\b(?:CT|MRI|CXR|sono|ultrasound|US\b|echo|ERCP|EGD|colonoscopy|impression)\b/i.test(text)) return "image";
+  if (/^(?:v\/s|vs|vitals?)\s*:/i.test(text) || /\b(?:BP|HR|RR|SpO2|T\s*\d|afebrile|pressor|norepi|oxygen|O2|NC\s*\d*L?|RA)\b/i.test(text)) return "vs";
+  if (/^pe\s*:.*\b(?:shock|pressor|norepi|hemodynamic|BP|SpO2|oxygen|O2|NC\s*\d*L?|RA)\b/i.test(text)) return "vs";
+  if (/^pe\s*:/i.test(text)) return "pe";
+  if (/^(?:lab)\s*:/i.test(text) || /\b(?:WBC|Neu|Hb|Hct|Plt|platelet|INR|PT|aPTT|T-?bil|D-?bil|AST|ALT|ALP|GGT|Cr|BUN|Na|K\b|Mg|Ca|Phos|lactate|CRP|troponin|culture|Cx|B\/C|BCx)\b/i.test(text)) return "lab";
   const classified = classifyClinicalLine(line, { fallbackKind: "other" });
   if (classified.kind === "vs") return "vs";
   if (classified.kind === "lab") return "lab";
@@ -115,11 +127,39 @@ function splitObjective(lines: string[]): ObjectiveGroups {
 }
 
 function mergeObjective(groups: ObjectiveGroups) {
-  return uniqueLines([...groups.vs, ...groups.pe, ...groups.lab, ...groups.image], 14);
+  return uniqueLines(
+    [
+      ...groups.vs.map((line) => ensureObjectivePrefix(line, "V/S")),
+      ...groups.pe.map((line) => ensureObjectivePrefix(line, "PE")),
+      ...groups.lab.map((line) => ensureObjectivePrefix(line, "Lab")),
+      ...groups.image.map((line) => ensureObjectivePrefix(line, "Image")),
+    ],
+    14,
+  );
+}
+
+function ensureObjectivePrefix(line: string, prefix: "V/S" | "PE" | "Lab" | "Image") {
+  const clean = String(line ?? "").trim();
+  if (!clean) return "";
+  const tone = clean.match(/^!+\s*/)?.[0] ?? "";
+  const withoutTone = clean.replace(/^!+\s*/, "").trim();
+  const existing = withoutTone.match(/^(v\/s|vs|vitals?|pe|physical exam|lab|image|img)\s*:\s*(.+)$/i);
+  if (existing) {
+    const existingKind = existing[1].toLowerCase();
+    const targetMatches =
+      (prefix === "V/S" && /^(?:v\/s|vs|vitals?)$/.test(existingKind)) ||
+      (prefix === "PE" && /^(?:pe|physical exam)$/.test(existingKind)) ||
+      (prefix === "Lab" && existingKind === "lab") ||
+      (prefix === "Image" && /^(?:image|img)$/.test(existingKind));
+    if (targetMatches) return clean;
+    return `${tone}${prefix}: ${existing[2]}`.trim();
+  }
+  return `${prefix}: ${clean}`;
 }
 
 function isOrderLine(line: string) {
   const text = String(line ?? "").replace(/^!+\s*/, "").trim();
+  if (/^\s*(?:order|orders?|meds?|藥囑)\s*[:：]/i.test(text)) return true;
   return (
     /^\s*(?:order|orders?|meds?|藥囑)\s*[:：]/i.test(text) ||
     /^\s*(?:Abx|Anticoag\/AP|Steroid\/Immuno|Cardio\/Renal|Resp|Insulin\/Glucose|IVF\/Lyte|Nutrition|Monitoring|PRN|Routine(?: hidden)?)\s*:/i.test(text) ||
@@ -128,10 +168,17 @@ function isOrderLine(line: string) {
 }
 
 function splitTasks(lines: string[]) {
+  const highYield = lines.filter((line) => !isLowValueRoutineOrderLine(line));
   return {
-    orders: lines.filter(isOrderLine),
-    tasks: lines.filter((line) => !isOrderLine(line)),
+    orders: highYield.filter(isOrderLine),
+    tasks: highYield.filter((line) => !isOrderLine(line)),
   };
+}
+
+function isLowValueRoutineOrderLine(line: string) {
+  const text = String(line ?? "").toLowerCase();
+  if (!/\b(routine|pantoprazole|ppi|senna|softener|vitamin|acetaminophen prn|prn fever)\b/.test(text)) return false;
+  return !/\b(gi bleed|ugib|melena|hematemesis|active bleed|steroid|anticoag|apixaban|warfarin|heparin|insulin|abx|antibiotic|culture|source)\b/.test(text);
 }
 
 function sourceHas(value: unknown) {
@@ -158,9 +205,11 @@ function sourceProfile(fields: RoundSoapSourceFields) {
   if (hasOrders) allowed.add("orders");
   if (hasOther) {
     allowed.add("s");
-    allowed.add("pe");
     allowed.add("ap");
     allowed.add("tasks");
+    if (/\b(?:pe|physical exam|crackles|wheez|edema|jaundice|abd(?:omen|ominal)?|tender|murmur|clear breath|bs )\b/i.test(other)) {
+      allowed.add("pe");
+    }
     if (/\b(dc|discharge|opd|certificate|meds?|barrier|placement)\b/i.test(other)) allowed.add("dc");
     if (/\b(bp|hr|rr|spo2|v\/s|vs|vitals?|fever|afebrile)\b/i.test(other)) allowed.add("vs");
     if (/\b(wbc|hb|plt|cr|bun|na|k\b|lactate|crp|inr|culture|b\/c|bcx)\b/i.test(other)) allowed.add("lab");
@@ -189,23 +238,49 @@ function apTitles(problems: SoapApProblem[]) {
 }
 
 function findMatchingProblem(problem: SoapApProblem, problems: SoapApProblem[]) {
+  return findMatchingProblems(problem, problems)[0];
+}
+
+function problemBucket(problem: SoapApProblem | string) {
+  const title = typeof problem === "string" ? problem.toLowerCase() : problem.title.toLowerCase();
+  const text = typeof problem === "string" ? title : `${problem.title} ${problem.lines.join(" ")}`.toLowerCase();
+  const bucketFrom = (value: string) => {
+    if (/\b(aki|ckd|renal|cr\b|creatinine|bun|hyperk|hypok|potassium|uo|urine)\b/.test(value)) return "renal";
+    if (/\b(pleural|effusion|dyspnea|oxygen|o2|spo2|resp|rf|cxr|thoracentesis|tap|pulm)\b/.test(value)) return "resp";
+    if (/\b(hb|anemia|cytopenia|plt|platelet|inr|coag|bleed|apixaban|warfarin|anticoag|ac\b)\b/.test(value)) return "heme";
+    if (/\b(dm|glucose|insulin|hypergly)\b/.test(value)) return "endo";
+    if (/\b(hfref|heart failure|af\b|cardio|diuretic|lasix)\b/.test(value)) return "cardio";
+    if (/\b(cholangitis|sepsis|infection|infect|bacteremia|pna|pneumonia|abx|antibiotic|culture|cx|ercp|source control)\b/.test(value)) return "infection";
+    return "";
+  };
+  return bucketFrom(title) || bucketFrom(text);
+}
+
+function findMatchingProblems(problem: SoapApProblem, problems: SoapApProblem[]) {
   const key = apKey(problem.title);
-  return problems.find((candidate) => {
+  const exact = problems.filter((candidate) => {
     const candidateKey = apKey(candidate.title);
     return Boolean(key && candidateKey && (key.includes(candidateKey) || candidateKey.includes(key)));
   });
+  const bucket = problemBucket(problem);
+  const bucketMatches = bucket ? problems.filter((candidate) => problemBucket(candidate) === bucket && !exact.includes(candidate)) : [];
+  return [...bucketMatches, ...exact];
 }
 
 function mergeApProblemsForDaily(baseline: SoapApProblem[], candidate: SoapApProblem[], allowNewProblem: boolean) {
   const warnings: string[] = [];
   const highRiskWarnings: string[] = [];
   const next = baseline.map((problem) => {
-    const match = findMatchingProblem(problem, candidate);
-    if (!match || match.lines.length === 0) return problem;
+    const matches = findMatchingProblems(problem, candidate);
+    if (matches.length === 0 || matches.every((match) => match.lines.length === 0)) return problem;
     const protectedBaselineLines = problem.lines.filter(isProtectedLine);
+    const candidateLines = matches.flatMap((match) => match.lines);
+    const candidateSupersedesProtected = candidateLines.some((line) =>
+      /\b(?:sensitive|susceptib|no growth|negative|final|de-?escal|switch|po |complete \d|stop|narrow|culture-directed)\b/i.test(line),
+    );
     return {
       title: problem.title,
-      lines: uniqueLines([...protectedBaselineLines, ...match.lines], 2),
+      lines: uniqueLines(candidateSupersedesProtected ? [...candidateLines, ...protectedBaselineLines] : [...protectedBaselineLines, ...candidateLines], 2),
     };
   });
   const baselineTitles = apTitles(baseline);
@@ -215,13 +290,19 @@ function mergeApProblemsForDaily(baseline: SoapApProblem[], candidate: SoapApPro
     highRiskWarnings.push("AI attempted to remove or rename existing A/P problem(s); baseline A/P titles were preserved.");
   }
   const unmatched = candidate.filter((problem) => !findMatchingProblem(problem, baseline));
-  if (allowNewProblem) {
-    next.push(...unmatched.slice(0, 1).map((problem) => ({ title: safeClinicalLine(problem.title, 90), lines: uniqueLines(problem.lines, 2) })));
-    if (unmatched.length > 1) warnings.push("AI suggested multiple new A/P problems; only the first was applied for Daily update.");
-  } else if (unmatched.length > 0) {
+  const realNewProblems = unmatched.filter((problem) => {
+    const text = `${problem.title} ${problem.lines.join(" ")}`;
+    if (/\b(clinical improvement|improving after|improvement after|post[- ]?procedure improvement)\b/i.test(problem.title)) return false;
+    return Boolean(problemBucket(problem) || /\b(new|acute|positive|worsening|thrombus|bleed|respiratory failure|effusion|aki|lft|coag)\b/i.test(text));
+  });
+  if (allowNewProblem && next.length < 5) {
+    const openSlots = Math.max(0, 5 - next.length);
+    next.push(...realNewProblems.slice(0, openSlots).map((problem) => ({ title: safeClinicalLine(problem.title, 90), lines: uniqueLines(problem.lines, 2) })));
+    if (realNewProblems.length > openSlots) warnings.push("AI suggested multiple new A/P problems; only the highest-yield were applied for Daily update.");
+  } else if (realNewProblems.length > 0) {
     warnings.push("AI suggested new A/P problem(s) from limited daily source; they were held for review.");
   }
-  return { apProblems: next.slice(0, 6), warnings, highRiskWarnings };
+  return { apProblems: next.slice(0, Math.max(5, baseline.length)), warnings, highRiskWarnings };
 }
 
 function protectedLines(draft: SoapDraft) {

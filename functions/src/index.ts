@@ -1270,6 +1270,7 @@ function makeRoundSoapPrompt(params: {
           "- If pasted text says a task/result is done or resolved, remove or update that task in the SOAP instead of carrying it forward.",
           "- Do not change diagnosis/PMH/A/P structure unless today's pasted data clearly changes the clinical problem list.",
           "- Preserve existing A/P problem titles by default. Only add a new problem if today's pasted text clearly supports a new active problem.",
+          "- Do not add a separate 'clinical improvement' A/P problem. Merge improvement, response to Abx/procedure, culture updates, and lab trends under the matching existing problem.",
         ].join("\n")
       : params.workflowMode === "newSoap"
         ? [
@@ -1293,7 +1294,9 @@ function makeRoundSoapPrompt(params: {
     "- Return SOAP text only inside JSON soapText.",
     "- Use this exact section order: header context, S:, O:, A/P:, Tasks:, DC:. Medication/order items still belong under Tasks: but should start with 'Order:' or a clear medication/order phrase so the editor can display them in the 藥囑 section.",
     "- Header should include bed/code/age-sex if known, Dx, PMH if high-yield, attending/date if useful.",
+    "- The medication/order display section is called 藥囑. Use 'Order:' for order-related lines; do not place medication summaries inside unrelated tasks.",
     "- O must use fixed order V/S, PE, Lab, Image. Put imaging reports under Image, never PE.",
+    "- In O/Image, always preserve the study name/date/key finding when pasted imaging exists, e.g. 'Image: CXR 5/22 ...' or 'Image: CT A/P 5/21 ...'.",
     "- A/P must use '# problem' blocks, 3-5 active problems maximum.",
     "- Do not mechanically preserve source headings or split by every symptom/test/procedure. Choose the dominant active clinical problems the rounding physician would present.",
     "- Each A/P problem may have only 1-2 bullets. Merge status, key evidence, and concrete plan into compact clinician lines.",
@@ -1304,6 +1307,7 @@ function makeRoundSoapPrompt(params: {
     "- Tasks must be 2-5 maximum and only actionable/timed/pending items.",
     "- DC only if disposition, discharge blockers, OPD, meds, certificates, or placement are relevant.",
     "- The whole SOAP should be short enough for a rounding print list. Prefer one defensible short phrase over many low-value details.",
+    "- Ignore text explicitly labeled as old duplicate, copy-noise, random noise, or 'ignore'. Do not carry that wording into SOAP.",
     "- Keep language concise, physician-style, and defensible. No rule labels, no dashboard tags, no code-like parser labels.",
     "- Do not write generic tasks such as monitor closely, review VTE risk, trend TLS labs unless the source supports the exact issue.",
     "- Preserve exact lab values, dates, antibiotics, cultures, image study names/dates, procedures, consults, and pending items.",
