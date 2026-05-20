@@ -500,11 +500,15 @@ export interface RoundingLayoutPreferences {
 }
 
 export interface UserAiStyleProfile {
-  apProblemCount: number;
-  apLineLimit: number;
+  styleSummary: string[];
+  apVoice: "terse" | "balanced" | "descriptive";
+  apOrganization: "problemStatusPlan" | "problemEvidencePlan" | "problemPlan" | "mixed";
+  abbreviationStyle: "minimal" | "moderate" | "heavy";
   preferredTerms: string[];
   taskStyle: "concise" | "checklist" | "detailed";
   sectionOrder: string[];
+  typicalApProblemCount: number;
+  typicalApLineLimit: number;
   updatedAt: string;
 }
 

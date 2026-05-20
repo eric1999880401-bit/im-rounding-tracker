@@ -517,12 +517,19 @@ function sanitizeUserStyleProfile(input: unknown) {
   const source = input as Record<string, unknown>;
   const allowedTerms = new Set(["w/", "s/p", "r/o", "f/u", "Abx", "Cx", "B/C", "PNA", "RF", "AKI", "CKD", "ESRD", "HD", "CT", "CXR", "TTE", "OPD", "DC", "PRN"]);
   const taskStyle = String(source.taskStyle ?? "concise");
+  const apVoice = String(source.apVoice ?? "terse");
+  const apOrganization = String(source.apOrganization ?? "problemStatusPlan");
+  const abbreviationStyle = String(source.abbreviationStyle ?? "moderate");
   return {
-    apProblemCount: Math.max(1, Math.min(6, Number(source.apProblemCount) || 4)),
-    apLineLimit: Math.max(1, Math.min(3, Number(source.apLineLimit) || 2)),
+    styleSummary: asStringArray(source.styleSummary).slice(0, 6),
+    apVoice: ["terse", "balanced", "descriptive"].includes(apVoice) ? apVoice : "terse",
+    apOrganization: ["problemStatusPlan", "problemEvidencePlan", "problemPlan", "mixed"].includes(apOrganization) ? apOrganization : "problemStatusPlan",
+    abbreviationStyle: ["minimal", "moderate", "heavy"].includes(abbreviationStyle) ? abbreviationStyle : "moderate",
     preferredTerms: asStringArray(source.preferredTerms).filter((term) => allowedTerms.has(term)).slice(0, 12),
     taskStyle: ["concise", "checklist", "detailed"].includes(taskStyle) ? taskStyle : "concise",
     sectionOrder: asStringArray(source.sectionOrder).filter((item) => ["Header", "S", "O", "A/P", "Tasks", "DC"].includes(item)).slice(0, 6),
+    typicalApProblemCount: Math.max(1, Math.min(8, Number(source.typicalApProblemCount ?? source.apProblemCount) || 4)),
+    typicalApLineLimit: Math.max(1, Math.min(4, Number(source.typicalApLineLimit ?? source.apLineLimit) || 2)),
   };
 }
 
@@ -1298,7 +1305,8 @@ function makeRoundSoapPrompt(params: {
     "- If lab parser/category would conflict with pasted lab line, trust pasted text and warn instead of rewriting values.",
     "- If source says shock/hypotension resolved or latest BP stable, do not create active shock red flag/A/P.",
     "- Red/high-risk facts can be marked with a leading ! in soapText; important therapies/pending items can be left as normal text.",
-    "- If user style profile is provided, follow it for problem count, A/P line limit, abbreviation preference, and task style unless patient safety requires clearer wording.",
+    "- If user style profile is provided, match the user's writing style: wording density, shorthand habit, A/P organization, section order, and task phrasing.",
+    "- Treat typical A/P problem count and line limit only as weak density hints, not as targets. Clinical correctness and the user's reviewed baseline style matter more than exact numbers.",
     "",
     modeInstruction,
     "",

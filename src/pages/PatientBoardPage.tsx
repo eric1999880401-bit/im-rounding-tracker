@@ -40,6 +40,7 @@ import {
   isDcSoapLineVisible,
   isLayoutSectionVisible,
   isObjectiveSoapLineVisible,
+  isOrderSoapLine,
   isSoapHeaderLineVisible,
   isTaskSoapLineVisible,
   normalizeRoundingLayoutPreferences,
@@ -99,7 +100,7 @@ function classifyBoardVisualLine(line: string, fallbackKind: BoardVisualKind = "
   const classified = classifyClinicalLine(line, { fallbackKind, lockKind: useLockKind });
   return {
     kind: classified.kind,
-    label: classified.label,
+    label: fallbackKind === "task" && isOrderSoapLine(line) ? "ORD" : classified.label,
     text: safeClinicalLine(classified.text, 76),
     tone: classified.tone,
   };
@@ -1387,7 +1388,9 @@ function PatientBoardPage({
             const visibleSubjectiveLines = isLayoutSectionVisible(roundingLayout, "subjective") ? soap.sLines : [];
             const visibleObjectiveLines = soap.oLines.filter((line) => isObjectiveSoapLineVisible(line, roundingLayout));
             const visibleApProblems = isLayoutSectionVisible(roundingLayout, "assessmentPlan") ? soap.apProblems : [];
-            const visibleTaskLines = soap.taskLines.filter((line) => isTaskSoapLineVisible(line, roundingLayout));
+            const visibleTaskSourceLines = soap.taskLines.filter((line) => isTaskSoapLineVisible(line, roundingLayout));
+            const visibleOrderLines = visibleTaskSourceLines.filter(isOrderSoapLine);
+            const visibleTaskLines = visibleTaskSourceLines.filter((line) => !isOrderSoapLine(line));
             const visibleDcLines = (soap.dcLines.length > 0 ? soap.dcLines : patient.dischargeTargetDate ? [`Target: ${patient.dischargeTargetDate}`] : [])
               .filter((line) => isDcSoapLineVisible(line, roundingLayout));
             const pendingTaskCount = pendingTasks(patient).length;
@@ -1464,17 +1467,23 @@ function PatientBoardPage({
 
                 {(isLayoutSectionVisible(roundingLayout, "orders") || isLayoutSectionVisible(roundingLayout, "tasks") || isLayoutSectionVisible(roundingLayout, "dcBarriers") || isLayoutSectionVisible(roundingLayout, "dcPrep")) && (
                   <section className="patient-board-section patient-board-tasks-dc">
-                    {(isLayoutSectionVisible(roundingLayout, "orders") || isLayoutSectionVisible(roundingLayout, "tasks")) && (
-                      <>
+                    {isLayoutSectionVisible(roundingLayout, "orders") && (
+                      <div className="board-subsection patient-board-orders">
+                        <span className="board-label">Orders</span>
+                        {renderBoardVisualLines(visibleOrderLines, "No order", "task", 3)}
+                      </div>
+                    )}
+                    {isLayoutSectionVisible(roundingLayout, "tasks") && (
+                      <div className="board-subsection patient-board-tasks">
                         <div className="patient-board-task-heading">
-                          <span className="board-label">Tasks / DC</span>
+                          <span className="board-label">Tasks</span>
                           <span>
                             {urgentTaskCount > 0 && <span className="badge urgent">{urgentTaskCount} urgent</span>}{" "}
                             <span>{pendingTaskCount} pending</span>
                           </span>
                         </div>
                         {renderBoardVisualLines(visibleTaskLines, "No pending tasks", "task", 4)}
-                      </>
+                      </div>
                     )}
                     {(isLayoutSectionVisible(roundingLayout, "dcBarriers") || isLayoutSectionVisible(roundingLayout, "dcPrep")) && (
                       <div className="board-subsection patient-board-discharge">

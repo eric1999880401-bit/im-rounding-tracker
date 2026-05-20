@@ -120,12 +120,18 @@ export function isObjectiveSoapLineVisible(line: string, layout: RoundingLayoutP
   return isLayoutSectionVisible(layout, "objectivePhysicalExam");
 }
 
-function isOrderLine(line: string) {
-  return /^\s*(?:order|orders?)\s*:/i.test(line) || /\b(order|check|repeat|trend|monitor)\b/i.test(line);
+export function isOrderSoapLine(line: string) {
+  const text = line.trim();
+  return (
+    /^\s*(?:order|orders?|meds?|藥囑)\s*[:：]/i.test(text) ||
+    /\b(?:order|check|replace|repeat|trend|monitor|start|stop|hold|resume|continue|complete|taper|titrate|wean)\b/i.test(text) ||
+    (/\b(?:iv|po|sc|im|mg|mcg|g|unit|units|q\d+h|qd|bid|tid|qid|prn|stat|x\s*\d+\s*d(?:ay)?s?)\b/i.test(text) &&
+      /\b(?:abx|antibiotic|cef|vanco|teico|levo|cipro|mero|tazo|zosyn|morphine|fentanyl|lasix|furosemide|heparin|insulin|ppi|pantoprazole|steroid|methylpred|prednisolone)\b/i.test(text))
+  );
 }
 
 export function isTaskSoapLineVisible(line: string, layout: RoundingLayoutPreferences | undefined) {
-  return isOrderLine(line) ? isLayoutSectionVisible(layout, "orders") : isLayoutSectionVisible(layout, "tasks");
+  return isOrderSoapLine(line) ? isLayoutSectionVisible(layout, "orders") : isLayoutSectionVisible(layout, "tasks");
 }
 
 export function isDcSoapLineVisible(line: string, layout: RoundingLayoutPreferences | undefined) {
@@ -161,21 +167,95 @@ function median(values: number[], fallback: number) {
   return clean[Math.floor(clean.length / 2)];
 }
 
+function normalizeApVoice(value: unknown): UserAiStyleProfile["apVoice"] {
+  return value === "descriptive" || value === "balanced" ? value : "terse";
+}
+
+function normalizeApOrganization(value: unknown): UserAiStyleProfile["apOrganization"] {
+  return value === "problemEvidencePlan" || value === "problemPlan" || value === "mixed" ? value : "problemStatusPlan";
+}
+
+function normalizeAbbreviationStyle(value: unknown): UserAiStyleProfile["abbreviationStyle"] {
+  return value === "minimal" || value === "heavy" ? value : "moderate";
+}
+
 export function normalizeUserAiStyleProfile(value: unknown): UserAiStyleProfile | undefined {
   if (!value || typeof value !== "object") return undefined;
   const source = value as Partial<UserAiStyleProfile>;
+  const typicalApProblemCount = Math.max(1, Math.min(8, Number(source.typicalApProblemCount ?? (source as { apProblemCount?: unknown }).apProblemCount) || 4));
+  const typicalApLineLimit = Math.max(1, Math.min(4, Number(source.typicalApLineLimit ?? (source as { apLineLimit?: unknown }).apLineLimit) || 2));
+  const preferredTerms = Array.isArray(source.preferredTerms)
+    ? source.preferredTerms.map(String).filter((term) => abbreviationWhitelist.includes(term)).slice(0, 12)
+    : [];
+  const taskStyle = source.taskStyle === "detailed" || source.taskStyle === "checklist" ? source.taskStyle : "concise";
+  const sectionOrder = Array.isArray(source.sectionOrder)
+    ? source.sectionOrder.map(String).filter((item) => ["Header", "S", "O", "A/P", "Tasks", "DC"].includes(item)).slice(0, 6)
+    : ["Header", "S", "O", "A/P", "Tasks", "DC"];
+  const apVoice = normalizeApVoice(source.apVoice);
+  const apOrganization = normalizeApOrganization(source.apOrganization);
+  const abbreviationStyle = normalizeAbbreviationStyle(source.abbreviationStyle);
+  const fallbackSummary = [
+    `${apVoice} clinician wording`,
+    `${apOrganization} A/P organization`,
+    `${abbreviationStyle} abbreviation use`,
+    `${taskStyle} tasks`,
+  ];
   return {
-    apProblemCount: Math.max(1, Math.min(6, Number(source.apProblemCount) || 4)),
-    apLineLimit: Math.max(1, Math.min(3, Number(source.apLineLimit) || 2)),
-    preferredTerms: Array.isArray(source.preferredTerms)
-      ? source.preferredTerms.map(String).filter((term) => abbreviationWhitelist.includes(term)).slice(0, 12)
-      : [],
-    taskStyle: source.taskStyle === "detailed" || source.taskStyle === "checklist" ? source.taskStyle : "concise",
-    sectionOrder: Array.isArray(source.sectionOrder)
-      ? source.sectionOrder.map(String).filter((item) => ["Header", "S", "O", "A/P", "Tasks", "DC"].includes(item)).slice(0, 6)
-      : ["Header", "S", "O", "A/P", "Tasks", "DC"],
+    styleSummary: Array.isArray(source.styleSummary) ? source.styleSummary.map(String).filter(Boolean).slice(0, 6) : fallbackSummary,
+    apVoice,
+    apOrganization,
+    abbreviationStyle,
+    preferredTerms,
+    taskStyle,
+    sectionOrder,
+    typicalApProblemCount,
+    typicalApLineLimit,
     updatedAt: String(source.updatedAt ?? ""),
   };
+}
+
+function inferApVoice(lengths: number[]): UserAiStyleProfile["apVoice"] {
+  const typicalLength = median(lengths, 80);
+  if (typicalLength <= 75) return "terse";
+  if (typicalLength <= 125) return "balanced";
+  return "descriptive";
+}
+
+function inferApOrganization(drafts: ReturnType<typeof parseSoapText>[]): UserAiStyleProfile["apOrganization"] {
+  const problems = drafts.flatMap((draft) => draft.apProblems);
+  if (problems.length === 0) return "problemStatusPlan";
+  const titles = problems.map((problem) => problem.title).filter(Boolean);
+  const planLines = problems.flatMap((problem) => problem.lines).filter(Boolean);
+  const statusInTitle = titles.filter((line) => /\b(?:improving|worse|worsening|stable|resolved|persistent|s\/p|on|with|w\/|after|post|pending)\b/i.test(line)).length;
+  const treatmentFirst = planLines.filter((line) => /^(?:continue|cont|complete|start|stop|hold|wean|f\/u|follow|order|check|trend|repeat|PRN)\b/i.test(line)).length;
+  if (statusInTitle / Math.max(1, titles.length) >= 0.45) return "problemStatusPlan";
+  if (treatmentFirst / Math.max(1, planLines.length) >= 0.5) return "problemPlan";
+  if (planLines.some((line) => /\b(?:because|given|with|due to|from|s\/p|CT|CXR|Hb|Cr|WBC|INR)\b/i.test(line))) return "problemEvidencePlan";
+  return "mixed";
+}
+
+function inferAbbreviationStyle(preferredTerms: string[], reviewedTexts: string[]): UserAiStyleProfile["abbreviationStyle"] {
+  const lineCount = Math.max(1, reviewedTexts.join("\n").split(/\r?\n/).filter(Boolean).length);
+  const density = preferredTerms.length / lineCount;
+  if (preferredTerms.length >= 6 || density >= 0.18) return "heavy";
+  if (preferredTerms.length <= 1 || density < 0.04) return "minimal";
+  return "moderate";
+}
+
+function styleSummary(profile: Pick<UserAiStyleProfile, "apVoice" | "apOrganization" | "abbreviationStyle" | "preferredTerms" | "taskStyle">) {
+  const organizationLabel: Record<UserAiStyleProfile["apOrganization"], string> = {
+    problemStatusPlan: "A/P names problem with status, then plan",
+    problemEvidencePlan: "A/P keeps key evidence before plan",
+    problemPlan: "A/P is problem-to-plan direct",
+    mixed: "A/P style is mixed",
+  };
+  return [
+    `${profile.apVoice} clinician shorthand`,
+    organizationLabel[profile.apOrganization],
+    `${profile.abbreviationStyle} abbreviation use`,
+    `Tasks are ${profile.taskStyle}`,
+    profile.preferredTerms.length ? `Common terms: ${profile.preferredTerms.slice(0, 6).join(", ")}` : "",
+  ].filter(Boolean);
 }
 
 export function buildUserAiStyleProfile(patients: Patient[], dailyNotesByPatient: DailyNotesByPatient): UserAiStyleProfile {
@@ -188,6 +268,7 @@ export function buildUserAiStyleProfile(patients: Patient[], dailyNotesByPatient
   const drafts = reviewedTexts.map(parseSoapText);
   const apCounts = drafts.map((draft) => draft.apProblems.length).filter((count) => count > 0);
   const apLineCounts = drafts.flatMap((draft) => draft.apProblems.map((problem) => Math.max(1, problem.lines.length)));
+  const apLineLengths = drafts.flatMap((draft) => draft.apProblems.flatMap((problem) => [problem.title, ...problem.lines].map((line) => line.length).filter(Boolean)));
   const taskLengths = drafts.flatMap((draft) => draft.taskLines.map((line) => line.length));
   const allText = reviewedTexts.join("\n");
   const preferredTerms = abbreviationWhitelist
@@ -198,12 +279,27 @@ export function buildUserAiStyleProfile(patients: Patient[], dailyNotesByPatient
     .slice(0, 10);
 
   const taskMedian = median(taskLengths, 55);
-  return {
-    apProblemCount: median(apCounts, 4),
-    apLineLimit: median(apLineCounts, 2),
+  const apVoice = inferApVoice(apLineLengths);
+  const apOrganization = inferApOrganization(drafts);
+  const abbreviationStyle = inferAbbreviationStyle(preferredTerms, reviewedTexts);
+  const taskStyle: UserAiStyleProfile["taskStyle"] = taskMedian > 90 ? "detailed" : taskMedian > 55 ? "checklist" : "concise";
+  const profile = {
+    apVoice,
+    apOrganization,
+    abbreviationStyle,
     preferredTerms,
-    taskStyle: taskMedian > 90 ? "detailed" : taskMedian > 55 ? "checklist" : "concise",
+    taskStyle,
+  };
+  return {
+    styleSummary: styleSummary(profile),
+    apVoice,
+    apOrganization,
+    abbreviationStyle,
+    preferredTerms,
+    taskStyle,
     sectionOrder: ["Header", "S", "O", "A/P", "Tasks", "DC"],
+    typicalApProblemCount: median(apCounts, 4),
+    typicalApLineLimit: median(apLineCounts, 2),
     updatedAt: new Date().toISOString(),
   };
 }

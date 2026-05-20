@@ -133,10 +133,12 @@ function SettingsPage({ preferences, userName, onChange, onRefreshAiStyleProfile
         </div>
         {preferences.aiStyleProfile ? (
           <div className="utility-row ai-style-profile-summary">
-            <span>A/P: ~{preferences.aiStyleProfile.apProblemCount} problems</span>
-            <span>{preferences.aiStyleProfile.apLineLimit} line/problem</span>
+            <span>A/P voice: {preferences.aiStyleProfile.apVoice}</span>
+            <span>Structure: {preferences.aiStyleProfile.apOrganization}</span>
+            <span>Shorthand: {preferences.aiStyleProfile.abbreviationStyle}</span>
             <span>Tasks: {preferences.aiStyleProfile.taskStyle}</span>
             <span>Terms: {preferences.aiStyleProfile.preferredTerms.join(", ") || "-"}</span>
+            <span className="muted">Density hint only: ~{preferences.aiStyleProfile.typicalApProblemCount} problems / {preferences.aiStyleProfile.typicalApLineLimit} line</span>
           </div>
         ) : (
           <p className="muted">No style profile yet. Save a few reviewed SOAP notes, then refresh.</p>

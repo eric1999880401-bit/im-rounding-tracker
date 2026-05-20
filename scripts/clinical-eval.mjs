@@ -42,6 +42,7 @@ const {
   buildUserAiStyleProfile,
   isDcSoapLineVisible,
   isObjectiveSoapLineVisible,
+  isOrderSoapLine,
   isTaskSoapLineVisible,
   normalizeRoundingLayoutPreferences,
   visibleSectionsForPreset,
@@ -1460,8 +1461,11 @@ try {
   if (!isObjectiveSoapLineVisible("Lab: Cr 2.7", layout)) {
     throw new Error("O Lab was hidden unexpectedly");
   }
-  if (isTaskSoapLineVisible("f/u CBC tomorrow", layout) || !isTaskSoapLineVisible("Order: VS q4h", layout)) {
+  if (isTaskSoapLineVisible("f/u CBC tomorrow", layout) || !isTaskSoapLineVisible("Order: VS q4h", layout) || !isTaskSoapLineVisible("Complete Levofloxacin PO x5 days", layout)) {
     throw new Error("Order/task layout filtering did not separate orders from tasks");
+  }
+  if (!isOrderSoapLine("Complete Levofloxacin PO x5 days") || isOrderSoapLine("f/u CBC tomorrow")) {
+    throw new Error("Order detection did not catch medication orders without promoting routine tasks");
   }
   if (isDcSoapLineVisible("Barrier: oxygen requirement", layout) || !isDcSoapLineVisible("Pending: meds/OPD/certificate", layout)) {
     throw new Error("DC barrier/prep layout filtering was incorrect");
@@ -1487,8 +1491,11 @@ try {
     ].join("\n"),
   };
   const profile = buildUserAiStyleProfile([stylePatient], { [stylePatient.id]: [styleNote] });
-  if (profile.apProblemCount !== 2 || profile.apLineLimit !== 1 || !profile.preferredTerms.includes("Abx") || !profile.preferredTerms.includes("f/u")) {
-    throw new Error(`Style profile did not abstract reviewed SOAP style: ${JSON.stringify(profile)}`);
+  if (profile.apVoice !== "terse" || profile.apOrganization !== "problemStatusPlan" || !profile.preferredTerms.includes("Abx") || !profile.preferredTerms.includes("f/u")) {
+    throw new Error(`Style profile did not abstract reviewed SOAP writing style: ${JSON.stringify(profile)}`);
+  }
+  if (profile.typicalApProblemCount !== 2 || profile.typicalApLineLimit !== 1 || !profile.styleSummary.some((line) => /A\/P/i.test(line))) {
+    throw new Error(`Style profile should keep density as a weak hint and summarize style: ${JSON.stringify(profile)}`);
   }
   console.log("PASS Layout preferences lock print labels and build abstract AI style profile");
   supplementalPasses += 1;

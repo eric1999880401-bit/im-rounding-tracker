@@ -7,6 +7,7 @@ import {
   isDcSoapLineVisible,
   isLayoutSectionVisible,
   isObjectiveSoapLineVisible,
+  isOrderSoapLine,
   isSoapHeaderLineVisible,
   isTaskSoapLineVisible,
 } from "../userPreferences";
@@ -27,9 +28,10 @@ function toneClass(tone: ClinicalLineTone) {
 
 function VisualLine({ label, text, fallbackKind = "other" }: { label?: string; text: string; fallbackKind?: ClinicalLineKind }) {
   const classified = classifyClinicalLine(text, { fallbackKind, lockKind: fallbackKind !== "other" });
+  const displayLabel = label || (fallbackKind === "task" && isOrderSoapLine(text) ? "ORD" : classified.label);
   return (
     <div className={`soap-preview-line soap-preview-line-${classified.kind} soap-preview-line-${toneClass(classified.tone)}`}>
-      {(label || classified.label) && <span className="soap-preview-line-label">{label || classified.label}</span>}
+      {displayLabel && <span className="soap-preview-line-label">{displayLabel}</span>}
       <div className="soap-preview-line-text">
         <ClinicalText value={highlighted(text)} maxCharsPerLine={140} />
       </div>
@@ -69,7 +71,9 @@ export function SoapVisualPreview({ value, compact = false, layoutPreferences }:
   const sLines = isLayoutSectionVisible(layoutPreferences, "subjective") ? draft.sLines : [];
   const oLines = draft.oLines.filter((line) => isObjectiveSoapLineVisible(line, layoutPreferences));
   const apProblems = isLayoutSectionVisible(layoutPreferences, "assessmentPlan") ? draft.apProblems : [];
-  const taskLines = draft.taskLines.filter((line) => isTaskSoapLineVisible(line, layoutPreferences));
+  const visibleTaskSourceLines = draft.taskLines.filter((line) => isTaskSoapLineVisible(line, layoutPreferences));
+  const orderLines = visibleTaskSourceLines.filter(isOrderSoapLine);
+  const taskLines = visibleTaskSourceLines.filter((line) => !isOrderSoapLine(line));
   const dcLines = draft.dcLines.filter((line) => isDcSoapLineVisible(line, layoutPreferences));
   const hasObjectiveSections =
     isLayoutSectionVisible(layoutPreferences, "objectiveVitals") ||
@@ -150,7 +154,13 @@ export function SoapVisualPreview({ value, compact = false, layoutPreferences }:
           </Section>
         )}
 
-        {(isLayoutSectionVisible(layoutPreferences, "orders") || isLayoutSectionVisible(layoutPreferences, "tasks")) && (
+        {isLayoutSectionVisible(layoutPreferences, "orders") && (
+          <Section title="Orders" badge={`${orderLines.length || 0}`}>
+            {orderLines.length > 0 ? orderLines.map((line, index) => <VisualLine key={`${line}-${index}`} text={line} fallbackKind="task" />) : <EmptyLine text="No order" />}
+          </Section>
+        )}
+
+        {isLayoutSectionVisible(layoutPreferences, "tasks") && (
           <Section title="Tasks" badge={`${taskLines.length || 0}`}>
             {taskLines.length > 0 ? taskLines.map((line, index) => <VisualLine key={`${line}-${index}`} text={line} fallbackKind="task" />) : <EmptyLine text="No pending task" />}
           </Section>

@@ -25,6 +25,7 @@ import {
   isDcSoapLineVisible,
   isLayoutSectionVisible,
   isObjectiveSoapLineVisible,
+  isOrderSoapLine,
   isSoapHeaderLineVisible,
   isTaskSoapLineVisible,
   normalizeRoundingLayoutPreferences,
@@ -234,7 +235,7 @@ function PrintRoundingListPage({
     });
     return {
       kind: classified.kind,
-      label: classified.kind === "task" ? "T" : classified.label,
+      label: classified.kind === "task" ? (isOrderSoapLine(source) ? "ORD" : "T") : classified.label,
       text: removePrintEllipsis(classified.text),
       tone: classified.tone,
     };
@@ -751,6 +752,14 @@ function PrintRoundingListPage({
       .join("; ");
   }
 
+  function taskDcTitle() {
+    return [
+      isLayoutSectionVisible(roundingLayout, "orders") ? "Orders" : "",
+      isLayoutSectionVisible(roundingLayout, "tasks") ? "Tasks" : "",
+      isLayoutSectionVisible(roundingLayout, "dcBarriers") || isLayoutSectionVisible(roundingLayout, "dcPrep") ? "DC" : "",
+    ].filter(Boolean).join(" / ") || "Tasks / DC";
+  }
+
   function blockField(label: string, value: ReactNode) {
     if (value === null || value === undefined || value === false) return null;
     if (typeof value === "string" && !value.trim()) return null;
@@ -884,7 +893,7 @@ function PrintRoundingListPage({
                   {sectionBox("S", subjectiveSoapText(patient), undefined, "s")}
                   {sectionBox("O", objectiveSoapText(patient), objectiveExtra(patient), "other")}
                   {sectionBox("A/P", assessmentSoapText(patient), undefined, "ap")}
-                  {sectionBox("Tasks / DC", taskDcText(patient), undefined, "task")}
+                  {sectionBox(taskDcTitle(), taskDcText(patient), undefined, "task")}
                 </div>
               </article>
             );
