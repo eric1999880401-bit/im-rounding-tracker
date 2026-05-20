@@ -36,6 +36,8 @@ const {
 const { buildConcisePatientClinicalUpdate } = await server.ssrLoadModule("/src/clinicalPatientPolish.ts");
 const { sanitizeAiSoapDraftForReview } = await server.ssrLoadModule("/src/aiDraftSanitizer.ts");
 const { routePatientImportDraft, routePatientClinicalFields } = await server.ssrLoadModule("/src/clinicalFieldRouter.ts");
+const { classifyClinicalLine } = await server.ssrLoadModule("/src/clinicalLineClassifier.ts");
+const { editorDraftToSoapText, lintSoapEditorDraft, parseSoapTextToEditorDraft } = await server.ssrLoadModule("/src/soapEditorDraft.ts");
 
 function haystack(plan) {
   return [
@@ -1378,7 +1380,7 @@ try {
     throw new Error(`Local demo SOAP merge lost treatment/pending/image facts:\n${mergedLocalSoap}`);
   }
   const highlighted = soapTextWithDerivedHighlights(reviewedSoapText);
-  if (!/!\- Teicoplanin 5\/13-/i.test(highlighted) || !/\[\[blue:.*OPD oncology/i.test(highlighted)) {
+  if (!/!!- Teicoplanin 5\/13-/i.test(highlighted) || !/\[\[orange:.*OPD oncology/i.test(highlighted)) {
     throw new Error(`Derived SOAP highlight did not mark infection/DC signals:\n${highlighted}`);
   }
   console.log("PASS SOAP-first adapter creates one editable note and saves to existing fields");
@@ -1386,6 +1388,50 @@ try {
 } catch (error) {
   failures.push({ name: "SOAP-first adapter creates one editable note and saves to existing fields", error: error instanceof Error ? error.message : String(error) });
   console.error(`FAIL SOAP-first adapter creates one editable note and saves to existing fields: ${failures[failures.length - 1].error}`);
+}
+
+try {
+  const messySoap = [
+    "I3-013 51/M",
+    "S：",
+    "• dyspnea improved",
+    "O：",
+    "！ BP 90/50 HR 120 SpO2 88%",
+    "* Lab: Cr 2.7, K 6.1",
+    "1) CT chest: malignant pleural effusion/chylothorax improved after tap",
+    "A/P：",
+    "1) Malignant pleural effusion/chylothorax: Tap 5/13 L1000/R1400, CXR improved; PRN tap if dyspnea recurs.",
+    "2) Elevated LFT/coagulopathy: INR 10.6, trend LFT/INR.",
+    "Tasks：",
+    "• f/u repeat CXR and tap need",
+  ].join("\n");
+  const editorDraft = parseSoapTextToEditorDraft(messySoap);
+  const normalizedSoap = editorDraftToSoapText(editorDraft);
+  if (!/S:\n- dyspnea improved/i.test(normalizedSoap) || !/A\/P:\n# Malignant pleural effusion\/chylothorax/i.test(normalizedSoap)) {
+    throw new Error(`structured editor failed to normalize mixed symbols:\n${normalizedSoap}`);
+  }
+  if (!/!! V\/S: BP 90\/50 HR 120 SpO2 88%/i.test(normalizedSoap) || !/!! Lab: Cr 2\.7, K 6\.1/i.test(normalizedSoap)) {
+    throw new Error(`structured editor lost critical/important tone:\n${normalizedSoap}`);
+  }
+  const lintIssues = lintSoapEditorDraft({ ...editorDraft, apProblems: [{ ...editorDraft.apProblems[0], title: "" }] });
+  if (!lintIssues.some((issue) => /no problem title/i.test(issue.text))) {
+    throw new Error(`structured editor did not warn on A/P without title: ${JSON.stringify(lintIssues)}`);
+  }
+  const previewTone = classifyClinicalLine("Lab: Cr 2.7, K 6.1", { fallbackKind: "lab" }).tone;
+  const boardTone = classifyClinicalLine("Lab: Cr 2.7, K 6.1", { fallbackKind: "lab" }).tone;
+  const printTone = classifyClinicalLine("Lab: Cr 2.7, K 6.1", { fallbackKind: "lab" }).tone;
+  if (previewTone !== "critical" || boardTone !== previewTone || printTone !== previewTone) {
+    throw new Error(`unified classifier inconsistent across surfaces: ${previewTone}/${boardTone}/${printTone}`);
+  }
+  const peImageDraft = parseSoapTextToEditorDraft("O:\n- PE: CT chest: pleural effusion\nA/P:\n# Effusion\n- PRN tap");
+  if (!lintSoapEditorDraft(peImageDraft).some((issue) => /marked as PE/i.test(issue.text))) {
+    throw new Error("structured editor did not warn when image/report text is marked PE");
+  }
+  console.log("PASS Structured SOAP editor normalizes symbols and shares clinical severity");
+  supplementalPasses += 1;
+} catch (error) {
+  failures.push({ name: "Structured SOAP editor normalizes symbols and shares clinical severity", error: error instanceof Error ? error.message : String(error) });
+  console.error(`FAIL Structured SOAP editor normalizes symbols and shares clinical severity: ${failures[failures.length - 1].error}`);
 }
 
 await server.close();

@@ -1,46 +1,26 @@
 import type { ReactNode } from "react";
 import { parseSoapText, soapTextWithDerivedHighlights } from "../soapDraft";
 import { ClinicalText } from "./ClinicalText";
+import { classifyClinicalLine, type ClinicalLineKind, type ClinicalLineTone } from "../clinicalLineClassifier";
 
 interface SoapVisualPreviewProps {
   value: string;
   compact?: boolean;
 }
 
-type Tone = "critical" | "important" | "normal";
-
-function toneForLine(line: string): Tone {
-  if (
-    /\b(shock|sepsis|hypotension|desat|hypox|active bleed|melena|hematemesis|stroke|ich|neutropenic fever|lactate|troponin|mrsa|enterococcus|positive culture|b\/c|bcx)\b/i.test(
-      line,
-    ) ||
-    /\b(k\s*(?:<\s*3|>\s*5\.5)|hb\s*(?:<\s*8|drop)|wbc\s*(?:>\s*12|<\s*3)|cr\s*(?:>\s*2))\b/i.test(line)
-  ) {
-    return "critical";
-  }
-  if (/\b(teicoplanin|vancomycin|cef|zosyn|pip\/tazo|meropenem|abx|antibiotic|culture|pending|f\/u|repeat|consult|source control|j-tube|dc|discharge)\b/i.test(line)) {
-    return "important";
-  }
-  return "normal";
-}
-
-function classifyObjective(line: string) {
-  if (/^(?:v\/s|vs|vitals?)\s*:/i.test(line) || /\bBP\b|\bSpO2\b|\bHR\b|\bRR\b|\bT\s*\d/i.test(line)) return "V/S";
-  if (/^(?:pe|physical exam)\s*:/i.test(line)) return "PE";
-  if (/^lab\s*:/i.test(line) || /\b(wbc|hb|hgb|plt|cr|bun|na|k\b|ca|mg|phos|lactate|crp|culture|b\/c|bcx)\b/i.test(line)) return "LAB";
-  if (/^(?:image|img)\s*:/i.test(line) || /\b(ct|mri|cxr|xray|x-ray|echo|sono|ultrasound|egd|scope)\b/i.test(line)) return "IMG";
-  return "O";
-}
-
 function highlighted(value: string) {
   return soapTextWithDerivedHighlights(value);
 }
 
-function VisualLine({ label, text }: { label?: string; text: string }) {
-  const tone = toneForLine(text);
+function toneClass(tone: ClinicalLineTone) {
+  return tone === "plain" ? "normal" : tone;
+}
+
+function VisualLine({ label, text, fallbackKind = "other" }: { label?: string; text: string; fallbackKind?: ClinicalLineKind }) {
+  const classified = classifyClinicalLine(text, { fallbackKind });
   return (
-    <div className={`soap-preview-line soap-preview-line-${tone}`}>
-      {label && <span className="soap-preview-line-label">{label}</span>}
+    <div className={`soap-preview-line soap-preview-line-${toneClass(classified.tone)}`}>
+      {(label || classified.label) && <span className="soap-preview-line-label">{label || classified.label}</span>}
       <div className="soap-preview-line-text">
         <ClinicalText value={highlighted(text)} maxCharsPerLine={140} />
       </div>
@@ -82,7 +62,7 @@ export function SoapVisualPreview({ value, compact = false }: SoapVisualPreviewP
     ...draft.taskLines,
     ...draft.dcLines,
     ...draft.apProblems.flatMap((problem) => [problem.title, ...problem.lines]),
-  ].filter((line) => toneForLine(line) === "critical").length;
+  ].filter((line) => classifyClinicalLine(line).tone === "critical").length;
 
   return (
     <div className={compact ? "soap-visual-preview compact-soap-visual-preview" : "soap-visual-preview"}>
@@ -111,7 +91,7 @@ export function SoapVisualPreview({ value, compact = false }: SoapVisualPreviewP
 
         <Section title="O" badge={`${draft.oLines.length || 0}`}>
           {draft.oLines.length > 0 ? (
-            draft.oLines.map((line, index) => <VisualLine key={`${line}-${index}`} label={classifyObjective(line)} text={line} />)
+            draft.oLines.map((line, index) => <VisualLine key={`${line}-${index}`} text={line} />)
           ) : (
             <EmptyLine />
           )}
@@ -121,7 +101,10 @@ export function SoapVisualPreview({ value, compact = false }: SoapVisualPreviewP
           {draft.apProblems.length > 0 ? (
             <div className="soap-preview-ap-list">
               {draft.apProblems.map((problem, index) => (
-                <article className={`soap-preview-problem soap-preview-line-${toneForLine(`${problem.title} ${problem.lines.join(" ")}`)}`} key={`${problem.title}-${index}`}>
+                <article
+                  className={`soap-preview-problem soap-preview-line-${toneClass(classifyClinicalLine(`${problem.title} ${problem.lines.join(" ")}`, { fallbackKind: "ap" }).tone)}`}
+                  key={`${problem.title}-${index}`}
+                >
                   <div className="soap-preview-problem-title">
                     <span>#</span>
                     <ClinicalText value={highlighted(problem.title)} maxCharsPerLine={100} />
@@ -129,7 +112,7 @@ export function SoapVisualPreview({ value, compact = false }: SoapVisualPreviewP
                   {problem.lines.length > 0 && (
                     <div className="soap-preview-problem-lines">
                       {problem.lines.map((line, lineIndex) => (
-                        <VisualLine key={`${line}-${lineIndex}`} text={line} />
+                        <VisualLine key={`${line}-${lineIndex}`} text={line} fallbackKind="ap" />
                       ))}
                     </div>
                   )}

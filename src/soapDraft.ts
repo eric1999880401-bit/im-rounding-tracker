@@ -263,8 +263,8 @@ export function soapTextWithDerivedHighlights(text: string) {
       if (!clean || clean.startsWith("!") || /^#{1,6}\s/.test(clean) || /^(?:S|O|A\/P|Tasks|DC|Warnings)\s*:/i.test(clean)) {
         return line;
       }
-      if (criticalSoapLine(clean)) return `!${line}`;
-      if (importantSoapLine(clean)) return line.replace(clean, `[[blue:${clean}]]`);
+      if (criticalSoapLine(clean)) return `!!${line}`;
+      if (importantSoapLine(clean)) return line.replace(clean, `[[orange:${clean}]]`);
       return line;
     })
     .join("\n");
@@ -545,19 +545,23 @@ function normalizeSoapSymbols(value: string) {
 
 function stripBullet(value: string) {
   let next = normalizeSoapSymbols(value).trim();
+  const critical = /^!!/.test(next);
   const important = /^!+/.test(next);
+  const starImportant = /^\*\s+\S/.test(next);
   next = next.replace(/^!+\s*/, "").trim();
   for (let index = 0; index < 4; index += 1) {
     const previous = next;
     next = next.replace(/^(?:[-*•‧・‣▪○●－–—]|[!！])+\s*/, "").trim();
     if (next === previous) break;
   }
-  return next;
+  return `${critical ? "!! " : important || starImportant ? "! " : ""}${next}`.trim();
 }
 
 function stripSoapBullet(value: string) {
   let next = normalizeSoapSymbols(value).trim();
+  const critical = /^!!/.test(next);
   const important = /^!+/.test(next);
+  const starImportant = /^\*\s+\S/.test(next);
   next = next.replace(/^!+\s*/, "").trim();
   for (let index = 0; index < 4; index += 1) {
     const previous = next;
@@ -568,7 +572,7 @@ function stripSoapBullet(value: string) {
       .trim();
     if (next === previous) break;
   }
-  return important ? `! ${next}`.trim() : next;
+  return `${critical ? "!! " : important || starImportant ? "! " : ""}${next}`.trim();
 }
 
 function sectionRest(line: string, label: string) {

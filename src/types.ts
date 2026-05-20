@@ -361,6 +361,7 @@ export interface GenerateClinicalDocumentResult {
 export interface HighlightLine {
   text: string;
   important: boolean;
+  tone?: "critical" | "important";
   kind?: "normal" | "numbered" | "arrow" | "dash" | "section";
 }
 

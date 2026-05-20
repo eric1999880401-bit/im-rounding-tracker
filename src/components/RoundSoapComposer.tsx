@@ -6,12 +6,13 @@ import {
   formatSoapTextForEditorStyle,
   getCanonicalSoapText,
   localRoundSoapFromPaste,
-  normalizeSoapTextForEditor,
   soapTextToPatientPatch,
   type SoapEditorFormat,
 } from "../soapDraft";
+import { editorDraftToSoapText, parseSoapTextToEditorDraft } from "../soapEditorDraft";
 import { emptyDailyNote, nowIso } from "../utils";
 import { SoapVisualPreview } from "./SoapVisualPreview";
+import StructuredSoapEditor from "./StructuredSoapEditor";
 
 interface RoundSoapComposerProps {
   patient: Patient;
@@ -150,7 +151,8 @@ function RoundSoapComposer({
   const [transferFields, setTransferFields] = useState<TransferSoapFields>(emptyTransferFields);
   const [confirmed, setConfirmed] = useState(false);
   const [soapFormat, setSoapFormat] = useState<SoapEditorFormat>("standard");
-  const [soapText, setSoapText] = useState(canonical.text);
+  const [editorDraft, setEditorDraft] = useState(() => parseSoapTextToEditorDraft(canonical.text));
+  const [rawSoapText, setRawSoapText] = useState(canonical.text);
   const [dirty, setDirty] = useState(false);
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState("");
@@ -158,10 +160,13 @@ function RoundSoapComposer({
   const [warnings, setWarnings] = useState<string[]>([]);
   const isComposingRef = useRef(false);
   const externalSoapRevisionRef = useRef(externalSoapRevision);
+  const soapText = editorDraftToSoapText(editorDraft);
 
   useEffect(() => {
     if (dirty || isComposingRef.current) return;
-    setSoapText(canonical.text);
+    const nextDraft = parseSoapTextToEditorDraft(canonical.text);
+    setEditorDraft(nextDraft);
+    setRawSoapText(editorDraftToSoapText(nextDraft));
   }, [canonical.text, dirty]);
 
   useEffect(() => {
@@ -169,15 +174,18 @@ function RoundSoapComposer({
     externalSoapRevisionRef.current = externalSoapRevision;
     const nextSoapText = externalSoapText.trim();
     if (!nextSoapText) return;
-    setSoapText(nextSoapText);
+    const nextDraft = parseSoapTextToEditorDraft(nextSoapText);
+    setEditorDraft(nextDraft);
+    setRawSoapText(editorDraftToSoapText(nextDraft));
     setDirty(true);
     setError("");
     setWarnings([]);
     setStatus(externalSoapStatus || "External SOAP draft loaded. Review, then Save reviewed SOAP.");
   }, [externalSoapRevision, externalSoapStatus, externalSoapText]);
 
-  function updateSoapText(value: string) {
-    setSoapText(value);
+  function updateEditorDraft(nextDraft: typeof editorDraft) {
+    setEditorDraft(nextDraft);
+    setRawSoapText(editorDraftToSoapText(nextDraft));
     setDirty(true);
   }
 
@@ -279,7 +287,9 @@ function RoundSoapComposer({
             patientContext: patientContext(patient),
           });
 
-      setSoapText(result.soapText.trim() || canonical.text);
+      const nextDraft = parseSoapTextToEditorDraft(result.soapText.trim() || canonical.text);
+      setEditorDraft(nextDraft);
+      setRawSoapText(editorDraftToSoapText(nextDraft));
       setDirty(true);
       setWarnings(result.warnings ?? []);
       setStatus(`SOAP preview generated (${result.model}). Edit, then Save reviewed SOAP.`);
@@ -291,7 +301,7 @@ function RoundSoapComposer({
   }
 
   async function handleSave() {
-    const reviewedText = normalizeSoapTextForEditor(soapText).trim();
+    const reviewedText = editorDraftToSoapText(editorDraft).trim();
     if (!reviewedText || isComposingRef.current) return;
 
     setLoading(true);
@@ -303,7 +313,9 @@ function RoundSoapComposer({
       const nextNote = buildSavedNote(reviewedText, nextPatient, dailyNotes, selectedDate, patch);
       await onSavePatient(nextPatient);
       await onSaveDailyNote(nextPatient.id, nextNote);
-      setSoapText(reviewedText);
+      const nextDraft = parseSoapTextToEditorDraft(reviewedText);
+      setEditorDraft(nextDraft);
+      setRawSoapText(editorDraftToSoapText(nextDraft));
       clearSourceText();
       setDirty(false);
       setStatus("Reviewed SOAP saved. Board, Details, and Print now read this note.");
@@ -315,9 +327,11 @@ function RoundSoapComposer({
   }
 
   function handleFormatSoap() {
-    if (!soapText.trim() || isComposingRef.current) return;
-    const normalized = formatSoapTextForEditorStyle(soapText, soapFormat);
-    setSoapText(normalized);
+    if (!rawSoapText.trim() || isComposingRef.current) return;
+    const normalized = formatSoapTextForEditorStyle(rawSoapText, soapFormat);
+    const nextDraft = parseSoapTextToEditorDraft(normalized);
+    setEditorDraft(nextDraft);
+    setRawSoapText(editorDraftToSoapText(nextDraft));
     setDirty(true);
     setError("");
     setStatus(`${soapFormatOptions.find((item) => item.value === soapFormat)?.label ?? "SOAP"} applied. Review, then Save reviewed SOAP.`);
@@ -348,15 +362,17 @@ function RoundSoapComposer({
             ))}
           </select>
           <button type="button" className="secondary" onClick={() => {
-            setSoapText(canonical.text);
+            const nextDraft = parseSoapTextToEditorDraft(canonical.text);
+            setEditorDraft(nextDraft);
+            setRawSoapText(editorDraftToSoapText(nextDraft));
             setDirty(false);
             setStatus("");
             setError("");
           }}>
             Reset
           </button>
-          <button type="button" className="secondary" disabled={!soapText.trim() || loading} onClick={handleFormatSoap}>
-            Apply format
+          <button type="button" className="secondary" disabled={!rawSoapText.trim() || loading} onClick={handleFormatSoap}>
+            Normalize text
           </button>
           <button type="button" disabled={!soapText.trim() || loading} onClick={() => void handleSave()}>
             Save reviewed SOAP
@@ -621,25 +637,47 @@ function RoundSoapComposer({
       )}
 
       <div className="round-soap-editor-grid">
-        <label>
-          Reviewed SOAP
-          <span className="soap-editor-hint">
-            {soapFormatOptions.find((item) => item.value === soapFormat)?.helper} Save accepts -, #, !, *, 1., 1), bullet dots, and full-width symbols.
-          </span>
-          <textarea
-            className="soap-editor-textarea"
-            value={soapText}
-            onChange={(event) => updateSoapText(event.target.value)}
+        <section className="round-soap-structured-editor">
+          <div className="structured-soap-main-heading">
+            <div>
+              <strong>Reviewed SOAP blocks</strong>
+              <span className="soap-editor-hint">Use controls for section, importance, and A/P blocks. Save writes normalized SOAP text.</span>
+            </div>
+          </div>
+          <StructuredSoapEditor
+            draft={editorDraft}
+            onChange={updateEditorDraft}
+            compact={compact}
             onCompositionStart={() => {
               isComposingRef.current = true;
             }}
             onCompositionEnd={() => {
               isComposingRef.current = false;
             }}
-            spellCheck={false}
-            rows={compact ? 12 : 20}
           />
-        </label>
+          <details className="raw-soap-details">
+            <summary>Raw SOAP text / paste fixer</summary>
+            <p className="muted">
+              Paste old SOAP or free text here, then Normalize text. Wrong bullets, full-width symbols, 1), 1., *, !, and dots are accepted.
+            </p>
+            <textarea
+              className="soap-editor-textarea"
+              value={rawSoapText}
+              onChange={(event) => {
+                setRawSoapText(event.target.value);
+                setDirty(true);
+              }}
+              onCompositionStart={() => {
+                isComposingRef.current = true;
+              }}
+              onCompositionEnd={() => {
+                isComposingRef.current = false;
+              }}
+              spellCheck={false}
+              rows={compact ? 8 : 12}
+            />
+          </details>
+        </section>
         <section className="round-soap-preview" aria-label="Highlighted SOAP preview">
           <SoapVisualPreview value={soapText} compact={compact} />
         </section>

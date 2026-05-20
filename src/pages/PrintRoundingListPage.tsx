@@ -20,6 +20,7 @@ import { ClinicalText } from "../components/ClinicalText";
 import { useT } from "../i18n";
 import { getRoundingDigest } from "../roundingDigest";
 import { patientToSoapDraft } from "../soapDraft";
+import { classifyClinicalLine, type ClinicalLineKind } from "../clinicalLineClassifier";
 
 interface PageProps {
   patients: Patient[];
@@ -29,7 +30,7 @@ interface PageProps {
   studyTopics?: StudyTopic[];
 }
 
-type PrintVisualKind = "s" | "vs" | "pe" | "lab" | "image" | "ap" | "task" | "dc" | "red" | "other";
+type PrintVisualKind = Extract<ClinicalLineKind, "s" | "vs" | "pe" | "lab" | "image" | "ap" | "task" | "dc" | "red" | "other">;
 
 function PrintRoundingListPage({
   patients,
@@ -213,55 +214,12 @@ function PrintRoundingListPage({
   }
 
   function classifyPrintVisualItem(item: { raw: string; text: string }, fallbackKind: PrintVisualKind) {
-    const raw = item.raw.trim();
-    const normalizedText = item.text
-      .replace(/^!+\s*/, "")
-      .replace(/^\*\s*/, "")
-      .replace(/^(\w[\w/ ]{0,12}:\s*)(?:!|\*)\s*/i, "$1")
-      .trim();
-    const prefixMatch = normalizedText.match(/^(S|V\/S|VS|PE|Lab|Image|Img|Task|Tasks|DC|Prep)\s*:\s*(.*)$/i);
-    const prefix = prefixMatch?.[1].toLowerCase() ?? "";
-    const body = (prefixMatch ? prefixMatch[2] : normalizedText)
-      .replace(/^!+\s*/, "")
-      .replace(/^\*\s*/, "")
-      .replace(/^(?:crit|critical|abn|abnormal|anchor|trend)\s+/i, "")
-      .replace(/^(?:infx|infection|lyte\/renal|renal\/lyte|anemia|heme|cardio|cardiac|liver|gi|nutrition|onc|tumor|glucose|endocrine|coag|other)\s*:\s*/i, "")
-      .trim();
-
-    let kind = fallbackKind;
-    if (prefix === "s") kind = "s";
-    if (prefix === "v/s" || prefix === "vs") kind = "vs";
-    if (prefix === "pe") kind = "pe";
-    if (prefix === "lab") kind = "lab";
-    if (prefix === "image" || prefix === "img") kind = "image";
-    if (prefix === "task" || prefix === "tasks") kind = "task";
-    if (prefix === "dc" || prefix === "prep") kind = "dc";
-
-    const critical =
-      fallbackKind === "red" ||
-      isImportantPrintLine(raw) ||
-      item.text.startsWith("*") ||
-      /\b(urgent|crit|critical|shock|sepsis|desat|bleed|hypot|lactate|blood culture|b\/c)\b/i.test(raw) ||
-      (kind === "lab" && /\b(k\s*[0-2](?:\.\d+)?|k\s*[6-9](?:\.\d+)?|hb\s*[0-7](?:\.\d+)?|cr\s*[2-9](?:\.\d+)?)\b/i.test(body));
-
-    const labelMap: Record<PrintVisualKind, string> = {
-      s: "S",
-      vs: "V/S",
-      pe: "PE",
-      lab: "LAB",
-      image: "IMG",
-      ap: "A/P",
-      task: "T",
-      dc: "DC",
-      red: "RED",
-      other: "NOTE",
-    };
-
+    const classified = classifyClinicalLine(item.raw || item.text, { fallbackKind });
     return {
-      kind,
-      label: labelMap[kind],
-      text: removePrintEllipsis(body || normalizedText),
-      critical,
+      kind: classified.kind,
+      label: classified.kind === "task" ? "T" : classified.label,
+      text: removePrintEllipsis(classified.text),
+      tone: classified.tone,
     };
   }
 
@@ -273,7 +231,7 @@ function PrintRoundingListPage({
           const visual = classifyPrintVisualItem(item, fallbackKind);
           return (
             <div
-              className={`print-visual-row print-visual-${visual.kind}${visual.critical ? " print-visual-critical" : ""}`}
+              className={`print-visual-row print-visual-${visual.kind} print-visual-${visual.tone}`}
               key={`${keyPrefix}-${visual.label}-${visual.text}-${index}`}
             >
               <span className="print-visual-label">{visual.label}</span>

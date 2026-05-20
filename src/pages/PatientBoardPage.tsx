@@ -35,6 +35,7 @@ import {
 import { useT } from "../i18n";
 import { getRoundingDigest } from "../roundingDigest";
 import { fallbackSoapTextFromPatient, patientToSoapDraft } from "../soapDraft";
+import { classifyClinicalLine, type ClinicalLineKind } from "../clinicalLineClassifier";
 
 interface PageProps {
   patients: Patient[];
@@ -49,7 +50,7 @@ interface PageProps {
 
 const taskCategories: TaskCategory[] = ["lab", "imaging", "consult", "discharge", "family", "order", "other"];
 type BulkImportMode = NonNullable<AnalyzePatientBatchTextInput["importMode"]>;
-type BoardVisualKind = "s" | "vs" | "pe" | "lab" | "image" | "task" | "dc" | "other";
+type BoardVisualKind = Extract<ClinicalLineKind, "s" | "vs" | "pe" | "lab" | "image" | "task" | "dc" | "other">;
 
 function uniqueLines(...values: string[]) {
   const seen = new Set<string>();
@@ -85,47 +86,12 @@ function normalizeTaskCategory(value: string): TaskCategory {
 }
 
 function classifyBoardVisualLine(line: string, fallbackKind: BoardVisualKind = "other") {
-  const raw = line.trim();
-  const important = raw.startsWith("!") || /\b(urgent|crit|critical|shock|sepsis|desat|bleed|hypot|lactate|b\/c|blood culture|teicoplanin|vancomycin|meropenem|cef|pip\/tazo)\b/i.test(raw);
-  const withoutBang = raw.replace(/^!+\s*/, "");
-  const prefixMatch = withoutBang.match(/^(S|V\/S|VS|PE|Lab|Image|Img|Task|Tasks|DC)\s*:\s*(.*)$/i);
-  const prefix = prefixMatch?.[1].toLowerCase() ?? "";
-  const text = (prefixMatch ? prefixMatch[2].trim() : withoutBang)
-    .replace(/^!+\s*/, "")
-    .replace(/^(?:crit|critical|abn|abnormal|anchor|trend)\s+/i, "")
-    .replace(/^(?:infx|infection|lyte\/renal|renal\/lyte|anemia|heme|cardio|cardiac|liver|gi|nutrition|onc|tumor|glucose|endocrine|coag|other)\s*:\s*/i, "")
-    .trim();
-
-  let kind = fallbackKind;
-  if (prefix === "s") kind = "s";
-  if (prefix === "v/s" || prefix === "vs") kind = "vs";
-  if (prefix === "pe") kind = "pe";
-  if (prefix === "lab") kind = "lab";
-  if (prefix === "image" || prefix === "img") kind = "image";
-  if (prefix === "task" || prefix === "tasks") kind = "task";
-  if (prefix === "dc") kind = "dc";
-
-  const critical =
-    important ||
-    (kind === "lab" && /\b(crit|critical|lactate|k\s*[6-9](?:\.\d+)?|k\s*[0-2](?:\.\d+)?|hb\s*[0-7](?:\.\d+)?|na\s*1[01]\d|wbc\s*[23]\d|plt\s*[0-4]\d|cr\s*[2-9](?:\.\d+)?)\b/i.test(text)) ||
-    (kind === "vs" && /\b(bp\s*[5-8]\d\/|spo2\s*[0-8]\d|rr\s*[3-9]\d|t\s*3[89]\.|hr\s*1[3-9]\d)\b/i.test(text));
-
-  const labelMap: Record<BoardVisualKind, string> = {
-    s: "S",
-    vs: "V/S",
-    pe: "PE",
-    lab: "LAB",
-    image: "IMG",
-    task: "TASK",
-    dc: "DC",
-    other: "NOTE",
-  };
-
+  const classified = classifyClinicalLine(line, { fallbackKind });
   return {
-    kind,
-    label: labelMap[kind],
-    text: safeClinicalLine(text || withoutBang, 76),
-    critical,
+    kind: classified.kind,
+    label: classified.label,
+    text: safeClinicalLine(classified.text, 76),
+    tone: classified.tone,
   };
 }
 
@@ -139,7 +105,7 @@ function renderBoardVisualLines(lines: string[], fallback: string, fallbackKind:
         const visual = classifyBoardVisualLine(line, fallbackKind);
         return (
           <div
-            className={`board-visual-line board-visual-line-${visual.kind}${visual.critical ? " board-visual-line-critical" : ""}`}
+            className={`board-visual-line board-visual-line-${visual.kind} board-visual-line-${visual.tone}`}
             key={`${line}-${index}`}
           >
             <span className="board-visual-label">{visual.label}</span>
@@ -152,13 +118,14 @@ function renderBoardVisualLines(lines: string[], fallback: string, fallbackKind:
 }
 
 function boardProblemClass(title: string, lines: string[]) {
-  const text = `${title} ${lines.join(" ")}`.toLowerCase();
-  if (/\b(shock|sepsis|bacteremia|bleed|hypox|aki|critical|urgent|neutropenic|stroke|acs)\b/.test(text)) {
+  const classified = classifyClinicalLine(`${title} ${lines.join(" ")}`, { fallbackKind: "ap" });
+  if (classified.tone === "critical") {
     return "board-soap-problem board-soap-problem-critical";
   }
-  if (/\b(abx|antibiotic|teicoplanin|vancomycin|meropenem|cef|culture|oxygen|transfusion|consult|source)\b/.test(text)) {
+  if (classified.tone === "important") {
     return "board-soap-problem board-soap-problem-important";
   }
+  if (classified.tone === "info") return "board-soap-problem board-soap-problem-info";
   return "board-soap-problem";
 }
 

@@ -1029,6 +1029,29 @@ function getOpenAiErrorMessage(status: number, responseBody: Record<string, unkn
   return "OpenAI request failed. Check the Firebase Functions logs for details.";
 }
 
+function openAiHttpsError(status: number, responseBody: Record<string, unknown>) {
+  const errorInfo = responseBody.error as { code?: unknown; type?: unknown } | undefined;
+  const code = typeof errorInfo?.code === "string" ? errorInfo.code : "";
+  const message = getOpenAiErrorMessage(status, responseBody);
+
+  if (status === 401 || code === "invalid_api_key") {
+    return new HttpsError("failed-precondition", message);
+  }
+  if (status === 403) {
+    return new HttpsError("permission-denied", message);
+  }
+  if (status === 404 || code === "model_not_found") {
+    return new HttpsError("not-found", message);
+  }
+  if (status === 429) {
+    return new HttpsError("resource-exhausted", message);
+  }
+  if (status >= 500) {
+    return new HttpsError("unavailable", message);
+  }
+  return new HttpsError("internal", message);
+}
+
 function asPlainObject(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }
@@ -1362,7 +1385,7 @@ export const analyzePatientBatchText = onCall(
 
     const responseBody = (await openAiResponse.json().catch(() => ({}))) as Record<string, unknown>;
     if (!openAiResponse.ok) {
-      throw new HttpsError("internal", getOpenAiErrorMessage(openAiResponse.status, responseBody));
+      throw openAiHttpsError(openAiResponse.status, responseBody);
     }
 
     const refusal = extractRefusal(responseBody);
@@ -1506,7 +1529,7 @@ export const generateRoundSoap = onCall(
 
     const responseBody = (await openAiResponse.json().catch(() => ({}))) as Record<string, unknown>;
     if (!openAiResponse.ok) {
-      throw new HttpsError("internal", getOpenAiErrorMessage(openAiResponse.status, responseBody));
+      throw openAiHttpsError(openAiResponse.status, responseBody);
     }
 
     const refusal = extractRefusal(responseBody);
@@ -1516,21 +1539,21 @@ export const generateRoundSoap = onCall(
 
     const outputText = extractOutputText(responseBody);
     if (!outputText) {
-      throw new HttpsError("internal", "OpenAI returned no SOAP draft.");
+      throw new HttpsError("data-loss", "OpenAI returned no SOAP draft. Retry generation; no patient data was saved.");
     }
 
     let parsedDraft: unknown;
     try {
       parsedDraft = JSON.parse(outputText);
     } catch (error) {
-      logger.error("Failed to parse OpenAI round SOAP JSON", { error });
-      throw new HttpsError("internal", "OpenAI returned malformed SOAP JSON.");
+      logger.error("Failed to parse OpenAI round SOAP JSON", { error, workflowMode, model });
+      throw new HttpsError("data-loss", "OpenAI returned malformed SOAP JSON. Retry generation; no patient data was saved.");
     }
 
     const parsed = asPlainObject(parsedDraft);
     const soapText = truncateString(parsed.soapText, 14000).trim();
     if (!soapText) {
-      throw new HttpsError("internal", "OpenAI returned an empty SOAP draft.");
+      throw new HttpsError("data-loss", "OpenAI returned an empty SOAP draft. Retry generation; no patient data was saved.");
     }
 
     return {

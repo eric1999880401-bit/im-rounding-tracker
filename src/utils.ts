@@ -131,8 +131,9 @@ export function splitHighlightLines(value: string): HighlightLine[] {
     .map((line) => line.trim())
     .filter(Boolean)
     .flatMap((line) => {
-      const important = line.startsWith("!");
-      const text = important ? line.slice(1).trim() : line;
+      const tone = line.startsWith("!!") ? "critical" : line.startsWith("!") ? "important" : undefined;
+      const important = Boolean(tone);
+      const text = important ? line.replace(/^!+\s*/, "").trim() : line;
 
       function parseLine(nextText: string): HighlightLine {
         const kind: HighlightLine["kind"] = /^=.+=$/.test(nextText)
@@ -147,6 +148,7 @@ export function splitHighlightLines(value: string): HighlightLine[] {
 
         return {
           important,
+          tone,
           kind,
           text:
             kind === "dash"

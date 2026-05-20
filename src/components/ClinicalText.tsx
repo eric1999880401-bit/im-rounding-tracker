@@ -1,5 +1,6 @@
 import type { HighlightLine } from "../types";
 import { safeClinicalLine, splitHighlightLines } from "../utils";
+import { classifyClinicalLine, normalizeClinicalDisplayText } from "../clinicalLineClassifier";
 
 interface ClinicalTextProps {
   value: string;
@@ -37,18 +38,7 @@ function stripArrow(text: string) {
 }
 
 function displayClinicalText(text: string) {
-  return text
-    .replace(/^!+/, "")
-    .replace(/^(Lab:\s*)!?\s*(?:crit|critical|abn|abnormal|trend|anchor)\s+(?:infx|infection|lyte\/renal|renal\/lyte|anemia|heme|cardio|cardiac|liver|gi|nutrition|onc|tumor|glucose|endocrine|coag|other)\s*:\s*/i, "$1")
-    .replace(/^!?\s*(?:crit|critical|abn|abnormal|trend|anchor)\s+(?:infx|infection|lyte\/renal|renal\/lyte|anemia|heme|cardio|cardiac|liver|gi|nutrition|onc|tumor|glucose|endocrine|coag|other)\s*:\s*/i, "")
-    .replace(/^\s*(?:critical|urgent)\s*:\s*/i, "* ")
-    .replace(/\[\s*URGENT\s*\]\s*/gi, "* ")
-    .replace(/\bhigh-normal\b/gi, "\u2197 nl")
-    .replace(/\blow-normal\b/gi, "\u2198 nl")
-    .replace(/\bhigh\b/gi, "\u2191")
-    .replace(/\blow\b/gi, "\u2193")
-    .replace(/\s+/g, " ")
-    .trim();
+  return normalizeClinicalDisplayText(text);
 }
 
 const colorClassNames: Record<string, string> = {
@@ -96,13 +86,18 @@ function renderLines(lines: HighlightLine[], fallback: string, importantDefault 
     const numberMatch = line.text.match(/^(\d+)\.\s*(.*)$/);
     const rawDisplayText = numberMatch ? numberMatch[2] : line.kind === "arrow" ? stripArrow(line.text) : line.text;
     const displayText = displayClinicalText(rawDisplayText);
-    const isImportant = importantDefault || line.important;
+    const classified = classifyClinicalLine(rawDisplayText, {
+      explicitTone: line.tone ?? (importantDefault ? "critical" : line.important ? "important" : undefined),
+    });
+    const tone = classified.tone;
+    const isImportant = tone === "critical" || tone === "important";
 
     return (
       <div
         className={[
           "clinical-card",
           isImportant ? "important-clinical-card" : "",
+          `clinical-tone-${tone}`,
           line.kind === "section" ? "clinical-section-card" : "",
           line.kind === "dash" ? "clinical-dash-card" : "",
           line.kind === "arrow" ? "clinical-arrow-card" : "",

@@ -2317,6 +2317,24 @@ tbody tr:last-child td {
   border-left-color: #8f753d;
 }
 
+.board-visual-line-important {
+  background: var(--alert-bg);
+  border-color: var(--alert-border);
+  border-left-color: var(--warning-text);
+}
+
+.board-visual-line-important .board-visual-label {
+  background: var(--surface);
+  border-color: var(--alert-border);
+  color: var(--warning-text);
+}
+
+.board-visual-line-info {
+  background: var(--accent-soft-bg);
+  border-color: var(--accent-soft-border);
+  border-left-color: var(--accent);
+}
+
 .board-visual-line-critical {
   background: var(--danger-bg);
   border-color: var(--danger-border);
@@ -2378,6 +2396,12 @@ tbody tr:last-child td {
 
 .board-soap-problem-important strong {
   color: var(--accent);
+}
+
+.board-soap-problem-info {
+  background: var(--accent-soft-bg);
+  border-color: var(--accent-soft-border);
+  border-left-color: var(--accent);
 }
 
 .board-soap-problem-critical {
@@ -2618,6 +2642,28 @@ tbody tr:last-child td {
   border-left: 3px solid var(--danger-text);
   color: var(--danger-text);
   font-weight: 600;
+}
+
+.clinical-tone-critical {
+  background: var(--danger-bg);
+  border-color: var(--danger-border);
+  border-left: 3px solid var(--danger-text);
+  color: var(--danger-text);
+  font-weight: 700;
+}
+
+.clinical-tone-important {
+  background: var(--alert-bg);
+  border-color: var(--alert-border);
+  border-left: 3px solid var(--warning-text);
+  color: var(--text);
+  font-weight: 650;
+}
+
+.clinical-tone-info {
+  background: var(--accent-soft-bg);
+  border-color: var(--accent-soft-border);
+  border-left: 3px solid var(--accent);
 }
 
 .clinical-section-card {
@@ -3387,6 +3433,148 @@ tbody tr:last-child td {
   grid-template-columns: minmax(360px, 1.05fr) minmax(300px, 0.95fr);
 }
 
+.round-soap-structured-editor,
+.structured-soap-editor,
+.structured-soap-section,
+.structured-soap-problem,
+.structured-soap-lint,
+.raw-soap-details {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.structured-soap-main-heading {
+  align-items: start;
+  display: flex;
+  justify-content: space-between;
+}
+
+.structured-soap-main-heading strong {
+  display: block;
+  margin-bottom: 2px;
+}
+
+.structured-soap-section,
+.raw-soap-details {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 9px;
+}
+
+.structured-soap-section-heading,
+.structured-soap-problem-heading {
+  align-items: center;
+  display: flex;
+  gap: 6px;
+  justify-content: space-between;
+  min-width: 0;
+}
+
+.structured-soap-section-heading strong {
+  color: var(--text-subtle);
+  font-size: 11px;
+  font-weight: 850;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.structured-soap-line,
+.structured-soap-problem-heading {
+  align-items: start;
+  border-left: 3px solid transparent;
+  display: grid;
+  gap: 5px;
+  grid-template-columns: minmax(86px, auto) minmax(0, 1fr) auto;
+  min-width: 0;
+  padding-left: 5px;
+}
+
+.structured-soap-line:has(select + select) {
+  grid-template-columns: minmax(70px, auto) minmax(92px, auto) minmax(0, 1fr) auto;
+}
+
+.structured-soap-line select,
+.structured-soap-problem-heading select {
+  font-size: 11px;
+  min-height: 32px;
+  min-width: 0;
+  padding: 4px 6px;
+}
+
+.structured-soap-line textarea,
+.structured-soap-problem-heading input,
+.raw-soap-details textarea {
+  min-height: 32px;
+  resize: vertical;
+}
+
+.structured-soap-line-actions {
+  align-items: center;
+  display: flex;
+  gap: 3px;
+}
+
+.compact-button {
+  min-height: 28px;
+  padding: 3px 7px;
+}
+
+.structured-soap-problem {
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 8px;
+}
+
+.structured-soap-problem-heading {
+  grid-template-columns: auto minmax(96px, auto) minmax(0, 1fr) auto;
+}
+
+.structured-soap-problem-index {
+  background: var(--chip-bg);
+  border: 1px solid var(--chip-border);
+  border-radius: var(--radius-sm);
+  color: var(--chip-text);
+  font-weight: 850;
+  padding: 5px 7px;
+}
+
+.structured-soap-line-critical,
+.structured-soap-problem.structured-soap-line-critical {
+  border-left: 3px solid var(--danger-text);
+}
+
+.structured-soap-line-important,
+.structured-soap-problem.structured-soap-line-important {
+  border-left: 3px solid var(--warning-text);
+}
+
+.structured-soap-line-info,
+.structured-soap-problem.structured-soap-line-info {
+  border-left: 3px solid var(--accent);
+}
+
+.structured-soap-lint {
+  background: var(--warning-bg);
+  border: 1px solid var(--warning-border);
+  border-left: 3px solid var(--warning-text);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+}
+
+.structured-soap-lint-item {
+  color: var(--warning-text);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.structured-soap-lint-warning {
+  color: var(--danger-text);
+}
+
 .round-soap-preview {
   background: var(--surface-muted);
   border: 1px solid var(--border);
@@ -3511,6 +3699,12 @@ tbody tr:last-child td {
 }
 
 .soap-preview-line-important {
+  background: var(--alert-bg);
+  border-color: var(--alert-border);
+  border-left-color: var(--warning-text);
+}
+
+.soap-preview-line-info {
   background: var(--accent-soft-bg);
   border-color: var(--accent-soft-border);
   border-left-color: var(--accent);
@@ -3567,6 +3761,14 @@ tbody tr:last-child td {
 }
 
 .soap-preview-problem.soap-preview-line-important {
+  background: var(--alert-bg);
+  border-color: var(--alert-border);
+  border-left-color: var(--warning-text);
+}
+
+.soap-preview-problem.soap-preview-line-info {
+  background: var(--accent-soft-bg);
+  border-color: var(--accent-soft-border);
   border-left-color: var(--accent);
 }
 
@@ -4265,6 +4467,16 @@ tbody tr:last-child td {
   .patient-board-card-header {
     align-items: stretch;
     display: grid;
+  }
+
+  .structured-soap-line,
+  .structured-soap-line:has(select + select),
+  .structured-soap-problem-heading {
+    grid-template-columns: 1fr;
+  }
+
+  .structured-soap-line-actions {
+    justify-content: flex-start;
   }
 
   .patient-board-badges,
