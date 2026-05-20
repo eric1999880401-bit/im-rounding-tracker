@@ -28,7 +28,7 @@ function toneClass(tone: ClinicalLineTone) {
 
 function VisualLine({ label, text, fallbackKind = "other" }: { label?: string; text: string; fallbackKind?: ClinicalLineKind }) {
   const classified = classifyClinicalLine(text, { fallbackKind, lockKind: fallbackKind !== "other" });
-  const displayLabel = label || (fallbackKind === "task" && isOrderSoapLine(text) ? "ORD" : classified.label);
+  const displayLabel = label || (fallbackKind === "task" && isOrderSoapLine(text) ? "藥囑" : classified.label);
   return (
     <div className={`soap-preview-line soap-preview-line-${classified.kind} soap-preview-line-${toneClass(classified.tone)}`}>
       {displayLabel && <span className="soap-preview-line-label">{displayLabel}</span>}
@@ -87,6 +87,10 @@ export function SoapVisualPreview({ value, compact = false, layoutPreferences }:
     ...dcLines,
     ...apProblems.flatMap((problem) => [problem.title, ...problem.lines]),
   ].filter((line) => classifyClinicalLine(line).tone === "critical").length;
+  const mergedApLine = apProblems
+    .map((problem) => [problem.title, ...problem.lines].filter(Boolean).join(": "))
+    .filter(Boolean)
+    .join("； ");
 
   return (
     <div className={compact ? "soap-visual-preview compact-soap-visual-preview" : "soap-visual-preview"}>
@@ -125,7 +129,13 @@ export function SoapVisualPreview({ value, compact = false, layoutPreferences }:
           </Section>
         )}
 
-        {isLayoutSectionVisible(layoutPreferences, "assessmentPlan") && (
+        {isLayoutSectionVisible(layoutPreferences, "assessmentPlan") && layoutPreferences?.apDisplayMode === "merged" && (
+          <Section title="A/P" badge={apProblems.length ? "merged" : "0"} important={apProblems.length > 0}>
+            {mergedApLine ? <VisualLine text={mergedApLine} fallbackKind="ap" /> : <EmptyLine />}
+          </Section>
+        )}
+
+        {isLayoutSectionVisible(layoutPreferences, "assessmentPlan") && layoutPreferences?.apDisplayMode !== "merged" && (
           <Section title="A/P" badge={`${apProblems.length || 0}`} important={apProblems.length > 0}>
             {apProblems.length > 0 ? (
               <div className="soap-preview-ap-list">
@@ -155,8 +165,8 @@ export function SoapVisualPreview({ value, compact = false, layoutPreferences }:
         )}
 
         {isLayoutSectionVisible(layoutPreferences, "orders") && (
-          <Section title="Orders" badge={`${orderLines.length || 0}`}>
-            {orderLines.length > 0 ? orderLines.map((line, index) => <VisualLine key={`${line}-${index}`} text={line} fallbackKind="task" />) : <EmptyLine text="No order" />}
+          <Section title="藥囑" badge={`${orderLines.length || 0}`}>
+            {orderLines.length > 0 ? orderLines.map((line, index) => <VisualLine key={`${line}-${index}`} text={line} fallbackKind="task" />) : <EmptyLine text="無藥囑" />}
           </Section>
         )}
 

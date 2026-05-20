@@ -7,6 +7,7 @@ export interface SoapEditorLine {
   text: string;
   tone: ClinicalLineTone;
   kind: ClinicalLineKind;
+  subtype?: "order";
 }
 
 export interface SoapEditorProblem {
@@ -59,6 +60,26 @@ function makeLine(value: string, fallbackKind: ClinicalLineKind): SoapEditorLine
   };
 }
 
+function looksLikeOrderLine(value: string) {
+  const text = String(value ?? "").trim();
+  return (
+    /^\s*(?:order|orders?|meds?|藥囑)\s*[:：]/i.test(text) ||
+    /\b(?:order|check|replace|repeat|trend|monitor|start|stop|hold|resume|continue|complete|taper|titrate|wean)\b/i.test(text) ||
+    (/\b(?:iv|po|sc|im|mg|mcg|g|unit|units|q\d+h|qd|bid|tid|qid|prn|stat|x\s*\d+\s*d(?:ay)?s?)\b/i.test(text) &&
+      /\b(?:abx|antibiotic|cef|vanco|teico|levo|cipro|mero|tazo|zosyn|morphine|fentanyl|lasix|furosemide|heparin|insulin|ppi|pantoprazole|steroid|methylpred|prednisolone)\b/i.test(text))
+  );
+}
+
+function stripOrderPrefix(value: string) {
+  return String(value ?? "").replace(/^\s*(?:order|orders?|meds?|藥囑)\s*[:：]\s*/i, "").trim();
+}
+
+function makeTaskLine(value: string): SoapEditorLine {
+  const isOrder = looksLikeOrderLine(value);
+  const line = makeLine(isOrder ? stripOrderPrefix(value) : value, "task");
+  return isOrder ? { ...line, subtype: "order" } : line;
+}
+
 function makeProblem(problem: SoapApProblem): SoapEditorProblem {
   const classified = classifyClinicalLine(`${problem.title} ${problem.lines.join(" ")}`, { fallbackKind: "ap", explicitTone: bangTone(problem.title) });
   return {
@@ -95,7 +116,7 @@ export function parseSoapTextToEditorDraft(text: string): SoapEditorDraft {
     sLines: draft.sLines.map((line) => makeLine(line, "s")),
     oLines: draft.oLines.map((line) => makeLine(line, "other")),
     apProblems: draft.apProblems.map(makeProblem),
-    taskLines: draft.taskLines.map((line) => makeLine(line, "task")),
+    taskLines: draft.taskLines.map((line) => makeTaskLine(line)),
     dcLines: draft.dcLines.map((line) => makeLine(line, "dc")),
     warnings: draft.warnings.map((line) => makeLine(line, "other")),
     unsortedLines: [],
@@ -132,6 +153,15 @@ function serializeLine(line: SoapEditorLine, fallbackKind: ClinicalLineKind) {
   return `${tonePrefix}${prefix}${clean}`.trim();
 }
 
+function serializeTaskLine(line: SoapEditorLine) {
+  if (line.subtype !== "order") return serializeLine(line, "task");
+  const clean = safeClinicalLine(line.text, 170);
+  if (!clean) return "";
+  const tonePrefix = line.tone === "critical" ? "!! " : line.tone === "important" ? "! " : "";
+  const orderText = looksLikeOrderLine(clean) ? clean : `Order: ${clean}`;
+  return `${tonePrefix}${orderText}`.trim();
+}
+
 function serializeProblem(problem: SoapEditorProblem) {
   const title = safeClinicalLine(problem.title, 110) || "Problem";
   const lines = problem.lines.map((line) => serializeLine(line, "ap")).filter(Boolean).slice(0, 2);
@@ -149,7 +179,7 @@ export function editorDraftToSoapDraft(draft: SoapEditorDraft): SoapDraft {
     apProblems: draft.apProblems
       .map(serializeProblem)
       .filter((problem) => problem.title !== "Problem" || problem.lines.length > 0),
-    taskLines: draft.taskLines.map((line) => serializeLine(line, "task")).filter(Boolean),
+    taskLines: draft.taskLines.map((line) => serializeTaskLine(line)).filter(Boolean),
     dcLines: draft.dcLines.map((line) => serializeLine(line, "dc")).filter(Boolean),
     warnings: draft.warnings.map((line) => serializeLine(line, "other")).filter(Boolean),
   };

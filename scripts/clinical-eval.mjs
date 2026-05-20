@@ -1436,6 +1436,20 @@ try {
   if (!lintSoapEditorDraft(peImageDraft).some((issue) => /marked as PE/i.test(issue.text))) {
     throw new Error("structured editor did not warn when image/report text is marked PE");
   }
+  const orderEditorDraft = parseSoapTextToEditorDraft("Tasks:\n- Order: VS q4h\n- Complete Levofloxacin PO x5 days\n- f/u Cx");
+  if (orderEditorDraft.taskLines.filter((line) => line.subtype === "order").length !== 2) {
+    throw new Error(`structured editor did not split order-like task lines: ${JSON.stringify(orderEditorDraft.taskLines)}`);
+  }
+  const orderSoap = editorDraftToSoapText({
+    ...orderEditorDraft,
+    taskLines: [
+      { ...orderEditorDraft.taskLines[0], text: "VS q4h", subtype: "order" },
+      { ...orderEditorDraft.taskLines[2], text: "f/u Cx" },
+    ],
+  });
+  if (!/Tasks:[\s\S]*Order: VS q4h[\s\S]*f\/u Cx/i.test(orderSoap)) {
+    throw new Error(`structured editor did not serialize order lines safely:\n${orderSoap}`);
+  }
   console.log("PASS Structured SOAP editor normalizes symbols and shares clinical severity");
   supplementalPasses += 1;
 } catch (error) {
@@ -1454,7 +1468,10 @@ try {
   }
 
   const visibleSections = { ...visibleSectionsForPreset("compactSoap"), objectiveImages: false, tasks: false, dcBarriers: false, dcPrep: true };
-  const layout = normalizeRoundingLayoutPreferences({ preset: "compactSoap", visibleSections });
+  const layout = normalizeRoundingLayoutPreferences({ preset: "compactSoap", visibleSections, apDisplayMode: "merged" });
+  if (layout.apDisplayMode !== "merged") {
+    throw new Error("A/P display mode setting was not preserved");
+  }
   if (isObjectiveSoapLineVisible("Image: CXR: improved opacity", layout)) {
     throw new Error("O Image remained visible after objectiveImages was disabled");
   }

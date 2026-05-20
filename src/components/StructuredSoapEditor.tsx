@@ -7,6 +7,7 @@ import {
   type SoapEditorLine,
   type SoapEditorProblem,
 } from "../soapEditorDraft";
+import { isOrderSoapLine } from "../userPreferences";
 
 interface StructuredSoapEditorProps {
   draft: SoapEditorDraft;
@@ -32,6 +33,21 @@ const objectiveKindOptions: Array<{ value: ClinicalLineKind; label: string }> = 
 
 function cleanLines(lines: SoapEditorLine[]) {
   return lines.filter((line) => line.text.trim());
+}
+
+function isEditorOrderLine(line: SoapEditorLine) {
+  return line.subtype === "order" || isOrderSoapLine(line.text);
+}
+
+function asOrderLines(lines: SoapEditorLine[]) {
+  return lines.map((line) => ({ ...line, kind: "task" as const, subtype: "order" as const }));
+}
+
+function asTaskLines(lines: SoapEditorLine[]) {
+  return lines.map((line) => {
+    const { subtype, ...rest } = line;
+    return { ...rest, kind: "task" as const };
+  });
 }
 
 function updateLine(lines: SoapEditorLine[], id: string, patch: Partial<SoapEditorLine>) {
@@ -262,6 +278,8 @@ export function StructuredSoapEditor({
   const issues = lintSoapEditorDraft(draft);
   const updateDraft = (patch: Partial<SoapEditorDraft>) => onChange({ ...draft, ...patch });
   const problems = draft.apProblems.length > 0 ? draft.apProblems : [emptySoapEditorProblem()];
+  const orderLines = draft.taskLines.filter(isEditorOrderLine);
+  const taskOnlyLines = draft.taskLines.filter((line) => !isEditorOrderLine(line));
 
   return (
     <div className={compact ? "structured-soap-editor structured-soap-editor-compact" : "structured-soap-editor"}>
@@ -314,10 +332,18 @@ export function StructuredSoapEditor({
       </section>
 
       <SectionEditor
-        title="Tasks"
-        lines={draft.taskLines}
+        title="藥囑"
+        lines={orderLines}
         fallbackKind="task"
-        onChange={(taskLines) => updateDraft({ taskLines })}
+        onChange={(nextOrderLines) => updateDraft({ taskLines: [...asOrderLines(nextOrderLines), ...taskOnlyLines] })}
+        onCompositionStart={onCompositionStart}
+        onCompositionEnd={onCompositionEnd}
+      />
+      <SectionEditor
+        title="Tasks"
+        lines={taskOnlyLines}
+        fallbackKind="task"
+        onChange={(nextTaskLines) => updateDraft({ taskLines: [...orderLines, ...asTaskLines(nextTaskLines)] })}
         onCompositionStart={onCompositionStart}
         onCompositionEnd={onCompositionEnd}
       />

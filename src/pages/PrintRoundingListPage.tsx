@@ -235,7 +235,7 @@ function PrintRoundingListPage({
     });
     return {
       kind: classified.kind,
-      label: classified.kind === "task" ? (isOrderSoapLine(source) ? "ORD" : "T") : classified.label,
+      label: classified.kind === "task" ? (isOrderSoapLine(source) ? "藥囑" : "T") : classified.label,
       text: removePrintEllipsis(classified.text),
       tone: classified.tone,
     };
@@ -726,7 +726,7 @@ function PrintRoundingListPage({
     if (!isLayoutSectionVisible(roundingLayout, "assessmentPlan")) return "";
     const soap = patientToSoapDraft(patient, dailyNotesByPatient[patient.id] ?? [], todayKey());
     const maxProblems = printLimits().apProblems;
-    const apText = soap.apProblems
+    const apLines = soap.apProblems
       .slice(0, maxProblems)
       .map((problem) => {
         const body = problem.lines
@@ -735,8 +735,8 @@ function PrintRoundingListPage({
           .filter(Boolean)
           .join(", ");
         return shortText([problem.title, body].filter(Boolean).join(": "), printLimits().detailChars + 18);
-      })
-      .join("\n");
+      });
+    const apText = roundingLayout.apDisplayMode === "merged" ? apLines.join("； ") : apLines.join("\n");
     return apText || issueSummary(patient) || diagnosisSummary(patient);
   }
 
@@ -754,7 +754,7 @@ function PrintRoundingListPage({
 
   function taskDcTitle() {
     return [
-      isLayoutSectionVisible(roundingLayout, "orders") ? "Orders" : "",
+      isLayoutSectionVisible(roundingLayout, "orders") ? "藥囑" : "",
       isLayoutSectionVisible(roundingLayout, "tasks") ? "Tasks" : "",
       isLayoutSectionVisible(roundingLayout, "dcBarriers") || isLayoutSectionVisible(roundingLayout, "dcPrep") ? "DC" : "",
     ].filter(Boolean).join(" / ") || "Tasks / DC";

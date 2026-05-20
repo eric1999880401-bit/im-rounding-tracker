@@ -19,7 +19,7 @@ export const roundingLayoutSections: Array<{ id: RoundingLayoutSection; label: s
   { id: "objectiveLabs", label: "O: Lab" },
   { id: "objectiveImages", label: "O: Image" },
   { id: "assessmentPlan", label: "A/P" },
-  { id: "orders", label: "Orders" },
+  { id: "orders", label: "藥囑" },
   { id: "tasks", label: "Tasks" },
   { id: "dcBarriers", label: "DC barriers" },
   { id: "dcPrep", label: "Meds / OPD / Cert" },
@@ -61,6 +61,7 @@ export function visibleSectionsForPreset(preset: RoundingLayoutPreset): Record<R
 export const defaultRoundingLayoutPreferences: RoundingLayoutPreferences = {
   preset: "compactSoap",
   visibleSections: visibleSectionsForPreset("compactSoap"),
+  apDisplayMode: "separate",
   printDensity: "compact",
   boardDensity: "compact",
 };
@@ -89,6 +90,7 @@ export function normalizeRoundingLayoutPreferences(value: unknown): RoundingLayo
     visibleSections: Object.fromEntries(
       roundingLayoutSections.map((section) => [section.id, typeof customVisible[section.id] === "boolean" ? customVisible[section.id] : base[section.id]]),
     ) as Record<RoundingLayoutSection, boolean>,
+    apDisplayMode: source.apDisplayMode === "merged" ? "merged" : "separate",
     printDensity: normalizePrintDensity(source.printDensity, defaultRoundingLayoutPreferences.printDensity),
     boardDensity: normalizePrintDensity(source.boardDensity, defaultRoundingLayoutPreferences.boardDensity),
   };
@@ -189,8 +191,8 @@ export function normalizeUserAiStyleProfile(value: unknown): UserAiStyleProfile 
     : [];
   const taskStyle = source.taskStyle === "detailed" || source.taskStyle === "checklist" ? source.taskStyle : "concise";
   const sectionOrder = Array.isArray(source.sectionOrder)
-    ? source.sectionOrder.map(String).filter((item) => ["Header", "S", "O", "A/P", "Tasks", "DC"].includes(item)).slice(0, 6)
-    : ["Header", "S", "O", "A/P", "Tasks", "DC"];
+    ? source.sectionOrder.map(String).filter((item) => ["Header", "S", "O", "A/P", "Orders", "Tasks", "DC"].includes(item)).slice(0, 7)
+    : ["Header", "S", "O", "A/P", "Orders", "Tasks", "DC"];
   const apVoice = normalizeApVoice(source.apVoice);
   const apOrganization = normalizeApOrganization(source.apOrganization);
   const abbreviationStyle = normalizeAbbreviationStyle(source.abbreviationStyle);
@@ -297,7 +299,7 @@ export function buildUserAiStyleProfile(patients: Patient[], dailyNotesByPatient
     abbreviationStyle,
     preferredTerms,
     taskStyle,
-    sectionOrder: ["Header", "S", "O", "A/P", "Tasks", "DC"],
+    sectionOrder: ["Header", "S", "O", "A/P", "Orders", "Tasks", "DC"],
     typicalApProblemCount: median(apCounts, 4),
     typicalApLineLimit: median(apLineCounts, 2),
     updatedAt: new Date().toISOString(),

@@ -60,7 +60,7 @@ interface PageProps {
 
 const taskCategories: TaskCategory[] = ["lab", "imaging", "consult", "discharge", "family", "order", "other"];
 type BulkImportMode = NonNullable<AnalyzePatientBatchTextInput["importMode"]>;
-type BoardVisualKind = Extract<ClinicalLineKind, "s" | "vs" | "pe" | "lab" | "image" | "task" | "dc" | "other">;
+type BoardVisualKind = Extract<ClinicalLineKind, "s" | "vs" | "pe" | "lab" | "image" | "ap" | "task" | "dc" | "other">;
 
 function uniqueLines(...values: string[]) {
   const seen = new Set<string>();
@@ -100,8 +100,8 @@ function classifyBoardVisualLine(line: string, fallbackKind: BoardVisualKind = "
   const classified = classifyClinicalLine(line, { fallbackKind, lockKind: useLockKind });
   return {
     kind: classified.kind,
-    label: fallbackKind === "task" && isOrderSoapLine(line) ? "ORD" : classified.label,
-    text: safeClinicalLine(classified.text, 76),
+    label: fallbackKind === "task" && isOrderSoapLine(line) ? "藥囑" : classified.label,
+    text: safeClinicalLine(classified.text, fallbackKind === "ap" ? 140 : 76),
     tone: classified.tone,
   };
 }
@@ -1388,6 +1388,10 @@ function PatientBoardPage({
             const visibleSubjectiveLines = isLayoutSectionVisible(roundingLayout, "subjective") ? soap.sLines : [];
             const visibleObjectiveLines = soap.oLines.filter((line) => isObjectiveSoapLineVisible(line, roundingLayout));
             const visibleApProblems = isLayoutSectionVisible(roundingLayout, "assessmentPlan") ? soap.apProblems : [];
+            const mergedApLine = visibleApProblems
+              .map((problem) => [problem.title, ...problem.lines].filter(Boolean).join(": "))
+              .filter(Boolean)
+              .join("； ");
             const visibleTaskSourceLines = soap.taskLines.filter((line) => isTaskSoapLineVisible(line, roundingLayout));
             const visibleOrderLines = visibleTaskSourceLines.filter(isOrderSoapLine);
             const visibleTaskLines = visibleTaskSourceLines.filter((line) => !isOrderSoapLine(line));
@@ -1453,15 +1457,19 @@ function PatientBoardPage({
                 {isLayoutSectionVisible(roundingLayout, "assessmentPlan") && (
                   <section className="patient-board-section patient-board-soap-ap">
                     <span className="board-label">A/P</span>
-                    <div className="board-soap-ap-list">
-                      {visibleApProblems.slice(0, roundingLayout.boardDensity === "normal" ? 5 : 4).map((problem) => (
-                        <div className={boardProblemClass(problem.title, problem.lines)} key={`${problem.title}-${problem.lines.join("|")}`}>
-                          <strong>#{safeClinicalLine(problem.title, 56)}</strong>
-                          {problem.lines.length > 0 && <span>{safeClinicalLine(problem.lines.slice(0, 2).join("; "), 92)}</span>}
-                        </div>
-                      ))}
-                      {visibleApProblems.length === 0 && <span className="muted">-</span>}
-                    </div>
+                    {roundingLayout.apDisplayMode === "merged" ? (
+                      renderBoardVisualLines(mergedApLine ? [mergedApLine] : [], "-", "ap", 1)
+                    ) : (
+                      <div className="board-soap-ap-list">
+                        {visibleApProblems.slice(0, roundingLayout.boardDensity === "normal" ? 5 : 4).map((problem) => (
+                          <div className={boardProblemClass(problem.title, problem.lines)} key={`${problem.title}-${problem.lines.join("|")}`}>
+                            <strong>#{safeClinicalLine(problem.title, 56)}</strong>
+                            {problem.lines.length > 0 && <span>{safeClinicalLine(problem.lines.slice(0, 2).join("; "), 92)}</span>}
+                          </div>
+                        ))}
+                        {visibleApProblems.length === 0 && <span className="muted">-</span>}
+                      </div>
+                    )}
                   </section>
                 )}
 
@@ -1469,8 +1477,8 @@ function PatientBoardPage({
                   <section className="patient-board-section patient-board-tasks-dc">
                     {isLayoutSectionVisible(roundingLayout, "orders") && (
                       <div className="board-subsection patient-board-orders">
-                        <span className="board-label">Orders</span>
-                        {renderBoardVisualLines(visibleOrderLines, "No order", "task", 3)}
+                        <span className="board-label">藥囑</span>
+                        {renderBoardVisualLines(visibleOrderLines, "無藥囑", "task", 3)}
                       </div>
                     )}
                     {isLayoutSectionVisible(roundingLayout, "tasks") && (

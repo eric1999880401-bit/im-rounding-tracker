@@ -56,6 +56,7 @@ interface DailyUpdateFields {
   vitals: string;
   labs: string;
   images: string;
+  orders: string;
   other: string;
 }
 
@@ -64,6 +65,7 @@ interface NewSoapFields {
   vitals: string;
   labs: string;
   images: string;
+  orders: string;
   other: string;
 }
 
@@ -73,15 +75,17 @@ interface TransferSoapFields {
   vitals: string;
   labs: string;
   images: string;
+  orders: string;
   other: string;
 }
 
-const emptyDailyFields: DailyUpdateFields = { vitals: "", labs: "", images: "", other: "" };
+const emptyDailyFields: DailyUpdateFields = { vitals: "", labs: "", images: "", orders: "", other: "" };
 const emptyNewSoapFields: NewSoapFields = {
   admission: "",
   vitals: "",
   labs: "",
   images: "",
+  orders: "",
   other: "",
 };
 const emptyTransferFields: TransferSoapFields = {
@@ -90,6 +94,7 @@ const emptyTransferFields: TransferSoapFields = {
   vitals: "",
   labs: "",
   images: "",
+  orders: "",
   other: "",
 };
 
@@ -217,6 +222,7 @@ function RoundSoapComposer({
       sourceSection("V/S", dailyFields.vitals),
       sourceSection("Lab", dailyFields.labs),
       sourceSection("Image", dailyFields.images),
+      sourceSection("Orders / meds", dailyFields.orders),
       sourceSection("Other update / task / course", dailyFields.other),
     ].filter(Boolean).join("\n\n").trim();
   }
@@ -227,6 +233,7 @@ function RoundSoapComposer({
       sourceSection("V/S", newSoapFields.vitals),
       sourceSection("Lab", newSoapFields.labs),
       sourceSection("Image", newSoapFields.images),
+      sourceSection("Orders / meds", newSoapFields.orders),
       sourceSection("Description / other", newSoapFields.other),
     ].filter(Boolean).join("\n\n").trim();
   }
@@ -238,6 +245,7 @@ function RoundSoapComposer({
       sourceSection("V/S", transferFields.vitals),
       sourceSection("Lab", transferFields.labs),
       sourceSection("Image", transferFields.images),
+      sourceSection("Orders / meds", transferFields.orders),
       sourceSection("Description / other", transferFields.other),
     ].filter(Boolean).join("\n\n").trim();
   }
@@ -434,6 +442,21 @@ function RoundSoapComposer({
             />
           </label>
           <label>
+            藥囑
+            <textarea
+              value={dailyFields.orders}
+              onChange={(event) => updateDailyField("orders", event.target.value)}
+              onCompositionStart={() => {
+                isComposingRef.current = true;
+              }}
+              onCompositionEnd={() => {
+                isComposingRef.current = false;
+              }}
+              placeholder="Abx/IVF/O2/PRN meds, hold/resume meds, VS or lab orders"
+              rows={compact ? 2 : 3}
+            />
+          </label>
+          <label>
             Other update / tasks
             <textarea
               value={dailyFields.other}
@@ -508,6 +531,21 @@ function RoundSoapComposer({
                 isComposingRef.current = false;
               }}
               placeholder="CT/CXR/MRI/echo/scope: study + date + key impression"
+              rows={compact ? 2 : 3}
+            />
+          </label>
+          <label>
+            藥囑
+            <textarea
+              value={newSoapFields.orders}
+              onChange={(event) => updateNewSoapField("orders", event.target.value)}
+              onCompositionStart={() => {
+                isComposingRef.current = true;
+              }}
+              onCompositionEnd={() => {
+                isComposingRef.current = false;
+              }}
+              placeholder="Initial Abx/IVF/O2/PRN meds, hold/resume meds, monitoring orders"
               rows={compact ? 2 : 3}
             />
           </label>
@@ -601,6 +639,21 @@ function RoundSoapComposer({
                 isComposingRef.current = false;
               }}
               placeholder="CT/CXR/MRI/echo/scope: study + date + key impression"
+              rows={compact ? 2 : 3}
+            />
+          </label>
+          <label>
+            藥囑
+            <textarea
+              value={transferFields.orders}
+              onChange={(event) => updateTransferField("orders", event.target.value)}
+              onCompositionStart={() => {
+                isComposingRef.current = true;
+              }}
+              onCompositionEnd={() => {
+                isComposingRef.current = false;
+              }}
+              placeholder="Current Abx/O2/IVF/PRN meds, hold/resume meds, monitoring orders"
               rows={compact ? 2 : 3}
             />
           </label>

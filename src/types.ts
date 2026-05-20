@@ -495,6 +495,7 @@ export type RoundingLayoutSection =
 export interface RoundingLayoutPreferences {
   preset: RoundingLayoutPreset;
   visibleSections: Record<RoundingLayoutSection, boolean>;
+  apDisplayMode: "separate" | "merged";
   printDensity: PrintDensity;
   boardDensity: PrintDensity;
 }

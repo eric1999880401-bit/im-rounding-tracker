@@ -107,6 +107,13 @@ function SettingsPage({ preferences, userName, onChange, onRefreshAiStyleProfile
               <option value="ultra-compact">Ultra compact</option>
             </select>
           </label>
+          <label>
+            A/P 顯示方式
+            <select value={roundingLayout.apDisplayMode} onChange={(event) => updateLayout({ apDisplayMode: event.target.value as typeof roundingLayout.apDisplayMode })}>
+              <option value="separate">分開 problem 顯示</option>
+              <option value="merged">合併成簡短清單</option>
+            </select>
+          </label>
           <div className="layout-section-grid span-2">
             {roundingLayoutSections.map((section) => (
               <label className="checkbox-label layout-section-option" key={section.id}>

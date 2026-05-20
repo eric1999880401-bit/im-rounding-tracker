@@ -527,7 +527,7 @@ function sanitizeUserStyleProfile(input: unknown) {
     abbreviationStyle: ["minimal", "moderate", "heavy"].includes(abbreviationStyle) ? abbreviationStyle : "moderate",
     preferredTerms: asStringArray(source.preferredTerms).filter((term) => allowedTerms.has(term)).slice(0, 12),
     taskStyle: ["concise", "checklist", "detailed"].includes(taskStyle) ? taskStyle : "concise",
-    sectionOrder: asStringArray(source.sectionOrder).filter((item) => ["Header", "S", "O", "A/P", "Tasks", "DC"].includes(item)).slice(0, 6),
+    sectionOrder: asStringArray(source.sectionOrder).filter((item) => ["Header", "S", "O", "A/P", "Orders", "Tasks", "DC"].includes(item)).slice(0, 7),
     typicalApProblemCount: Math.max(1, Math.min(8, Number(source.typicalApProblemCount ?? source.apProblemCount) || 4)),
     typicalApLineLimit: Math.max(1, Math.min(4, Number(source.typicalApLineLimit ?? source.apLineLimit) || 2)),
   };
@@ -1286,7 +1286,7 @@ function makeRoundSoapPrompt(params: {
     "",
     "Output format requirements:",
     "- Return SOAP text only inside JSON soapText.",
-    "- Use this exact section order: header context, S:, O:, A/P:, Tasks:, DC:.",
+    "- Use this exact section order: header context, S:, O:, A/P:, Tasks:, DC:. Medication/order items still belong under Tasks: but should start with 'Order:' or a clear medication/order phrase so the editor can display them in the 藥囑 section.",
     "- Header should include bed/code/age-sex if known, Dx, PMH if high-yield, attending/date if useful.",
     "- O must use fixed order V/S, PE, Lab, Image. Put imaging reports under Image, never PE.",
     "- A/P must use '# problem' blocks, 3-5 active problems maximum.",
