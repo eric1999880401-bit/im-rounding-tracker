@@ -33,6 +33,7 @@ const {
   normalizeRoundingLayoutPreferences,
   visibleSectionsForPreset,
 } = await server.ssrLoadModule("/src/userPreferences.ts");
+const { isComplexPrintDraft, selectPriorityPrintItems } = await server.ssrLoadModule("/src/printPriority.ts");
 
 const failures = [];
 
@@ -101,7 +102,7 @@ function makeDefaultLayout(overrides = {}) {
     visibleSections: { ...visibleSectionsForPreset("compactSoap"), ...overrides.visibleSections },
     orderDisplayMode: "summary",
     apDisplayMode: "separate",
-    printDensity: "ultra-compact",
+    printDensity: "normal",
     boardDensity: "compact",
     ...overrides,
   });
@@ -121,6 +122,15 @@ function surfaceSnapshot(patient, notes, date, layout = makeDefaultLayout()) {
   const printApLabels = draft.apProblems.flatMap((problem) => [problem.title, ...problem.lines]).map((line) =>
     classifyClinicalLine(line, { fallbackKind: "ap", lockKind: true }).label,
   );
+  const imageLines = draft.oLines.filter((line) => /^Image:/i.test(line)).map((line) => line.replace(/^Image:\s*/i, ""));
+  const apPrintLines = draft.apProblems.map((problem) => [problem.title, ...problem.lines].filter(Boolean).join(": "));
+  const taskPrintLines = [...orderDisplay, ...visibleTaskLines.filter((line) => !isOrderSoapLine(line)), ...visibleDcLines.map((line) => (/^Prep:/i.test(line) ? line : `DC: ${line}`))];
+  const printPriorityText = [
+    ...selectPriorityPrintItems(visibleObjective, { fallbackKind: "other", maxItems: 5, maxChars: 112 }),
+    ...selectPriorityPrintItems(imageLines, { fallbackKind: "image", maxItems: 3, maxChars: 112 }),
+    ...selectPriorityPrintItems(apPrintLines, { fallbackKind: "ap", maxItems: 5, maxChars: 136 }),
+    ...selectPriorityPrintItems(taskPrintLines, { fallbackKind: "task", maxItems: 8, maxChars: 112 }),
+  ].map((item) => item.text).join("\n");
 
   return {
     canonical,
@@ -133,6 +143,8 @@ function surfaceSnapshot(patient, notes, date, layout = makeDefaultLayout()) {
     visibleOrderLines,
     orderDisplay,
     printApLabels,
+    isComplexPrint: isComplexPrintDraft(draft),
+    printPriorityText,
   };
 }
 
@@ -349,6 +361,12 @@ function wardScenario() {
   assertCompactAp(snapshot.draft, "Complex ward discharge-ready Print");
   assertIncludes(snapshot.detailsText, /Ready: RA stable|OPD booked|certificate done/i, "ward DC ready");
   assertIncludes(snapshot.orderDisplay.join("\n"), /Abx: Ceftriaxone/i, "ward print order display");
+  assert(snapshot.isComplexPrint, "ward discharge-ready patient should auto-expand in Print");
+  assertIncludes(snapshot.printPriorityText, /Ceftriaxone|Azithromycin/i, "ward priority print keeps Abx");
+  assertIncludes(snapshot.printPriorityText, /B\/C negative|Cx/i, "ward priority print keeps cultures");
+  assertIncludes(snapshot.printPriorityText, /Cr 1\.3|Cr 1\.7/i, "ward priority print keeps renal trend");
+  assertIncludes(snapshot.printPriorityText, /CXR 5\/2/i, "ward priority print keeps image study/date");
+  assertIncludes(snapshot.printPriorityText, /OPD booked|certificate done/i, "ward priority print keeps DC blockers/prep");
   assert(styleProfile.styleSummary.some((line) => /Common terms:.*f\/u/i.test(line)), "style profile should carry user shorthand into AI prompt context");
 }
 
@@ -484,6 +502,28 @@ function icuTransferScenario() {
   assertCompactAp(snapshot.draft, "ICU ward daily Print");
   assert(snapshot.visibleObjective.some((line) => /^Lab:/i.test(line)) && snapshot.visibleObjective.some((line) => /^Image:/i.test(line)), "ICU print should show lab and image sections");
   assert(snapshot.visibleTaskLines.some((line) => /Meropenem|Vanco|apixaban/i.test(line)), "ICU print should keep high-yield order/task line");
+  assert(snapshot.isComplexPrint, "ICU transfer should auto-expand in Print");
+  assertIncludes(snapshot.printPriorityText, /ERCP|source control|shock resolved/i, "ICU priority print keeps source control/resolved shock context");
+  assertIncludes(snapshot.printPriorityText, /Cr 2\.1 from 2\.7|K 4\.7|UO/i, "ICU priority print keeps AKI/K/UO");
+  assertIncludes(snapshot.printPriorityText, /O2 NC1L|pCO2 52|CXR 5\/18/i, "ICU priority print keeps O2/CO2/image");
+  assertIncludes(snapshot.printPriorityText, /AF\/HFrEF|apixaban|heparin hold/i, "ICU priority print keeps AC decision");
+  assertIncludes(snapshot.printPriorityText, /rehab placement|Barrier: O2 wean, renal recovery, AC restart, rehab bed/i, "ICU priority print keeps rehab/DC barrier");
+}
+
+function printPrioritySelectorScenario() {
+  const crowdedLines = [
+    "routine diet tolerated",
+    "walking with family",
+    "Lab: ! K 6.1, Cr 2.7",
+    "Image: CXR 5/18 aspiration opacity improved",
+    "routine senna and vitamin",
+    "A/P: AKI on CKD: Cr/K improving; renal-dose meds, avoid nephrotoxin.",
+  ];
+  const selected = selectPriorityPrintItems(crowdedLines, { fallbackKind: "lab", maxItems: 2, maxChars: 22 }).map((item) => item.text).join("\n");
+  assertIncludes(selected, /K 6\.1|Cr 2\.7/i, "priority selector keeps critical lab beyond first-N");
+  assertIncludes(selected, /CXR 5\/18/i, "priority selector keeps image finding beyond first-N");
+  assertIncludes(selected, /\+\d+ routine hidden/i, "priority selector shows hidden routine count");
+  assertNotIncludes(selected, /\b(?:w\/|no|after|CT)\s*$/i, "priority selector should not leave dangling tails");
 }
 
 function runCase(name, fn) {
@@ -497,8 +537,13 @@ function runCase(name, fn) {
   }
 }
 
-runCase("Complex ward admission-to-discharge SOAP/list workflow", wardScenario);
-runCase("ICU transfer-to-ward-rounding SOAP/list workflow", icuTransferScenario);
+const cases = [
+  ["Complex ward admission-to-discharge SOAP/list workflow", wardScenario],
+  ["ICU transfer-to-ward-rounding SOAP/list workflow", icuTransferScenario],
+  ["Print priority selector preserves high-yield lines over first-N compacting", printPrioritySelectorScenario],
+];
+
+cases.forEach(([name, fn]) => runCase(name, fn));
 
 await server.close();
 
@@ -507,4 +552,4 @@ if (failures.length > 0) {
   process.exit(1);
 }
 
-console.log("\n2 clinical E2E scenarios passed.");
+console.log(`\n${cases.length} clinical E2E scenarios passed.`);

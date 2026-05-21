@@ -554,6 +554,18 @@
   grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.15fr) minmax(0, 1.25fr) minmax(0, 1fr);
 }
 
+.print-patient-expanded .print-summary-grid {
+  grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.05fr) minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.print-patient-expanded .print-summary-grid .print-section-box:nth-child(3) {
+  grid-column: span 2;
+}
+
+.print-patient-expanded .print-summary-grid .print-section-box:nth-child(4) {
+  grid-column: 1 / -1;
+}
+
 .print-section-box {
   background: #f8fafc;
   border: 1px solid #cbd5e1;
@@ -616,6 +628,11 @@
   padding: 1px 2px;
 }
 
+.print-patient-expanded .print-visual-row {
+  grid-template-columns: 30px minmax(0, 1fr);
+  padding: 1px 3px;
+}
+
 .print-visual-label {
   background: #e5e7eb;
   border: 0.5px solid #cbd5e1;
@@ -636,6 +653,18 @@
   line-height: var(--print-line-height);
   min-width: 0;
   overflow-wrap: anywhere;
+}
+
+.print-visual-hidden-note {
+  background: #f8fafc;
+  border-color: #e2e8f0;
+  border-left-color: #cbd5e1;
+}
+
+.print-visual-hidden-note .print-visual-label,
+.print-visual-hidden-note .print-visual-text {
+  color: #64748b !important;
+  font-weight: 650;
 }
 
 .print-visual-s {

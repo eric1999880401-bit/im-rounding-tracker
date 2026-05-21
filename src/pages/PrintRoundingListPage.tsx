@@ -20,8 +20,14 @@ import { ClinicalText } from "../components/ClinicalText";
 import { useT } from "../i18n";
 import { getRoundingDigest } from "../roundingDigest";
 import { patientToSoapDraft } from "../soapDraft";
-import { classifyClinicalLine, type ClinicalLineKind } from "../clinicalLineClassifier";
 import { formatMedicationOrderLinesForDisplay } from "../medicationOrderParser";
+import {
+  classifyPrintVisualItem as classifyPriorityPrintVisualItem,
+  isComplexPrintDraft,
+  selectPriorityPrintItems,
+  shortPrintText,
+  type PrintVisualKind,
+} from "../printPriority";
 import {
   isDcSoapLineVisible,
   isLayoutSectionVisible,
@@ -30,7 +36,6 @@ import {
   isSoapHeaderLineVisible,
   isTaskSoapLineVisible,
   normalizeRoundingLayoutPreferences,
-  stripOrderLinePrefix,
 } from "../userPreferences";
 
 interface PageProps {
@@ -41,8 +46,6 @@ interface PageProps {
   miscTasks?: MiscTask[];
   studyTopics?: StudyTopic[];
 }
-
-type PrintVisualKind = Extract<ClinicalLineKind, "s" | "vs" | "pe" | "lab" | "image" | "ap" | "task" | "dc" | "red" | "other">;
 
 function PrintRoundingListPage({
   patients,
@@ -58,7 +61,7 @@ function PrintRoundingListPage({
   const [admissionBriefPrintMode, setAdmissionBriefPrintMode] = useState("compact");
   const [selectedAttending, setSelectedAttending] = useState("");
   const [hideCompletedTasks, setHideCompletedTasks] = useState(true);
-  const [density, setDensity] = useState<PrintDensity>(roundingLayout.printDensity);
+  const [density, setDensity] = useState<PrintDensity>(roundingLayout.printDensity === "ultra-compact" ? "ultra-compact" : "normal");
   const [sortMode, setSortMode] = useState<SortMode>("bed");
   const [team, setTeam] = useState("Team A");
   const [attending, setAttending] = useState("");
@@ -165,6 +168,45 @@ function PrintRoundingListPage({
     };
   }
 
+  function printLimitsForPatient(patient: Patient) {
+    const base = printLimits();
+    const soap = patientToSoapDraft(patient, dailyNotesByPatient[patient.id] ?? [], todayKey());
+    if (!isComplexPrintDraft(soap)) return base;
+
+    if (density === "ultra-compact") {
+      return {
+        ...base,
+        detailChars: Math.max(base.detailChars, 70),
+        redFlags: Math.max(base.redFlags, 3),
+        labItems: Math.max(base.labItems, 6),
+        images: Math.max(base.images, 2),
+        apProblems: Math.max(base.apProblems, 4),
+        tasks: Math.max(base.tasks, 5),
+        dcChars: Math.max(base.dcChars, 56),
+      };
+    }
+
+    return {
+      ...base,
+      chars: Math.max(base.chars, 70),
+      detailChars: Math.max(base.detailChars, 112),
+      redFlags: Math.max(base.redFlags, 3),
+      subjective: Math.max(base.subjective, 3),
+      pe: Math.max(base.pe, 2),
+      labReports: Math.max(base.labReports, 2),
+      labItems: Math.max(base.labItems, 9),
+      images: Math.max(base.images, 3),
+      apProblems: Math.max(base.apProblems, 5),
+      tasks: Math.max(base.tasks, 7),
+      dcChars: Math.max(base.dcChars, 90),
+    };
+  }
+
+  function isExpandedPrintPatient(patient: Patient) {
+    if (density === "ultra-compact") return false;
+    return isComplexPrintDraft(patientToSoapDraft(patient, dailyNotesByPatient[patient.id] ?? [], todayKey()));
+  }
+
   function cleanPrintLine(value: string) {
     return value
       .replace(/\s+-\s*Reason:\s*.*$/i, "")
@@ -203,18 +245,8 @@ function PrintRoundingListPage({
     return /^!/.test(value.trim()) || /\bcritical\b|\burgent\b|\[URGENT\]|\bLab\s+\*/i.test(value);
   }
 
-  function printListItems(value: string) {
-    const seen = new Set<string>();
-    return value
-      .split(/\r?\n|;\s*|\s+\|\s+/)
-      .map((line) => ({ raw: line, text: displayPrintLine(line) }))
-      .filter((item) => item.text)
-      .filter((item) => {
-        const key = item.text.toLowerCase();
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
-      });
+  function printListItems(value: string | string[], fallbackKind: PrintVisualKind = "other", maxItems = Number.POSITIVE_INFINITY, maxChars = printLimits().detailChars) {
+    return selectPriorityPrintItems(value, { fallbackKind, maxItems, maxChars });
   }
 
   function printItemClassName(item: { raw: string; text: string }) {
@@ -228,22 +260,10 @@ function PrintRoundingListPage({
   }
 
   function classifyPrintVisualItem(item: { raw: string; text: string }, fallbackKind: PrintVisualKind) {
-    const source = item.raw || item.text;
-    const isDcLine = /^!*\s*DC\s*:/i.test(source);
-    const lockedKind = fallbackKind === "task" && isDcLine ? "dc" : fallbackKind;
-    const classified = classifyClinicalLine(source, {
-      fallbackKind: lockedKind,
-      lockKind: lockedKind !== "other" && lockedKind !== "image",
-    });
-    return {
-      kind: classified.kind,
-      label: classified.kind === "task" ? (isOrderSoapLine(source) ? "藥囑" : "T") : classified.label,
-      text: removePrintEllipsis(isOrderSoapLine(source) ? stripOrderLinePrefix(classified.text) : classified.text),
-      tone: classified.tone,
-    };
+    return classifyPriorityPrintVisualItem(item, fallbackKind);
   }
 
-  function renderPrintVisualItems(items: Array<{ raw: string; text: string }>, keyPrefix: string, fallbackKind: PrintVisualKind) {
+  function renderPrintVisualItems(items: Array<{ raw: string; text: string; hidden?: boolean }>, keyPrefix: string, fallbackKind: PrintVisualKind) {
     if (items.length === 0) return null;
     return (
       <div className="print-visual-list">
@@ -252,7 +272,7 @@ function PrintRoundingListPage({
           const visualLabel = visual.label.includes("亙") ? "藥囑" : visual.label;
           return (
             <div
-              className={`print-visual-row print-visual-${visual.kind} print-visual-${visual.tone}`}
+              className={`print-visual-row print-visual-${visual.kind} print-visual-${visual.tone}${item.hidden ? " print-visual-hidden-note" : ""}`}
               key={`${keyPrefix}-${visualLabel}-${visual.text}-${index}`}
             >
               <span className="print-visual-label">{visualLabel}</span>
@@ -272,10 +292,7 @@ function PrintRoundingListPage({
   }
 
   function shortText(value: string, maxChars = printLimits().detailChars) {
-    const clean = cleanPrintLine(value);
-    if (clean.length <= maxChars) return clean;
-    const firstClause = clean.split(/[;\n\u3002\uFF1B]/)[0]?.trim() || clean;
-    return toShortWords(firstClause, maxChars);
+    return shortPrintText(value, maxChars);
   }
 
   function cleanPrintTail(value: string) {
@@ -570,10 +587,11 @@ function PrintRoundingListPage({
   }
 
   function labFocusGroups(patient: Patient) {
+    const limits = printLimitsForPatient(patient);
     const labFocus = getLabFocusSummary(patient, dailyNotesByPatient[patient.id] ?? [], {
-      maxCritical: 3,
-      maxTrend: 4,
-      maxAnchors: 3,
+      maxCritical: Math.max(3, Math.ceil(limits.labItems / 3)),
+      maxTrend: Math.max(4, limits.labItems),
+      maxAnchors: Math.max(3, Math.ceil(limits.labItems / 3)),
       separator: " | ",
     });
     const stripSeverityLabel = (value: string) => displayPrintLine(value).replace(/^(?:Crit|Abn|Trend|Anchor)\s+/i, "");
@@ -627,7 +645,7 @@ function PrintRoundingListPage({
             <span className="print-lab-chip-row">
               {group.items.map((item) => (
                 <span className={`print-lab-chip ${group.important ? "important" : ""}`} key={`${group.label}-${item}`}>
-                  {shortText(item, printLimits().chars)}
+                  {shortText(item, printLimitsForPatient(patient).chars)}
                 </span>
               ))}
             </span>
@@ -641,7 +659,7 @@ function PrintRoundingListPage({
     return getRoundingDigest(patient, dailyNotesByPatient[patient.id] ?? [], {
       mode: "board",
       hideCompletedTasks,
-    }).image.split(/\n/).map(cleanPrintLine).filter(Boolean).slice(0, printLimits().images);
+    }).image.split(/\n/).map(cleanPrintLine).filter(Boolean).slice(0, printLimitsForPatient(patient).images);
   }
 
   function peSummaryText(patient: Patient) {
@@ -708,13 +726,15 @@ function PrintRoundingListPage({
   function subjectiveSoapText(patient: Patient) {
     if (!isLayoutSectionVisible(roundingLayout, "subjective")) return "";
     const soap = patientToSoapDraft(patient, dailyNotesByPatient[patient.id] ?? [], todayKey());
-    return compactList(soap.sLines, density === "ultra-compact" ? 2 : 3, printLimits().detailChars);
+    const limits = printLimitsForPatient(patient);
+    return printListItems(soap.sLines, "s", limits.subjective, limits.detailChars).map((item) => item.raw).join("\n");
   }
 
   function objectiveSoapText(patient: Patient) {
     const soap = patientToSoapDraft(patient, dailyNotesByPatient[patient.id] ?? [], todayKey());
     const objectiveLines = soap.oLines.filter((line) => isObjectiveSoapLineVisible(line, roundingLayout) && !/^(?:lab|image|img)\s*:/i.test(line));
-    return compactList(objectiveLines, density === "ultra-compact" ? 2 : 3, printLimits().detailChars);
+    const limits = printLimitsForPatient(patient);
+    return printListItems(objectiveLines, "other", density === "ultra-compact" ? 2 : limits.pe + 2, limits.detailChars).map((item) => item.raw).join("\n");
   }
 
   function imageSoapText(patient: Patient) {
@@ -723,42 +743,44 @@ function PrintRoundingListPage({
     const images = soap.oLines
       .filter((line) => /^(?:image|img)\s*:/i.test(line))
       .map((line) => line.replace(/^(?:image|img)\s*:\s*/i, ""));
-    return images.length > 0 ? `Img: ${images.join("; ")}` : "";
+    const limits = printLimitsForPatient(patient);
+    return printListItems(images, "image", limits.images, limits.detailChars).map((item) => item.raw).join("\n");
   }
 
   function assessmentSoapText(patient: Patient) {
     if (!isLayoutSectionVisible(roundingLayout, "assessmentPlan")) return "";
     const soap = patientToSoapDraft(patient, dailyNotesByPatient[patient.id] ?? [], todayKey());
-    const maxProblems = printLimits().apProblems;
+    const limits = printLimitsForPatient(patient);
     const apLines = soap.apProblems
-      .slice(0, maxProblems)
       .map((problem) => {
         const body = problem.lines
           .slice(0, density === "ultra-compact" ? 1 : 2)
-          .map((line) => shortText(line, printLimits().detailChars))
+          .map(cleanPrintLine)
           .filter(Boolean)
-          .join(", ");
-        return shortText([problem.title, body].filter(Boolean).join(": "), printLimits().detailChars + 18);
+          .join("; ");
+        return [problem.title, body].filter(Boolean).join(": ");
       });
-    const apText = roundingLayout.apDisplayMode === "merged" ? apLines.join("； ") : apLines.join("\n");
+    const apText = printListItems(apLines, "ap", limits.apProblems, limits.detailChars + 24)
+      .map((item) => item.raw)
+      .join(roundingLayout.apDisplayMode === "merged" ? " | " : "\n");
     return apText || issueSummary(patient) || diagnosisSummary(patient);
   }
 
   function taskDcText(patient: Patient) {
     const soap = patientToSoapDraft(patient, dailyNotesByPatient[patient.id] ?? [], todayKey());
-    const taskLimit = printLimits().tasks;
+    const limits = printLimitsForPatient(patient);
+    const taskLimit = limits.tasks;
     const dcLimit = density === "normal" ? 2 : 1;
     const visibleTaskSourceLines = soap.taskLines.filter((line) => isTaskSoapLineVisible(line, roundingLayout));
     const orderLines = visibleTaskSourceLines.filter(isOrderSoapLine);
     const taskLines = visibleTaskSourceLines.filter((line) => !isOrderSoapLine(line));
-    const displayOrderLines = formatMedicationOrderLinesForDisplay(orderLines, roundingLayout.orderDisplayMode, Math.min(taskLimit, density === "normal" ? 6 : 4));
-    return [
+    const displayOrderLines = formatMedicationOrderLinesForDisplay(orderLines, roundingLayout.orderDisplayMode, Math.min(taskLimit, density === "normal" ? 8 : 4));
+    const taskDcLines = [
       ...displayOrderLines,
-      ...taskLines.slice(0, Math.max(taskLimit - displayOrderLines.length, 0)),
+      ...taskLines,
       ...soap.dcLines.filter((line) => isDcSoapLineVisible(line, roundingLayout)).slice(0, dcLimit).map((line) => (/^Prep:/i.test(line) ? line : `DC: ${line}`)),
-    ]
-      .filter(Boolean)
-      .join("; ");
+    ].filter(Boolean);
+    return printListItems(taskDcLines, "task", taskLimit + dcLimit, limits.detailChars).map((item) => item.raw).join("\n");
   }
 
   function taskDcTitle() {
@@ -780,7 +802,7 @@ function PrintRoundingListPage({
   }
 
   function sectionBox(title: string, value: string, extra?: ReactNode, fallbackKind: PrintVisualKind = "other") {
-    const visibleItems = printListItems(value);
+    const visibleItems = printListItems(value.split(/\r?\n/), fallbackKind);
     if (visibleItems.length === 0 && !extra) return null;
     return (
       <div className="print-section-box">
@@ -792,7 +814,7 @@ function PrintRoundingListPage({
   }
 
   function renderPrintItems(value: string, keyPrefix: string, fallbackKind: PrintVisualKind = "other") {
-    const visibleItems = printListItems(value);
+    const visibleItems = printListItems(value.split(/\r?\n/), fallbackKind);
     if (visibleItems.length === 0) return null;
     return <div className="print-soap-list-extra">{renderPrintVisualItems(visibleItems, keyPrefix, fallbackKind)}</div>;
   }
@@ -866,18 +888,15 @@ function PrintRoundingListPage({
         <div className="print-patient-list">
           {sectionPatients.map((patient) => {
             const soapForPrint = patientToSoapDraft(patient, dailyNotesByPatient[patient.id] ?? [], todayKey());
+            const limits = printLimitsForPatient(patient);
+            const isExpanded = isExpandedPrintPatient(patient);
             const soapRedFlags = isLayoutSectionVisible(roundingLayout, "redFlags")
               ? soapForPrint.header.find((line) => /^Red flags:/i.test(line))?.replace(/^Red flags:\s*/i, "") ?? ""
               : "";
-            const redFlags = compactList(
-              clinicalItems(soapRedFlags).map(simpleRedFlagText),
-              printLimits().redFlags,
-              printLimits().detailChars,
-            );
-            const redFlagItems = printListItems(redFlags);
+            const redFlagItems = printListItems(clinicalItems(soapRedFlags).map(simpleRedFlagText), "red", limits.redFlags, limits.detailChars);
 
             return (
-              <article className="print-patient-block" key={patient.id}>
+              <article className={isExpanded ? "print-patient-block print-patient-expanded" : "print-patient-block"} key={patient.id}>
                 <div className="print-patient-header">
                   <span className="print-bed">{patient.bed || "-"}</span>
                   <span>

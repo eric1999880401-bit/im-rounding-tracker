@@ -65,7 +65,7 @@ export const defaultRoundingLayoutPreferences: RoundingLayoutPreferences = {
   visibleSections: visibleSectionsForPreset("compactSoap"),
   apDisplayMode: "separate",
   orderDisplayMode: "summary",
-  printDensity: "compact",
+  printDensity: "normal",
   boardDensity: "compact",
 };
 
