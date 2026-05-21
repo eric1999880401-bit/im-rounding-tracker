@@ -23,6 +23,7 @@ import { applyClinicalKnowledgeToPatientImportDraft } from "../clinicalKnowledge
 import { buildConcisePatientClinicalUpdate } from "../clinicalPatientPolish";
 import { routePatientImportDraft } from "../clinicalFieldRouter";
 import PatientForm from "../components/PatientForm";
+import { ClinicalInlineText } from "../components/ClinicalText";
 import RoundSoapComposer from "../components/RoundSoapComposer";
 import {
   IconArchive,
@@ -35,7 +36,12 @@ import {
 import { useT } from "../i18n";
 import { getRoundingDigest } from "../roundingDigest";
 import { fallbackSoapTextFromPatient, patientToSoapDraft } from "../soapDraft";
-import { classifyClinicalLine, type ClinicalLineKind } from "../clinicalLineClassifier";
+import {
+  classifyClinicalLine,
+  normalizeClinicalDisplayText,
+  normalizeClinicalDisplayTextPreservingMarks,
+  type ClinicalLineKind,
+} from "../clinicalLineClassifier";
 import { formatMedicationOrderLinesForDisplay } from "../medicationOrderParser";
 import {
   isDcSoapLineVisible,
@@ -101,10 +107,16 @@ function classifyBoardVisualLine(line: string, fallbackKind: BoardVisualKind = "
   const useLockKind = fallbackKind !== "other";
   const classified = classifyClinicalLine(line, { fallbackKind, lockKind: useLockKind });
   const isOrder = fallbackKind === "task" && isOrderSoapLine(line);
+  const sourceText = isOrder ? stripOrderLinePrefix(line) : line;
+  const displayText = normalizeClinicalDisplayTextPreservingMarks(sourceText).replace(
+    /^(S|V\/S|VS|Vitals?|PE|Physical exam|Lab|Image|Img|Task|Tasks|DC|Discharge|Prep)\s*:\s*/i,
+    "",
+  );
+  const maxChars = fallbackKind === "ap" ? 140 : 76;
   return {
     kind: classified.kind,
     label: isOrder ? "藥囑" : classified.label,
-    text: safeClinicalLine(isOrder ? stripOrderLinePrefix(classified.text) : classified.text, fallbackKind === "ap" ? 140 : 76),
+    text: /\[\[(?:red|orange|yellow|blue|green|purple):/i.test(displayText) ? displayText : safeClinicalLine(displayText || classified.text, maxChars),
     tone: classified.tone,
   };
 }
@@ -123,7 +135,9 @@ function renderBoardVisualLines(lines: string[], fallback: string, fallbackKind:
             key={`${line}-${index}`}
           >
             <span className="board-visual-label">{visual.label}</span>
-            <span className="board-visual-text">{visual.text}</span>
+            <span className="board-visual-text">
+              <ClinicalInlineText value={visual.text} />
+            </span>
           </div>
         );
       })}
@@ -1385,9 +1399,10 @@ function PatientBoardPage({
             const redFlagLine = isLayoutSectionVisible(roundingLayout, "redFlags")
               ? soap.header.find((line) => /^Red flags:/i.test(line))?.replace(/^Red flags:\s*/i, "") ?? ""
               : "";
-            const contextLines = soap.header.filter(
-              (line) => isSoapHeaderLineVisible(line, roundingLayout) && !/^Red flags:|^Date:|^Attending:/i.test(line) && !line.includes(patient.patientCode),
-            );
+            const contextLines = soap.header
+              .filter((line) => isSoapHeaderLineVisible(line, roundingLayout) && !/^Red flags:|^Date:|^Attending:/i.test(line) && !line.includes(patient.patientCode))
+              .map(normalizeClinicalDisplayText)
+              .filter(Boolean);
             const visibleSubjectiveLines = isLayoutSectionVisible(roundingLayout, "subjective") ? soap.sLines : [];
             const visibleObjectiveLines = soap.oLines.filter((line) => isObjectiveSoapLineVisible(line, roundingLayout));
             const visibleApProblems = isLayoutSectionVisible(roundingLayout, "assessmentPlan") ? soap.apProblems : [];
@@ -1471,8 +1486,12 @@ function PatientBoardPage({
                       <div className="board-soap-ap-list">
                         {visibleApProblems.slice(0, roundingLayout.boardDensity === "normal" ? 5 : 4).map((problem) => (
                           <div className={boardProblemClass(problem.title, problem.lines)} key={`${problem.title}-${problem.lines.join("|")}`}>
-                            <strong>#{safeClinicalLine(problem.title, 56)}</strong>
-                            {problem.lines.length > 0 && <span>{safeClinicalLine(problem.lines.slice(0, 2).join("; "), 92)}</span>}
+                            <strong>#<ClinicalInlineText value={problem.title} maxChars={56} /></strong>
+                            {problem.lines.length > 0 && (
+                              <span>
+                                <ClinicalInlineText value={problem.lines.slice(0, 2).join("; ")} maxChars={92} />
+                              </span>
+                            )}
                           </div>
                         ))}
                         {visibleApProblems.length === 0 && <span className="muted">-</span>}

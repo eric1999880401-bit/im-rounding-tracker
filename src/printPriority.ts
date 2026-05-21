@@ -1,4 +1,4 @@
-import { classifyClinicalLine, type ClinicalLineKind } from "./clinicalLineClassifier";
+import { classifyClinicalLine, normalizeClinicalDisplayTextPreservingMarks, type ClinicalLineKind } from "./clinicalLineClassifier";
 import { isOrderSoapLine, stripOrderLinePrefix } from "./userPreferences";
 
 export type PrintVisualKind = Extract<ClinicalLineKind, "s" | "vs" | "pe" | "lab" | "image" | "ap" | "task" | "dc" | "red" | "other">;
@@ -44,6 +44,7 @@ export function displayPrintLine(value: string) {
   return removePrintEllipsis(
     cleanPrintLine(value)
       .replace(/^!+/, "")
+      .replace(/^((?:Dx|PMH|Issues|Red flags|Date|Attending|S|V\/S|VS|PE|Lab|Image|Img|A\/P|AP|Tasks?|DC|Order|Orders?|藥囑)\s*[:：]\s*)!+\s*/i, "$1")
       .replace(/^(Lab:\s*)!?\s*(?:crit|critical|abn|abnormal|trend|anchor)\s+(?:infx|infection|lyte\/renal|renal\/lyte|anemia|heme|cardio|cardiac|liver|gi|nutrition|onc|tumor|glucose|endocrine|coag|other)\s*:\s*/i, "$1")
       .replace(/^!?\s*(?:crit|critical|abn|abnormal|trend|anchor)\s+(?:infx|infection|lyte\/renal|renal\/lyte|anemia|heme|cardio|cardiac|liver|gi|nutrition|onc|tumor|glucose|endocrine|coag|other)\s*:\s*/i, "")
       .replace(/^(\w[\w/ ]{0,12}:\s*)!?\s*(?:critical|urgent)\s*:\s*/i, "$1* ")
@@ -55,6 +56,13 @@ export function displayPrintLine(value: string) {
       .replace(/\bhigh\b/gi, "\u2191")
       .replace(/\blow\b/gi, "\u2193")
       .trim(),
+  );
+}
+
+function visualPrintText(value: string) {
+  return normalizeClinicalDisplayTextPreservingMarks(displayPrintLine(value)).replace(
+    /^(S|V\/S|VS|Vitals?|PE|Physical exam|Lab|Image|Img|Task|Tasks|DC|Discharge|Prep)\s*:\s*/i,
+    "",
   );
 }
 
@@ -113,10 +121,11 @@ export function classifyPrintVisualItem(item: { raw: string; text: string }, fal
     lockKind: lockedKind !== "other" && lockedKind !== "image",
   });
   const label = classified.kind === "task" ? (isOrderSoapLine(source) ? "藥囑" : "T") : classified.label;
+  const markedText = visualPrintText(isOrderSoapLine(source) ? stripOrderLinePrefix(source) : source);
   return {
     kind: classified.kind as PrintVisualKind,
     label: label.includes("亙") ? "藥囑" : label,
-    text: removePrintEllipsis(isOrderSoapLine(source) ? stripOrderLinePrefix(classified.text) : classified.text),
+    text: removePrintEllipsis(markedText || (isOrderSoapLine(source) ? stripOrderLinePrefix(classified.text) : classified.text)),
     tone: classified.tone,
   };
 }
@@ -136,6 +145,7 @@ function splitPrintInput(value: string | string[]) {
 }
 
 function requiredSignal(line: string, fallbackKind: PrintVisualKind, visual: PrintVisualItem) {
+  if (/\[\[(?:red|orange|yellow|blue|green|purple):/i.test(line)) return true;
   if (visual.tone === "critical" || visual.tone === "important") return true;
   if (fallbackKind === "red") return true;
   return /\b(?:positive culture|b\/c|bcx|sputum cx|bile cx|abx|antibiotic|teicoplanin|vancomycin|meropenem|ceftriaxone|levofloxacin|metronidazole|source control|ercp|stent|tap|thoracentesis|paracentesis|procedure|consult|opd|certificate|barrier|discharge tomorrow|restart|hold|apixaban|heparin|warfarin|insulin|pressor|oxygen|crrt|aki|hyperk|hypok|lactate|inr|cr\s*\d|hb\s*\d|plt\s*\d|k\s*\d|wbc\s*\d|ct\b|mri\b|cxr\b|x-?ray|echo\b|sono|ultrasound|egd\b)\b/i.test(line);

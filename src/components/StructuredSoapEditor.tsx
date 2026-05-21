@@ -1,4 +1,11 @@
+import { useRef, type RefObject } from "react";
 import type { ClinicalLineKind, ClinicalLineTone } from "../clinicalLineClassifier";
+import {
+  applyClinicalColorMarkup,
+  clearClinicalColorMarkupAtSelection,
+  clinicalMarkColors,
+  type ClinicalMarkColor,
+} from "../clinicalColorMarkup";
 import {
   emptySoapEditorLine,
   emptySoapEditorProblem,
@@ -73,6 +80,71 @@ function editableTone(tone: ClinicalLineTone): ClinicalLineTone {
   return tone === "critical" || tone === "important" ? tone : "plain";
 }
 
+function SelectionColorToolbar({
+  value,
+  onChange,
+  controlRef,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  controlRef: RefObject<HTMLTextAreaElement | HTMLInputElement | null>;
+}) {
+  const applySelection = (nextValue: string, start: number, selectedLength: number) => {
+    onChange(nextValue);
+    window.setTimeout(() => {
+      const control = controlRef.current;
+      if (!control) return;
+      control.focus();
+      control.setSelectionRange(start, start + selectedLength);
+    }, 0);
+  };
+
+  const markColor = (color: ClinicalMarkColor) => {
+    const control = controlRef.current;
+    if (!control) return;
+    const start = control.selectionStart ?? 0;
+    const end = control.selectionEnd ?? 0;
+    if (start === end) return;
+    const selectedText = value.slice(start, end);
+    applySelection(applyClinicalColorMarkup(value, start, end, color), start + `[[${color}:`.length, selectedText.length);
+  };
+
+  const clearColor = () => {
+    const control = controlRef.current;
+    if (!control) return;
+    const start = control.selectionStart ?? 0;
+    const end = control.selectionEnd ?? 0;
+    if (start === end) return;
+    applySelection(clearClinicalColorMarkupAtSelection(value, start, end), start, value.slice(start, end).length);
+  };
+
+  return (
+    <div className="inline-color-toolbar" aria-label="Color selected text">
+      {clinicalMarkColors.map((color) => (
+        <button
+          type="button"
+          className={`inline-color-tool color-tool-${color}`}
+          key={color}
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => markColor(color)}
+          title={`Mark selected text ${color}`}
+          aria-label={`Mark selected text ${color}`}
+        />
+      ))}
+      <button
+        type="button"
+        className="inline-color-clear"
+        onMouseDown={(event) => event.preventDefault()}
+        onClick={clearColor}
+        title="Clear selected color"
+        aria-label="Clear selected color"
+      >
+        ×
+      </button>
+    </div>
+  );
+}
+
 function LineEditor({
   line,
   showKind,
@@ -92,9 +164,11 @@ function LineEditor({
   onCompositionStart?: () => void;
   onCompositionEnd?: () => void;
 }) {
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   return (
     <div className={`structured-soap-line structured-soap-line-${line.tone}`}>
       <textarea
+        ref={textareaRef}
         className="structured-soap-line-text"
         value={line.text}
         onChange={(event) => onChange({ ...line, text: event.target.value })}
@@ -126,6 +200,11 @@ function LineEditor({
             ))}
           </select>
         </div>
+        <SelectionColorToolbar
+          value={line.text}
+          onChange={(text) => onChange({ ...line, text })}
+          controlRef={textareaRef}
+        />
         <div className="structured-soap-line-actions">
           <button type="button" className="secondary compact-button" onClick={onMoveUp} title="Move up">↑</button>
           <button type="button" className="secondary compact-button" onClick={onMoveDown} title="Move down">↓</button>
@@ -206,17 +285,24 @@ function ProblemEditor({
   onCompositionEnd?: () => void;
 }) {
   const lines = problem.lines.length > 0 ? problem.lines : [emptySoapEditorLine("ap")];
+  const titleRef = useRef<HTMLInputElement | null>(null);
   return (
     <article className={`structured-soap-problem structured-soap-line-${problem.tone}`}>
       <div className="structured-soap-problem-heading">
         <div className="structured-soap-problem-title-row">
           <span className="structured-soap-problem-index">#{index + 1}</span>
           <input
+            ref={titleRef}
             value={problem.title}
             onChange={(event) => onChange({ ...problem, title: event.target.value })}
             onCompositionStart={onCompositionStart}
             onCompositionEnd={onCompositionEnd}
             placeholder="Problem title"
+          />
+          <SelectionColorToolbar
+            value={problem.title}
+            onChange={(title) => onChange({ ...problem, title })}
+            controlRef={titleRef}
           />
         </div>
         <div className="structured-soap-line-meta">

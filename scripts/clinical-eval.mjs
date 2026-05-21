@@ -36,7 +36,7 @@ const {
 const { buildConcisePatientClinicalUpdate } = await server.ssrLoadModule("/src/clinicalPatientPolish.ts");
 const { sanitizeAiSoapDraftForReview } = await server.ssrLoadModule("/src/aiDraftSanitizer.ts");
 const { routePatientImportDraft, routePatientClinicalFields } = await server.ssrLoadModule("/src/clinicalFieldRouter.ts");
-const { classifyClinicalLine } = await server.ssrLoadModule("/src/clinicalLineClassifier.ts");
+const { classifyClinicalLine, normalizeClinicalDisplayText, normalizeClinicalDisplayTextPreservingMarks } = await server.ssrLoadModule("/src/clinicalLineClassifier.ts");
 const { editorDraftToSoapText, lintSoapEditorDraft, parseSoapTextToEditorDraft } = await server.ssrLoadModule("/src/soapEditorDraft.ts");
 const {
   buildUserAiStyleProfile,
@@ -57,6 +57,8 @@ const {
   guardRoundSoapDelta,
   restoreSoapDeltaSection,
 } = await server.ssrLoadModule("/src/soapDeltaGuardrails.ts");
+const { displayPrintLine } = await server.ssrLoadModule("/src/printPriority.ts");
+const { applyClinicalColorMarkup, clearClinicalColorMarkupAtSelection } = await server.ssrLoadModule("/src/clinicalColorMarkup.ts");
 
 function haystack(plan) {
   return [
@@ -1628,6 +1630,31 @@ try {
   }
   if (objectiveLab.kind !== "lab" || objectiveLab.label !== "LAB") {
     throw new Error(`Objective lab did not remain LAB: ${JSON.stringify(objectiveLab)}`);
+  }
+  const markedHeaders = ["!! Dx: cholangitis sepsis", "! PMH: CKD3/HFrEF", "Dx: !! bacteremia"];
+  const normalizedHeaders = markedHeaders.map(normalizeClinicalDisplayText);
+  const printedHeaders = markedHeaders.map(displayPrintLine);
+  if (normalizedHeaders.some((line) => /^!|:\s*!/.test(line)) || printedHeaders.some((line) => /^!|:\s*!/.test(line))) {
+    throw new Error(`Severity markers leaked into display headers: ${JSON.stringify({ normalizedHeaders, printedHeaders })}`);
+  }
+  if (!normalizedHeaders.includes("Dx: cholangitis sepsis") || !normalizedHeaders.includes("Dx: bacteremia")) {
+    throw new Error(`Header marker normalization changed clinical text: ${JSON.stringify(normalizedHeaders)}`);
+  }
+  const markedLine = normalizeClinicalDisplayTextPreservingMarks("!! Dx: [[yellow:cholangitis sepsis]] with [[blue:ERCP 5/20]]");
+  if (markedLine !== "Dx: [[yellow:cholangitis sepsis]] with [[blue:ERCP 5/20]]") {
+    throw new Error(`Inline color markup should survive display normalization: ${markedLine}`);
+  }
+  const markedPrint = displayPrintLine("A/P: [[yellow:AKI Cr 2.7]]; [[green:UO improving]]");
+  if (!/\[\[yellow:AKI Cr 2\.7\]\]/.test(markedPrint) || !/\[\[green:UO improving\]\]/.test(markedPrint)) {
+    throw new Error(`Print display should preserve inline color markup: ${markedPrint}`);
+  }
+  const appliedColor = applyClinicalColorMarkup("Cr 2.7 improving", 0, 6, "yellow");
+  if (appliedColor !== "[[yellow:Cr 2.7]] improving") {
+    throw new Error(`Color markup helper wrapped the wrong text: ${appliedColor}`);
+  }
+  const clearedColor = clearClinicalColorMarkupAtSelection(appliedColor, 9, 15);
+  if (clearedColor !== "Cr 2.7 improving") {
+    throw new Error(`Color clear helper did not remove surrounding mark: ${clearedColor}`);
   }
 
   const visibleSections = { ...visibleSectionsForPreset("compactSoap"), objectiveImages: false, tasks: false, dcBarriers: false, dcPrep: true };

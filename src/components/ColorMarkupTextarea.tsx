@@ -1,4 +1,10 @@
 import { useRef, type ClipboardEvent } from "react";
+import {
+  applyClinicalColorMarkup,
+  clearClinicalColorMarkupAtSelection,
+  clinicalMarkColors,
+  type ClinicalMarkColor,
+} from "../clinicalColorMarkup";
 
 interface ColorMarkupTextareaProps {
   value: string;
@@ -10,8 +16,6 @@ interface ColorMarkupTextareaProps {
   placeholder?: string;
   className?: string;
 }
-
-const colors = ["red", "orange", "yellow", "blue", "green", "purple"] as const;
 
 function ColorMarkupTextarea({
   value,
@@ -25,7 +29,15 @@ function ColorMarkupTextarea({
 }: ColorMarkupTextareaProps) {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
-  function markColor(color: string) {
+  function applySelection(nextValue: string, start: number, selectedLength: number) {
+    onChange(nextValue);
+    window.setTimeout(() => {
+      textareaRef.current?.focus();
+      textareaRef.current?.setSelectionRange(start, start + selectedLength);
+    }, 0);
+  }
+
+  function markColor(color: ClinicalMarkColor) {
     const textarea = textareaRef.current;
     if (!textarea) return;
 
@@ -34,15 +46,16 @@ function ColorMarkupTextarea({
     if (start === end) return;
 
     const selectedText = value.slice(start, end);
-    const markerStart = `[[${color}:`;
-    const markerEnd = "]]";
-    const nextValue = `${value.slice(0, start)}${markerStart}${selectedText}${markerEnd}${value.slice(end)}`;
-    onChange(nextValue);
+    applySelection(applyClinicalColorMarkup(value, start, end, color), start + `[[${color}:`.length, selectedText.length);
+  }
 
-    window.setTimeout(() => {
-      textarea.focus();
-      textarea.setSelectionRange(start + markerStart.length, end + markerStart.length);
-    }, 0);
+  function clearColor() {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+    if (start === end) return;
+    applySelection(clearClinicalColorMarkupAtSelection(value, start, end), start, value.slice(start, end).length);
   }
 
   return (
@@ -59,7 +72,7 @@ function ColorMarkupTextarea({
         placeholder={placeholder}
       />
       <div className="color-toolbar" aria-label="Color selected text">
-        {colors.map((color) => (
+        {clinicalMarkColors.map((color) => (
           <button
             type="button"
             className={`color-tool color-tool-${color}`}
@@ -71,6 +84,9 @@ function ColorMarkupTextarea({
             {color}
           </button>
         ))}
+        <button type="button" className="color-tool color-tool-clear" onMouseDown={(event) => event.preventDefault()} onClick={clearColor} title="Clear selected color">
+          clear
+        </button>
       </div>
     </div>
   );

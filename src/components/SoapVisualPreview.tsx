@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { parseSoapText, soapTextWithDerivedHighlights } from "../soapDraft";
 import { ClinicalText } from "./ClinicalText";
-import { classifyClinicalLine, type ClinicalLineKind, type ClinicalLineTone } from "../clinicalLineClassifier";
+import { classifyClinicalLine, normalizeClinicalDisplayText, type ClinicalLineKind, type ClinicalLineTone } from "../clinicalLineClassifier";
 import { formatMedicationOrderLinesForDisplay } from "../medicationOrderParser";
 import type { RoundingLayoutPreferences } from "../types";
 import {
@@ -112,7 +112,7 @@ export function SoapVisualPreview({ value, compact = false, layoutPreferences }:
       {headerLines.length > 0 && (
         <div className="soap-preview-header">
           {headerLines.slice(0, 4).map((line, index) => (
-            <span key={`${line}-${index}`}>{line}</span>
+            <span key={`${line}-${index}`}>{normalizeClinicalDisplayText(line)}</span>
           ))}
         </div>
       )}

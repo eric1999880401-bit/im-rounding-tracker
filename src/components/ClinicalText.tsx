@@ -1,6 +1,6 @@
 import type { HighlightLine } from "../types";
 import { safeClinicalLine, splitHighlightLines } from "../utils";
-import { classifyClinicalLine, normalizeClinicalDisplayText } from "../clinicalLineClassifier";
+import { classifyClinicalLine, normalizeClinicalDisplayTextPreservingMarks } from "../clinicalLineClassifier";
 
 interface ClinicalTextProps {
   value: string;
@@ -38,7 +38,7 @@ function stripArrow(text: string) {
 }
 
 function displayClinicalText(text: string) {
-  return normalizeClinicalDisplayText(text);
+  return normalizeClinicalDisplayTextPreservingMarks(text);
 }
 
 const colorClassNames: Record<string, string> = {
@@ -140,6 +140,16 @@ export function ClinicalText({
 
 export function ClinicalCardRenderer(props: ClinicalTextProps) {
   return <ClinicalText {...props} />;
+}
+
+interface ClinicalInlineTextProps {
+  value: string;
+  maxChars?: number;
+}
+
+export function ClinicalInlineText({ value, maxChars }: ClinicalInlineTextProps) {
+  const text = maxChars && !/\[\[(?:red|orange|yellow|blue|green|purple):/i.test(value) ? safeClinicalLine(value, maxChars) : value;
+  return <>{renderMarkedText(displayClinicalText(text))}</>;
 }
 
 interface ItemListProps {

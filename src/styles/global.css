@@ -2825,6 +2825,40 @@ tbody tr:last-child td {
   color: #5a4a5c;
 }
 
+.color-tool-clear {
+  background: var(--surface);
+  color: var(--text-muted);
+}
+
+.inline-color-toolbar {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+}
+
+.inline-color-tool,
+.inline-color-clear {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  flex: 0 0 auto;
+  height: 20px;
+  min-height: 20px;
+  padding: 0;
+  width: 20px;
+}
+
+.inline-color-clear {
+  align-items: center;
+  background: var(--surface);
+  color: var(--text-muted);
+  display: inline-flex;
+  font-size: 12px;
+  font-weight: 800;
+  justify-content: center;
+}
+
 .clinical-numbered-line {
   padding-left: 10px;
 }
@@ -3566,7 +3600,7 @@ tbody tr:last-child td {
   align-items: center;
   display: grid;
   gap: 6px;
-  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-columns: auto minmax(0, 1fr) auto;
   min-width: 0;
 }
 

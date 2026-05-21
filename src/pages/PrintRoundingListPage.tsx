@@ -16,7 +16,7 @@ import {
   sortPatients,
   todayKey,
 } from "../utils";
-import { ClinicalText } from "../components/ClinicalText";
+import { ClinicalInlineText, ClinicalText } from "../components/ClinicalText";
 import { useT } from "../i18n";
 import { getRoundingDigest } from "../roundingDigest";
 import { patientToSoapDraft } from "../soapDraft";
@@ -276,7 +276,9 @@ function PrintRoundingListPage({
               key={`${keyPrefix}-${visualLabel}-${visual.text}-${index}`}
             >
               <span className="print-visual-label">{visualLabel}</span>
-              <span className="print-visual-text">{visual.text}</span>
+              <span className="print-visual-text">
+                <ClinicalInlineText value={visual.text} />
+              </span>
             </div>
           );
         })}
@@ -719,7 +721,10 @@ function PrintRoundingListPage({
   function patientContextText(patient: Patient) {
     const soap = patientToSoapDraft(patient, dailyNotesByPatient[patient.id] ?? [], todayKey());
     return removePrintEllipsis([
-      ...soap.header.filter((line) => isSoapHeaderLineVisible(line, roundingLayout) && !/^Red flags:|^Date:/i.test(line)).slice(1, 5),
+      ...soap.header
+        .filter((line) => isSoapHeaderLineVisible(line, roundingLayout) && !/^Red flags:|^Date:/i.test(line))
+        .slice(1, 5)
+        .map(displayPrintLine),
     ].filter(Boolean).join(" | "));
   }
 

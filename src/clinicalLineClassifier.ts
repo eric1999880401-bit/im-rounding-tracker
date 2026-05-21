@@ -51,6 +51,7 @@ export function stripClinicalMarkup(value: string) {
 
 export function normalizeClinicalDisplayText(value: string) {
   return stripClinicalMarkup(value)
+    .replace(/^((?:Dx|PMH|Issues|Red flags|Date|Attending|S|V\/S|VS|PE|Lab|Image|Img|A\/P|AP|Tasks?|DC|Order|Orders?|藥囑)\s*[:：]\s*)!+\s*/i, "$1")
     .replace(/^(Lab:\s*)!?\s*(?:crit|critical|abn|abnormal|trend|anchor)\s+(?:infx|infection|lyte\/renal|renal\/lyte|anemia|heme|cardio|cardiac|liver|gi|nutrition|onc|tumor|glucose|endocrine|coag|other)\s*:\s*/i, "$1")
     .replace(/^!?\s*(?:crit|critical|abn|abnormal|trend|anchor)\s+(?:infx|infection|lyte\/renal|renal\/lyte|anemia|heme|cardio|cardiac|liver|gi|nutrition|onc|tumor|glucose|endocrine|coag|other)\s*:\s*/i, "")
     .replace(/^\s*(?:critical|urgent)\s*:\s*/i, "* ")
@@ -61,6 +62,17 @@ export function normalizeClinicalDisplayText(value: string) {
     .replace(/\blow\b/gi, "\u2193")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+export function normalizeClinicalDisplayTextPreservingMarks(value: string) {
+  const marks: string[] = [];
+  const tokenized = String(value ?? "").replace(/\[\[(red|orange|yellow|blue|green|purple):([\s\S]*?)\]\]/gi, (_, color: string, inner: string) => {
+    const token = `__CLINICAL_MARK_${marks.length}__`;
+    marks.push(`[[${color.toLowerCase()}:${normalizeClinicalDisplayText(inner)}]]`);
+    return token;
+  });
+
+  return normalizeClinicalDisplayText(tokenized).replace(/__CLINICAL_MARK_(\d+)__/g, (_, index: string) => marks[Number(index)] ?? "");
 }
 
 function prefixedKind(value: string, fallbackKind: ClinicalLineKind) {
