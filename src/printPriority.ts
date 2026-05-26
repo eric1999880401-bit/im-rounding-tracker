@@ -151,6 +151,17 @@ function requiredSignal(line: string, fallbackKind: PrintVisualKind, visual: Pri
   return /\b(?:positive culture|b\/c|bcx|sputum cx|bile cx|abx|antibiotic|teicoplanin|vancomycin|meropenem|ceftriaxone|levofloxacin|metronidazole|source control|ercp|stent|tap|thoracentesis|paracentesis|procedure|consult|opd|certificate|barrier|discharge tomorrow|restart|hold|apixaban|heparin|warfarin|insulin|pressor|oxygen|crrt|aki|hyperk|hypok|lactate|inr|cr\s*\d|hb\s*\d|plt\s*\d|k\s*\d|wbc\s*\d|ct\b|mri\b|cxr\b|x-?ray|echo\b|sono|ultrasound|egd\b)\b/i.test(line);
 }
 
+function latestDateScore(line: string) {
+  const scores: number[] = [];
+  for (const match of line.matchAll(/\b(20\d{2})[-/](0?[1-9]|1[0-2])[-/](0?[1-9]|[12]\d|3[01])\b/g)) {
+    scores.push(Number(match[1]) * 10000 + Number(match[2]) * 100 + Number(match[3]));
+  }
+  for (const match of line.matchAll(/\b(0?[1-9]|1[0-2])\/(0?[1-9]|[12]\d|3[01])\b/g)) {
+    scores.push(Number(match[1]) * 100 + Number(match[2]));
+  }
+  return scores.length > 0 ? Math.max(...scores) : 0;
+}
+
 export function selectPriorityPrintItems(value: string | string[], options: PrintPriorityOptions): PrintLineItem[] {
   const maxItems = options.maxItems ?? Number.POSITIVE_INFINITY;
   const unlimited = !Number.isFinite(maxItems);
@@ -158,13 +169,24 @@ export function selectPriorityPrintItems(value: string | string[], options: Prin
   const decorated = splitPrintInput(value).map((line, index) => {
     const visual = classifyPrintVisualItem({ raw: line, text: displayPrintLine(line) }, options.fallbackKind);
     const required = requiredSignal(line, options.fallbackKind, visual);
-    return { line, index, visual, required };
+    return { line, index, visual, required, dateScore: latestDateScore(line) };
   });
 
   if (decorated.length === 0) return [];
 
   const selected = new Set<number>();
   decorated.filter((item) => item.required).forEach((item) => selected.add(item.index));
+
+  const latestByKind = new Map<PrintVisualKind, { index: number; score: number }>();
+  decorated.forEach((item) => {
+    if (!item.dateScore) return;
+    const previous = latestByKind.get(item.visual.kind as PrintVisualKind);
+    if (!previous || item.dateScore > previous.score || (item.dateScore === previous.score && item.index > previous.index)) {
+      latestByKind.set(item.visual.kind as PrintVisualKind, { index: item.index, score: item.dateScore });
+    }
+  });
+  latestByKind.forEach((item) => selected.add(item.index));
+
   decorated
     .filter((item) => !item.required)
     .forEach((item) => {

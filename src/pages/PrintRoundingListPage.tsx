@@ -767,7 +767,7 @@ function PrintRoundingListPage({
       .map((problem) => {
         const body = problem.lines
           .slice(0, density === "ultra-compact" ? 1 : 2)
-          .map(cleanPrintLine)
+          .map(displayPrintLine)
           .filter(Boolean)
           .join("; ");
         return [problem.title, body].filter(Boolean).join(": ");

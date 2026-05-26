@@ -42,6 +42,7 @@ import {
   normalizeClinicalDisplayTextPreservingMarks,
   type ClinicalLineKind,
 } from "../clinicalLineClassifier";
+import { selectPriorityPrintItems } from "../printPriority";
 import { formatMedicationOrderLinesForDisplay } from "../medicationOrderParser";
 import {
   isDcSoapLineVisible,
@@ -143,6 +144,48 @@ function renderBoardVisualLines(lines: string[], fallback: string, fallbackKind:
       })}
     </div>
   );
+}
+
+function selectBoardVisualLines(lines: string[], fallbackKind: BoardVisualKind, maxLines: number) {
+  return selectPriorityPrintItems(preferLatestBoardLines(lines), { fallbackKind, maxItems: maxLines, maxChars: fallbackKind === "ap" ? 140 : 96 })
+    .map((item) => item.raw)
+    .filter(Boolean);
+}
+
+function boardDateScore(line: string) {
+  const scores: number[] = [];
+  for (const match of line.matchAll(/\b(20\d{2})[-/](0?[1-9]|1[0-2])[-/](0?[1-9]|[12]\d|3[01])\b/g)) {
+    scores.push(Number(match[1]) * 10000 + Number(match[2]) * 100 + Number(match[3]));
+  }
+  for (const match of line.matchAll(/\b(0?[1-9]|1[0-2])\/(0?[1-9]|[12]\d|3[01])\b/g)) {
+    scores.push(Number(match[1]) * 100 + Number(match[2]));
+  }
+  return scores.length > 0 ? Math.max(...scores) : 0;
+}
+
+function boardObjectiveBucket(line: string) {
+  if (/^\s*(?:v\/s|vs|vitals?)\s*:/i.test(line)) return "vs";
+  if (/^\s*lab\s*:/i.test(line)) return "lab";
+  if (/^\s*(?:image|img)\s*:/i.test(line)) return "image";
+  if (/^\s*(?:pe|physical exam)\s*:/i.test(line)) return "pe";
+  return "other";
+}
+
+function preferLatestBoardLines(lines: string[]) {
+  const cleanLines = lines.map((line) => line.trim()).filter(Boolean);
+  const latestByBucket = new Map<string, number>();
+  cleanLines.forEach((line) => {
+    const bucket = boardObjectiveBucket(line);
+    const score = boardDateScore(line);
+    if (!score || !["vs", "lab", "image"].includes(bucket)) return;
+    latestByBucket.set(bucket, Math.max(latestByBucket.get(bucket) ?? 0, score));
+  });
+  return cleanLines.filter((line) => {
+    const bucket = boardObjectiveBucket(line);
+    const latest = latestByBucket.get(bucket) ?? 0;
+    const score = boardDateScore(line);
+    return !score || !latest || score >= latest || !["vs", "lab", "image"].includes(bucket);
+  });
 }
 
 function boardProblemClass(title: string, lines: string[]) {
@@ -1405,6 +1448,7 @@ function PatientBoardPage({
               .filter(Boolean);
             const visibleSubjectiveLines = isLayoutSectionVisible(roundingLayout, "subjective") ? soap.sLines : [];
             const visibleObjectiveLines = soap.oLines.filter((line) => isObjectiveSoapLineVisible(line, roundingLayout));
+            const prioritizedObjectiveLines = selectBoardVisualLines(visibleObjectiveLines, "other", 5);
             const visibleApProblems = isLayoutSectionVisible(roundingLayout, "assessmentPlan") ? soap.apProblems : [];
             const mergedApLine = visibleApProblems
               .map((problem) => [problem.title, ...problem.lines].filter(Boolean).join(": "))
@@ -1471,7 +1515,7 @@ function PatientBoardPage({
                     {visibleObjectiveLines.length > 0 && (
                       <div className="board-soap-row">
                         <span className="board-label">O</span>
-                        {renderBoardVisualLines(visibleObjectiveLines, "-", "other", 5)}
+                        {renderBoardVisualLines(prioritizedObjectiveLines, "-", "other", 6)}
                       </div>
                     )}
                   </section>
