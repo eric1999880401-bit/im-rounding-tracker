@@ -633,6 +633,10 @@
   padding: 1px 3px;
 }
 
+.print-visual-row-unlabeled {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .print-visual-label {
   background: #e5e7eb;
   border: 0.5px solid #cbd5e1;

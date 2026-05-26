@@ -263,19 +263,26 @@ function PrintRoundingListPage({
     return classifyPriorityPrintVisualItem(item, fallbackKind);
   }
 
+  function printVisualLabelForSection(label: string, fallbackKind: PrintVisualKind) {
+    const normalized = label.includes("藥囑") ? "藥囑" : label;
+    if (fallbackKind === "s" && normalized === "S") return "";
+    if (fallbackKind === "ap" && normalized === "A/P") return "";
+    return normalized;
+  }
+
   function renderPrintVisualItems(items: Array<{ raw: string; text: string; hidden?: boolean }>, keyPrefix: string, fallbackKind: PrintVisualKind) {
     if (items.length === 0) return null;
     return (
       <div className="print-visual-list">
         {items.map((item, index) => {
           const visual = classifyPrintVisualItem(item, fallbackKind);
-          const visualLabel = visual.label.includes("亙") ? "藥囑" : visual.label;
+          const visualLabel = printVisualLabelForSection(visual.label, fallbackKind);
           return (
             <div
-              className={`print-visual-row print-visual-${visual.kind} print-visual-${visual.tone}${item.hidden ? " print-visual-hidden-note" : ""}`}
+              className={`print-visual-row ${visualLabel ? "" : "print-visual-row-unlabeled"} print-visual-${visual.kind} print-visual-${visual.tone}${item.hidden ? " print-visual-hidden-note" : ""}`}
               key={`${keyPrefix}-${visualLabel}-${visual.text}-${index}`}
             >
-              <span className="print-visual-label">{visualLabel}</span>
+              {visualLabel && <span className="print-visual-label">{visualLabel}</span>}
               <span className="print-visual-text">
                 <ClinicalInlineText value={visual.text} />
               </span>
@@ -793,7 +800,7 @@ function PrintRoundingListPage({
       isLayoutSectionVisible(roundingLayout, "orders") ? "藥囑" : "",
       isLayoutSectionVisible(roundingLayout, "tasks") ? "Tasks" : "",
       isLayoutSectionVisible(roundingLayout, "dcBarriers") || isLayoutSectionVisible(roundingLayout, "dcPrep") ? "DC" : "",
-    ].filter(Boolean).map((item) => (item.includes("亙") ? "藥囑" : item)).join(" / ") || "Tasks / DC";
+    ].filter(Boolean).map((item) => (item.includes("藥囑") ? "藥囑" : item)).join(" / ") || "Tasks / DC";
   }
 
   function blockField(label: string, value: ReactNode) {

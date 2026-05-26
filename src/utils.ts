@@ -446,7 +446,6 @@ function displayArray<T>(
   notes: DailyNote[],
   noteField: keyof DailyNote,
 ) {
-  if (hasItems(patientValue)) return patientValue;
   const todayValue = todayNote?.[noteField];
   if (Array.isArray(todayValue) && todayValue.length > 0) return todayValue as T[];
   const latestValue = latestNoteWith(notes, (note) => {
@@ -454,7 +453,53 @@ function displayArray<T>(
     return Array.isArray(value) && value.length > 0;
   })?.[noteField];
   if (Array.isArray(latestValue) && latestValue.length > 0) return latestValue as T[];
+  if (hasItems(patientValue)) return patientValue;
   return patientValue;
+}
+
+const dailyNoteSnapshotTextFields: Array<keyof Pick<
+  DailyNote,
+  | "importantRedFlags"
+  | "overnightEvents"
+  | "subjectiveOrChiefConcern"
+  | "vitalSigns"
+  | "bloodSugar"
+  | "physicalExam"
+  | "labSummary"
+  | "rawLabText"
+  | "imageSummary"
+  | "assessment"
+  | "plan"
+  | "dischargePlan"
+  | "vsOrder"
+>> = [
+  "importantRedFlags",
+  "overnightEvents",
+  "subjectiveOrChiefConcern",
+  "vitalSigns",
+  "bloodSugar",
+  "physicalExam",
+  "labSummary",
+  "rawLabText",
+  "imageSummary",
+  "assessment",
+  "plan",
+  "dischargePlan",
+  "vsOrder",
+];
+
+export function dailyNoteMatchesSavedSnapshot(note: DailyNote | undefined, expected: DailyNote) {
+  if (!note) return false;
+  if (note.updatedAt && expected.updatedAt && note.updatedAt === expected.updatedAt) return true;
+
+  const expectedSoapText = String(expected.soapText ?? "").trim();
+  if (expectedSoapText) {
+    return String(note.soapText ?? "").trim() === expectedSoapText;
+  }
+
+  return dailyNoteSnapshotTextFields.every((field) =>
+    String(note[field] ?? "").trim() === String(expected[field] ?? "").trim(),
+  );
 }
 
 export function noteForDateOrFallback(patient: Patient, notes: DailyNote[], date = todayKey()) {
@@ -467,6 +512,47 @@ export function patientForDate(patient: Patient, dailyNotesByPatient: DailyNotes
   const latestLabTextNote = latestNoteWith(notes, (note) => hasText(note.rawLabText) || hasText(note.labSummary));
   const latestLabItemsNote = latestNoteWith(notes, (note) => hasItems(note.parsedLabItems));
   const latestLabReportsNote = latestNoteWith(notes, (note) => hasItems(note.labReports));
+  const latestImageSummaryNote = latestNoteWith(notes, (note) => hasText(note.imageSummary));
+  const displayLabReports = displayArray<LabReport>(patient.labReports, todayNote, notes, "labReports");
+  const displayImageEntries = displayArray<ImageStudyEntry>(patient.imageStudyEntries, todayNote, notes, "imageStudyEntries");
+  const displayAssessmentPlanItems = displayArray<AssessmentPlanItem>(patient.assessmentPlanItems, todayNote, notes, "assessmentPlanItems");
+  const displayRawLabText = String(
+    todayNote?.rawLabText?.trim()
+      ? todayNote.rawLabText
+      : todayNote?.labSummary?.trim()
+        ? todayNote.labSummary
+        : latestLabTextNote?.rawLabText?.trim()
+          ? latestLabTextNote.rawLabText
+          : latestLabTextNote?.labSummary?.trim()
+            ? latestLabTextNote.labSummary
+            : patient.rawLabText,
+  );
+  const displayLabSummary = String(
+    todayNote?.labSummary?.trim()
+      ? todayNote.labSummary
+      : latestLabTextNote?.labSummary?.trim()
+        ? latestLabTextNote.labSummary
+        : patient.newLabs,
+  );
+  const displayParsedLabItems =
+    Array.isArray(todayNote?.parsedLabItems) && todayNote.parsedLabItems.length > 0
+      ? todayNote.parsedLabItems
+      : Array.isArray(todayNote?.labReports) && todayNote.labReports.length > 0
+        ? todayNote.labReports.flatMap((report) => report.items)
+        : hasItems(latestLabItemsNote?.parsedLabItems)
+          ? latestLabItemsNote?.parsedLabItems ?? patient.parsedLabItems
+          : hasItems(latestLabReportsNote?.labReports)
+            ? latestLabReportsNote?.labReports.flatMap((report) => report.items) ?? patient.parsedLabItems
+            : hasItems(patient.labReports)
+              ? patient.labReports.flatMap((report) => report.items)
+              : patient.parsedLabItems;
+  const displayImageSummary = String(
+    todayNote?.imageSummary?.trim()
+      ? todayNote.imageSummary
+      : latestImageSummaryNote?.imageSummary?.trim()
+        ? latestImageSummaryNote.imageSummary
+        : patient.newImaging,
+  );
 
   return {
     ...patient,
@@ -476,42 +562,18 @@ export function patientForDate(patient: Patient, dailyNotesByPatient: DailyNotes
     vitalSigns: displayString(patient.vitalSigns, todayNote, notes, "vitalSigns"),
     bloodSugar: displayString(patient.bloodSugar, todayNote, notes, "bloodSugar"),
     physicalExam: displayString(patient.physicalExam, todayNote, notes, "physicalExam"),
-    newLabs: hasItems(patient.labReports)
-      ? patient.newLabs
-      : displayString(patient.newLabs, todayNote, notes, "labSummary"),
-    rawLabText: hasItems(patient.labReports)
-      ? patient.rawLabText
-      : String(
-          todayNote?.rawLabText?.trim()
-            ? todayNote.rawLabText
-            : todayNote?.labSummary?.trim()
-              ? todayNote.labSummary
-              : latestLabTextNote?.rawLabText?.trim()
-                ? latestLabTextNote.rawLabText
-                : latestLabTextNote?.labSummary ?? patient.rawLabText,
-        ),
+    newLabs: displayLabSummary,
+    rawLabText: displayRawLabText,
     labDate: todayNote?.labDate || latestLabReportsNote?.labDate || latestLabTextNote?.labDate || patient.labDate,
     labReportTitle: todayNote?.labReportTitle || latestLabReportsNote?.labReportTitle || latestLabTextNote?.labReportTitle || patient.labReportTitle,
-    labReports: displayArray<LabReport>(patient.labReports, todayNote, notes, "labReports"),
-    parsedLabItems: hasItems(patient.labReports)
-      ? patient.labReports.flatMap((report) => report.items)
-      : hasItems(patient.parsedLabItems)
-      ? patient.parsedLabItems
-      : Array.isArray(todayNote?.parsedLabItems) && todayNote.parsedLabItems.length > 0
-        ? todayNote.parsedLabItems
-        : latestLabItemsNote?.parsedLabItems ?? patient.parsedLabItems,
-    newImaging: hasItems(patient.imageStudyEntries)
-      ? patient.newImaging
-      : displayString(patient.newImaging, todayNote, notes, "imageSummary"),
+    labReports: displayLabReports,
+    parsedLabItems: displayParsedLabItems,
+    newImaging: displayImageSummary,
     physicalExamEntries: displayArray<PhysicalExamEntry>(patient.physicalExamEntries, todayNote, notes, "physicalExamEntries"),
-    imageStudyEntries: displayArray<ImageStudyEntry>(patient.imageStudyEntries, todayNote, notes, "imageStudyEntries"),
-    assessment: hasItems(patient.assessmentPlanItems)
-      ? patient.assessment
-      : displayString(patient.assessment, todayNote, notes, "assessment"),
-    plan: hasItems(patient.assessmentPlanItems)
-      ? patient.plan
-      : displayString(patient.plan, todayNote, notes, "plan"),
-    assessmentPlanItems: displayArray<AssessmentPlanItem>(patient.assessmentPlanItems, todayNote, notes, "assessmentPlanItems"),
+    imageStudyEntries: displayImageEntries,
+    assessment: displayString(patient.assessment, todayNote, notes, "assessment"),
+    plan: displayString(patient.plan, todayNote, notes, "plan"),
+    assessmentPlanItems: displayAssessmentPlanItems,
     dischargePlan: displayString(patient.dischargePlan, todayNote, notes, "dischargePlan"),
     vsOrder: displayString(patient.vsOrder, todayNote, notes, "vsOrder"),
   };
@@ -581,11 +643,11 @@ export function getPatientDisplaySummary(
       ? patient.importantRedFlags
       : latestRedFlagNote?.importantRedFlags ?? "";
 
-  const labReports = hasItems(patient.labReports) ? patient.labReports : displayPatient.labReports;
+  const labReports = displayPatient.labReports;
   const labItems = hasItems(labReports)
     ? labReports.flatMap((report) => report.items)
     : displayPatient.parsedLabItems;
-  const imageEntries = hasItems(patient.imageStudyEntries) ? patient.imageStudyEntries : displayPatient.imageStudyEntries;
+  const imageEntries = displayPatient.imageStudyEntries;
 
   return {
     patient: {
@@ -610,7 +672,7 @@ export function getPatientDisplaySummary(
     vitalSigns: displayPatient.vitalSigns,
     bloodSugar: displayPatient.bloodSugar,
     physicalExam: displayPatient.physicalExam,
-    physicalExamEntries: hasItems(patient.physicalExamEntries) ? patient.physicalExamEntries : displayPatient.physicalExamEntries,
+    physicalExamEntries: displayPatient.physicalExamEntries,
     latestLabs: {
       reports: labReports,
       items: labItems,
@@ -620,7 +682,7 @@ export function getPatientDisplaySummary(
       text: displayPatient.newImaging,
       entries: imageEntries,
     },
-    assessmentPlanItems: hasItems(patient.assessmentPlanItems) ? patient.assessmentPlanItems : displayPatient.assessmentPlanItems,
+    assessmentPlanItems: displayPatient.assessmentPlanItems,
     assessment: displayPatient.assessment,
     plan: displayPatient.plan,
     tasks: patient.tasks,

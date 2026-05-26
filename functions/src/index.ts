@@ -626,11 +626,11 @@ function maxBloodPressureInText(value: string) {
 
 function shouldSuppressStrokeBpRedFlag(value: string) {
   const lower = value.toLowerCase();
-  const hasStrokeContext = /\b(ais|ischemic stroke|acute stroke|cva|tia|nihss|thrombectomy|evt)\b|中風|腦梗|缺血性腦/.test(lower);
+  const hasStrokeContext = /\b(ais|ischemic stroke|acute stroke|cva|tia|nihss|thrombectomy|evt)\b/.test(lower);
   if (!hasStrokeContext) return false;
 
   const hasStrictBpException =
-    /\b(tpa|alteplase|thrombolysis|post[-\s]?tpa|ich|intracranial hemorrhage|hemorrhagic stroke|aortic dissection|stemi|nstemi|acs|mi)\b|腦出血|主動脈剝離/.test(
+    /\b(tpa|alteplase|thrombolysis|post[-\s]?tpa|ich|intracranial hemorrhage|hemorrhagic stroke|aortic dissection|stemi|nstemi|acs|mi)\b/.test(
       lower,
     );
   if (hasStrictBpException) return false;
@@ -640,8 +640,8 @@ function shouldSuppressStrokeBpRedFlag(value: string) {
 }
 
 function lineLooksLikeBpRedFlag(value: string) {
-  return /bp|b\/p|sbp|dbp|hypertension|htn|blood pressure|血壓/i.test(value) &&
-    /urgent|red flag|uncontrolled|severe|critical|call|高|危/i.test(value);
+  return /bp|b\/p|sbp|dbp|hypertension|htn|blood pressure/i.test(value) &&
+    /urgent|red flag|uncontrolled|severe|critical|call/i.test(value);
 }
 
 function filterStrokePermissiveBpRedFlags(redFlags: string, allText: string) {
@@ -1267,6 +1267,7 @@ function makeRoundSoapPrompt(params: {
           "- If the pasted source contains only Lab, update only O/Lab and, when needed, append a short status/plan phrase under the matching existing A/P problem title. Do not rebuild the whole A/P.",
           "- If the pasted source contains only Image, update only O/Image with study/date/key finding. Never move image reports into PE.",
           "- If the pasted source contains only orders/medications, update only Tasks/Order summaries. Do not create new A/P problems from orders alone.",
+          "- Exception: if the order is a concrete antibiotic/culture update and an infection A/P already exists or is clearly supported, reflect drug/route/dose/frequency/start date/day count/indication/culture follow-up under the matching infection A/P.",
           "- If pasted text says a task/result is done or resolved, remove or update that task in the SOAP instead of carrying it forward.",
           "- Do not change diagnosis/PMH/A/P structure unless today's pasted data clearly changes the clinical problem list.",
           "- Preserve existing A/P problem titles by default. Only add a new problem if today's pasted text clearly supports a new active problem.",
@@ -1301,6 +1302,7 @@ function makeRoundSoapPrompt(params: {
     "- Do not mechanically preserve source headings or split by every symptom/test/procedure. Choose the dominant active clinical problems the rounding physician would present.",
     "- Each A/P problem may have only 1-2 bullets. Merge status, key evidence, and concrete plan into compact clinician lines.",
     "- Do not split one clinical problem into separate A/P lines for symptom, procedure, image, current status, and drug; combine them under the same problem.",
+    "- If antibiotics are present, the matching A/P problem must preserve drug name plus route/dose/frequency when available, start date/day count when available, indication/source, and culture follow-up/de-escalation plan. Example: '# MRSA/Enterococcus bacteremia' then '- Teicoplanin 400 mg IV qd 5/13- (D3) for B/C MRSA/Enterococcus; f/u B/C clearance/susceptibility, define duration/source.'",
     "- When compressing, do not omit active organ dysfunction or explanatory complications. Preserve supported elevated LFT/transaminitis/hyperbilirubinemia/coagulopathy, pleural effusion/chylothorax/hypoxemic RF, AKI/Cr change, infection/sepsis, bleeding/anemia, thrombus, or active cancer-treatment complications.",
     "- If a problem is supported by objective data, name it clinically instead of hiding it inside a vague symptom label. Example: write 'Malignant pleural effusion/chylothorax, RF improving' rather than only 'Dyspnea improving'.",
     "- Use common clear clinician abbreviations when they save space: w/, s/p, r/o, f/u, Abx, Cx, PNA, RF, AKI, ESRD, HD, CT, CXR, TTE.",

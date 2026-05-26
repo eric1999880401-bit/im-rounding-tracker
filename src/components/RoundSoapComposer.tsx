@@ -9,11 +9,10 @@ import {
   soapTextToPatientPatch,
   type SoapEditorFormat,
 } from "../soapDraft";
-import { editorDraftToSoapText, emptySoapEditorLine, parseSoapTextToEditorDraft } from "../soapEditorDraft";
+import { editorDraftToSoapText, emptySoapEditorLine, parseSoapTextToEditorDraft, splitSoapEditorTaskLines } from "../soapEditorDraft";
 import { emptyDailyNote, nowIso } from "../utils";
 import { SoapVisualPreview } from "./SoapVisualPreview";
 import StructuredSoapEditor from "./StructuredSoapEditor";
-import { isOrderSoapLine } from "../userPreferences";
 import MedicationOrderReviewPanel, { type MedicationOrderSummaryLine } from "./MedicationOrderReviewPanel";
 import {
   acceptSoapDeltaSection,
@@ -36,6 +35,7 @@ interface RoundSoapComposerProps {
   externalSoapStatus?: string;
   layoutPreferences?: RoundingLayoutPreferences;
   aiStyleProfile?: UserAiStyleProfile;
+  onDirtyChange?: (dirty: boolean) => void;
 }
 
 type WorkflowMode = "dailyUpdate" | "newSoap" | "transferHandoff";
@@ -174,6 +174,7 @@ function RoundSoapComposer({
   externalSoapStatus = "",
   layoutPreferences,
   aiStyleProfile,
+  onDirtyChange,
 }: RoundSoapComposerProps) {
   const canonical = getCanonicalSoapText(patient, dailyNotes, selectedDate);
   const [workflowMode, setWorkflowMode] = useState<WorkflowMode>("dailyUpdate");
@@ -192,21 +193,32 @@ function RoundSoapComposer({
   const [deltaReview, setDeltaReview] = useState<SoapDeltaReview | null>(null);
   const isComposingRef = useRef(false);
   const externalSoapRevisionRef = useRef(externalSoapRevision);
+  const pendingSavedSoapRef = useRef<{ date: string; text: string } | null>(null);
   const soapText = editorDraftToSoapText(editorDraft);
 
   useEffect(() => {
+    onDirtyChange?.(dirty);
+  }, [dirty, onDirtyChange]);
+
+  useEffect(() => {
     if (dirty || isComposingRef.current) return;
+    const pendingSavedSoap = pendingSavedSoapRef.current;
+    if (pendingSavedSoap) {
+      if (pendingSavedSoap.date === selectedDate && canonical.text !== pendingSavedSoap.text) return;
+      pendingSavedSoapRef.current = null;
+    }
     const nextDraft = parseSoapTextToEditorDraft(canonical.text);
     setEditorDraft(nextDraft);
     setRawSoapText(editorDraftToSoapText(nextDraft));
     setDeltaReview(null);
-  }, [canonical.text, dirty]);
+  }, [canonical.text, dirty, selectedDate]);
 
   useEffect(() => {
     if (externalSoapRevisionRef.current === externalSoapRevision || isComposingRef.current) return;
     externalSoapRevisionRef.current = externalSoapRevision;
     const nextSoapText = externalSoapText.trim();
     if (!nextSoapText) return;
+    pendingSavedSoapRef.current = null;
     const nextDraft = parseSoapTextToEditorDraft(nextSoapText);
     setEditorDraft(nextDraft);
     setRawSoapText(editorDraftToSoapText(nextDraft));
@@ -294,7 +306,7 @@ function RoundSoapComposer({
   }
 
   function applyMedicationOrderSummaries(lines: MedicationOrderSummaryLine[]) {
-    const taskOnlyLines = editorDraft.taskLines.filter((line) => line.subtype !== "order" && !isOrderSoapLine(line.text));
+    const { taskOnlyLines } = splitSoapEditorTaskLines(editorDraft.taskLines);
     const nextOrderLines = lines.map((line) => ({
       ...emptySoapEditorLine("task"),
       text: line.text,
@@ -361,6 +373,7 @@ function RoundSoapComposer({
         candidateText: result.soapText.trim() || canonical.text,
         sourceFields: currentSourceFields(),
         candidateWarnings: result.warnings ?? [],
+        selectedDate,
       });
       const nextDraft = parseSoapTextToEditorDraft(guarded.acceptedText);
       setEditorDraft(nextDraft);
@@ -394,6 +407,7 @@ function RoundSoapComposer({
       await onSavePatient(nextPatient);
       await onSaveDailyNote(nextPatient.id, nextNote);
       const nextDraft = parseSoapTextToEditorDraft(reviewedText);
+      pendingSavedSoapRef.current = { date: selectedDate, text: reviewedText };
       setEditorDraft(nextDraft);
       setRawSoapText(editorDraftToSoapText(nextDraft));
       clearSourceText();
@@ -477,6 +491,7 @@ function RoundSoapComposer({
             ))}
           </select>
           <button type="button" className="secondary" onClick={() => {
+            pendingSavedSoapRef.current = null;
             const nextDraft = parseSoapTextToEditorDraft(canonical.text);
             setEditorDraft(nextDraft);
             setRawSoapText(editorDraftToSoapText(nextDraft));

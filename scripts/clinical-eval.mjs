@@ -18,7 +18,21 @@ const {
   formatRuleBasedWeeklySummary,
 } = await server.ssrLoadModule("/src/clinicalKnowledge.ts");
 const { formatClinicalDocumentDraft } = await server.ssrLoadModule("/src/clinicalDocumentFormat.ts");
-const { emptyDailyNote, emptyPatient, getLabFocusSummary, interpretLabItem, parseLabReports, parseLabText, safeClinicalLine, textToItems, todayKey, nowIso, createId } = await server.ssrLoadModule("/src/utils.ts");
+const {
+  emptyDailyNote,
+  emptyPatient,
+  getLabFocusSummary,
+  getPatientDisplaySummary,
+  interpretLabItem,
+  parseLabReports,
+  parseLabText,
+  safeClinicalLine,
+  textToItems,
+  todayKey,
+  nowIso,
+  createId,
+  dailyNoteMatchesSavedSnapshot,
+} = await server.ssrLoadModule("/src/utils.ts");
 const { getRoundingDigest } = await server.ssrLoadModule("/src/roundingDigest.ts");
 const {
   aiSoapDraftToSoapDraft,
@@ -37,7 +51,8 @@ const { buildConcisePatientClinicalUpdate } = await server.ssrLoadModule("/src/c
 const { sanitizeAiSoapDraftForReview } = await server.ssrLoadModule("/src/aiDraftSanitizer.ts");
 const { routePatientImportDraft, routePatientClinicalFields } = await server.ssrLoadModule("/src/clinicalFieldRouter.ts");
 const { classifyClinicalLine, normalizeClinicalDisplayText, normalizeClinicalDisplayTextPreservingMarks } = await server.ssrLoadModule("/src/clinicalLineClassifier.ts");
-const { editorDraftToSoapText, lintSoapEditorDraft, parseSoapTextToEditorDraft } = await server.ssrLoadModule("/src/soapEditorDraft.ts");
+const { editorDraftToSoapText, lintSoapEditorDraft, parseSoapTextToEditorDraft, splitSoapEditorTaskLines } = await server.ssrLoadModule("/src/soapEditorDraft.ts");
+const { buildAntibioticApSummary, ensureAntibioticApInDraft } = await server.ssrLoadModule("/src/antibioticPlan.ts");
 const {
   buildUserAiStyleProfile,
   isDcSoapLineVisible,
@@ -1623,6 +1638,109 @@ try {
 }
 
 try {
+  const taskDraft = parseSoapTextToEditorDraft([
+    "S:",
+    "- stable",
+    "O:",
+    "- V/S: BP 120/70",
+    "A/P:",
+    "# PNA",
+    "- improving",
+    "Tasks:",
+    "- Order: VS q4h",
+    "- Check ambulatory oxygen saturation",
+    "- f/u B/C result",
+    "- Complete Levofloxacin PO x5 days",
+  ].join("\n"));
+  const splitTasks = splitSoapEditorTaskLines(taskDraft.taskLines);
+  if (!splitTasks.orderLines.some((line) => /VS q4h/i.test(line.text)) || !splitTasks.orderLines.some((line) => /Levofloxacin/i.test(line.text))) {
+    throw new Error(`Medication/order lines were not retained as explicit order subtype: ${JSON.stringify(splitTasks)}`);
+  }
+  if (!splitTasks.taskOnlyLines.some((line) => /Check ambulatory oxygen saturation/i.test(line.text)) || !splitTasks.taskOnlyLines.some((line) => /f\/u B\/C/i.test(line.text))) {
+    throw new Error(`Routine tasks were promoted into order section during parsing: ${JSON.stringify(splitTasks)}`);
+  }
+  const editedTask = { ...splitTasks.taskOnlyLines[0], text: "Check ambulation after lunch" };
+  const editedSplit = splitSoapEditorTaskLines([editedTask, ...splitTasks.orderLines]);
+  if (!editedSplit.taskOnlyLines.some((line) => /Check ambulation/i.test(line.text)) || editedSplit.orderLines.some((line) => /Check ambulation/i.test(line.text))) {
+    throw new Error(`Editing a task line changed its section by text classifier: ${JSON.stringify(editedSplit)}`);
+  }
+  if (isOrderSoapLine("Check ambulatory oxygen saturation") || isOrderSoapLine("f/u B/C result")) {
+    throw new Error("Generic check/follow-up tasks should not be classified as 藥囑.");
+  }
+
+  const abxSummary = buildAntibioticApSummary(
+    "B/C grew MRSA and Enterococcus faecalis. Order: Teicoplanin 400 mg IV qd 5/13-. f/u repeat blood culture and define source.",
+    "2026-05-15",
+  );
+  if (!abxSummary || !/MRSA\/Enterococcus bacteremia/i.test(abxSummary.title) || !/Teicoplanin 400 mg IV qd 5\/13- \(D3\)/i.test(abxSummary.line) || !/f\/u B\/C clearance\/susceptibility/i.test(abxSummary.line)) {
+    throw new Error(`Antibiotic A/P summary did not preserve drug/day/culture follow-up: ${JSON.stringify(abxSummary)}`);
+  }
+  const draftWithoutAbx = parseSoapText([
+    "S:",
+    "- stable",
+    "O:",
+    "- Lab: WBC 12.7",
+    "A/P:",
+    "# PNA / infection",
+    "- afebrile.",
+    "Tasks:",
+    "- f/u Cx",
+  ].join("\n"));
+  const abxDraft = ensureAntibioticApInDraft(
+    draftWithoutAbx,
+    "B/C grew MRSA and Enterococcus. Teicoplanin 400 mg IV qd 5/13-. f/u B/C.",
+    "2026-05-15",
+  );
+  const abxText = formatSoapDraft(abxDraft);
+  if (!/# PNA \/ infection[\s\S]*Teicoplanin 400 mg IV qd 5\/13- \(D3\)/i.test(abxText)) {
+    throw new Error(`Antibiotic line was not merged into infection A/P:\n${abxText}`);
+  }
+
+  const baselineProtected = [
+    "S:",
+    "- dyspnea improved",
+    "O:",
+    "- Lab: WBC 12.7, Cr 1.2",
+    "A/P:",
+    "# MRSA/Enterococcus bacteremia",
+    "- Teicoplanin 400 mg IV qd 5/13- (D3) for B/C MRSA/Enterococcus; f/u B/C clearance/susceptibility.",
+    "Tasks:",
+    "- f/u B/C result",
+    "DC:",
+    "- Pending: Abx duration and OPD meds.",
+  ].join("\n");
+  const transferWithoutProtected = guardRoundSoapDelta({
+    workflowMode: "transferHandoff",
+    baselineText: baselineProtected,
+    candidateText: [
+      "S:",
+      "- dyspnea improved",
+      "O:",
+      "- Lab: WBC 10",
+      "A/P:",
+      "# PNA improving",
+      "- O2 wean.",
+      "Tasks:",
+      "- arrange rehab",
+    ].join("\n"),
+    sourceFields: { admission: "transfer note", lastSoap: baselineProtected, labs: "WBC 10" },
+    selectedDate: "2026-05-15",
+  });
+  if (!/Teicoplanin 400 mg IV qd 5\/13- \(D3\)/i.test(transferWithoutProtected.acceptedText) || !/Pending: Abx duration/i.test(transferWithoutProtected.acceptedText)) {
+    throw new Error(`Transfer guard allowed protected Abx/DC information to disappear:\n${transferWithoutProtected.acceptedText}`);
+  }
+  if (!transferWithoutProtected.highRiskWarnings.some((warning) => /Protected antibiotic\/culture\/DC/i.test(warning))) {
+    throw new Error(`Transfer guard did not warn about carried protected data: ${JSON.stringify(transferWithoutProtected.highRiskWarnings)}`);
+  }
+
+  console.log("PASS Structured task editor and antibiotic A/P preservation prevent disappearing clinical data");
+  supplementalPasses += 1;
+} catch (error) {
+  failures.push({ name: "Structured task editor and antibiotic A/P preservation prevent disappearing clinical data", error: error instanceof Error ? error.message : String(error) });
+  console.error(`FAIL Structured task editor and antibiotic A/P preservation prevent disappearing clinical data: ${failures[failures.length - 1].error}`);
+}
+
+try {
   const lockedAp = classifyClinicalLine("Lab: Cr 2.7, Hb 8.7, INR 10; CXR improved", { fallbackKind: "ap", lockKind: true });
   const objectiveLab = classifyClinicalLine("Lab: Cr 2.7, Hb 8.7, INR 10", { fallbackKind: "lab" });
   if (lockedAp.kind !== "ap" || lockedAp.label !== "A/P" || !/^Lab:/i.test(lockedAp.text)) {
@@ -1712,6 +1830,144 @@ try {
 } catch (error) {
   failures.push({ name: "Layout preferences lock print labels and build abstract AI style profile", error: error instanceof Error ? error.message : String(error) });
   console.error(`FAIL Layout preferences lock print labels and build abstract AI style profile: ${failures[failures.length - 1].error}`);
+}
+
+try {
+  const date = "2026-05-27";
+  const patient = {
+    ...emptyPatient(),
+    id: "manual-display-regression",
+    bed: "T-01",
+    patientCode: "MANUAL",
+    newLabs: "old patient-level labs",
+    rawLabText: "old patient-level raw labs",
+    labReports: [
+      {
+        id: "old-lab-report",
+        date: "2026-05-26",
+        title: "Old labs",
+        rawText: "old patient-level raw labs",
+        items: [{ id: "old-lab-item", label: "K", value: "3.0", group: "Lyte/Renal" }],
+      },
+    ],
+    parsedLabItems: [{ id: "old-parsed-item", label: "K", value: "3.0", group: "Lyte/Renal" }],
+    newImaging: "Old CXR: mild congestion",
+    imageStudyEntries: [
+      {
+        id: "old-image",
+        date: "2026-05-26",
+        studyType: "CXR",
+        finding: "mild congestion",
+        impression: "old finding",
+        isImportant: false,
+        color: "Blue",
+        note: "",
+      },
+    ],
+    assessment: "old patient-level assessment",
+    plan: "old patient-level plan",
+    assessmentPlanItems: [
+      {
+        id: "old-ap",
+        problemTitle: "Old AP",
+        assessmentSummary: "old patient-level assessment",
+        evidenceOrCourseItems: [],
+        planItems: ["old patient-level plan"],
+        category: "activeProblem",
+        isImportant: false,
+        color: "Blue",
+        order: 0,
+      },
+    ],
+  };
+  const note = {
+    ...emptyDailyNote(date),
+    labSummary: "Manual today Lab: Cr 2.1 from 1.7, K 5.4",
+    rawLabText: "Manual today raw lab line",
+    labReports: [
+      {
+        id: "today-lab-report",
+        date,
+        title: "Manual daily labs",
+        rawText: "Manual today raw lab line",
+        items: [{ id: "today-lab-item", label: "Cr", value: "2.1", previousValue: "1.7", group: "Lyte/Renal" }],
+      },
+    ],
+    parsedLabItems: [{ id: "today-parsed-item", label: "Cr", value: "2.1", previousValue: "1.7", group: "Lyte/Renal" }],
+    imageSummary: "Manual CT A/P 5/27: biliary stent patent, no abscess",
+    imageStudyEntries: [
+      {
+        id: "today-image",
+        date,
+        studyType: "CT A/P",
+        finding: "biliary stent patent, no abscess",
+        impression: "manual daily image",
+        isImportant: true,
+        color: "Orange",
+        note: "",
+      },
+    ],
+    assessment: "manual daily assessment",
+    plan: "manual daily plan",
+    assessmentPlanItems: [
+      {
+        id: "today-ap",
+        problemTitle: "Manual AP",
+        assessmentSummary: "manual daily assessment",
+        evidenceOrCourseItems: ["Cr 2.1 from 1.7"],
+        planItems: ["manual daily plan"],
+        category: "activeProblem",
+        isImportant: true,
+        color: "Orange",
+        order: 0,
+      },
+    ],
+  };
+  const summary = getPatientDisplaySummary(patient, { [patient.id]: [note] }, date);
+  if (summary.latestLabs.reports[0]?.id !== "today-lab-report" || summary.latestLabs.items[0]?.id !== "today-lab-item") {
+    throw new Error(`Daily-note lab arrays were hidden by older patient-level arrays: ${JSON.stringify(summary.latestLabs)}`);
+  }
+  if (!/Manual today raw lab line/i.test(summary.latestLabs.text)) {
+    throw new Error(`Daily-note lab text was not displayed: ${summary.latestLabs.text}`);
+  }
+  if (summary.latestImages.entries[0]?.id !== "today-image" || !/Manual CT A\/P/i.test(summary.latestImages.text)) {
+    throw new Error(`Daily-note image data was hidden by older patient-level image data: ${JSON.stringify(summary.latestImages)}`);
+  }
+  if (summary.assessmentPlanItems[0]?.id !== "today-ap" || summary.assessment !== "manual daily assessment" || summary.plan !== "manual daily plan") {
+    throw new Error(`Daily-note A/P was hidden by older patient-level A/P: ${JSON.stringify({ ap: summary.assessmentPlanItems, assessment: summary.assessment, plan: summary.plan })}`);
+  }
+  const savedNote = {
+    ...note,
+    soapText: [
+      "S:",
+      "- manually reviewed interval",
+      "O:",
+      "- Lab: Cr 2.1 from 1.7",
+      "A/P:",
+      "# Manual AP",
+      "- manual daily plan",
+    ].join("\n"),
+    updatedAt: "2026-05-27T08:00:00.000Z",
+  };
+  const staleNote = { ...emptyDailyNote(date), labSummary: "old stale lab", soapText: "S:\n- old stale SOAP", updatedAt: "2026-05-27T07:00:00.000Z" };
+  if (dailyNoteMatchesSavedSnapshot(staleNote, savedNote)) {
+    throw new Error("Stale Firestore daily-note snapshot was accepted as the just-saved manual note");
+  }
+  if (!dailyNoteMatchesSavedSnapshot({ ...staleNote, soapText: savedNote.soapText }, savedNote)) {
+    throw new Error("Just-saved SOAP snapshot was not recognized after Firestore catch-up");
+  }
+  const savedFieldNote = { ...note, updatedAt: "2026-05-27T08:05:00.000Z" };
+  if (dailyNoteMatchesSavedSnapshot({ ...staleNote, soapText: "" }, savedFieldNote)) {
+    throw new Error("Stale structured daily-note snapshot was accepted before manual fields caught up");
+  }
+  if (!dailyNoteMatchesSavedSnapshot({ ...savedFieldNote, updatedAt: "2026-05-27T08:06:00.000Z" }, savedFieldNote)) {
+    throw new Error("Manual structured fields were not recognized after Firestore catch-up");
+  }
+  console.log("PASS Manual daily-note fields render over older patient-level structured data");
+  supplementalPasses += 1;
+} catch (error) {
+  failures.push({ name: "Manual daily-note fields render over older patient-level structured data", error: error instanceof Error ? error.message : String(error) });
+  console.error(`FAIL Manual daily-note fields render over older patient-level structured data: ${failures[failures.length - 1].error}`);
 }
 
 try {

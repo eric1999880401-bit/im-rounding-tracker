@@ -65,7 +65,10 @@ function looksLikeOrderLine(value: string) {
   return (
     /^\s*(?:order|orders?|meds?|藥囑)\s*[:：]/i.test(text) ||
     /^\s*(?:Abx|Anticoag\/AP|Steroid\/Immuno|Cardio\/Renal|Resp|Insulin\/Glucose|IVF\/Lyte|Nutrition|Monitoring|PRN|Routine(?: hidden)?)\s*:/i.test(text) ||
-    /\b(?:order|check|replace|repeat|trend|monitor|start|stop|hold|resume|continue|complete|taper|titrate|wean)\b/i.test(text) ||
+    (/\b(?:start|stop|hold|resume|continue|complete|taper|titrate|wean)\b/i.test(text) &&
+      /\b(?:abx|antibiotic|cef|vanco|teico|levofloxacin|ciprofloxacin|moxifloxacin|mero|tazo|zosyn|heparin|apixaban|warfarin|insulin|steroid|methylpred|prednisolone|lasix|furosemide)\b/i.test(text)) ||
+    (/\b(?:vs|v\/s|vital|i\/o|input\/output|spo2|glucose|sugar)\b/i.test(text) &&
+      /\b(?:q\d+\s*h|q\d+h|qd|bid|tid|qid|ac\/hs|stat|once)\b/i.test(text)) ||
     (/\b(?:iv|po|sc|im|mg|mcg|g|unit|units|q\d+h|qd|bid|tid|qid|prn|stat|x\s*\d+\s*d(?:ay)?s?)\b/i.test(text) &&
       /\b(?:abx|antibiotic|cef|vanco|teico|levo|cipro|mero|tazo|zosyn|morphine|fentanyl|lasix|furosemide|heparin|insulin|ppi|pantoprazole|steroid|methylpred|prednisolone)\b/i.test(text))
   );
@@ -106,6 +109,13 @@ export function emptySoapEditorProblem(): SoapEditorProblem {
     title: "",
     tone: "plain",
     lines: [emptySoapEditorLine("ap")],
+  };
+}
+
+export function splitSoapEditorTaskLines(lines: SoapEditorLine[]) {
+  return {
+    orderLines: lines.filter((line) => line.subtype === "order"),
+    taskOnlyLines: lines.filter((line) => line.subtype !== "order"),
   };
 }
 
@@ -159,7 +169,8 @@ function serializeTaskLine(line: SoapEditorLine) {
   const clean = safeClinicalLine(line.text, 170);
   if (!clean) return "";
   const tonePrefix = line.tone === "critical" ? "!! " : line.tone === "important" ? "! " : "";
-  const orderText = looksLikeOrderLine(clean) ? clean : `Order: ${clean}`;
+  const hasExplicitOrderPrefix = /^(?:order|orders?|meds?|藥囑|Abx|Anticoag\/AP|Steroid\/Immuno|Cardio\/Renal|Resp|Insulin\/Glucose|IVF\/Lyte|Nutrition|Monitoring|PRN|Routine(?: hidden)?)\s*[:：]/i.test(clean);
+  const orderText = hasExplicitOrderPrefix ? clean : `Order: ${clean}`;
   return `${tonePrefix}${orderText}`.trim();
 }
 

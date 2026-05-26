@@ -133,10 +133,13 @@ export function isObjectiveSoapLineVisible(line: string, layout: RoundingLayoutP
 export function isOrderSoapLine(line: string) {
   const text = line.trim().replace(/^!!?\s*/, "").replace(/^\*\s*/, "");
   return (
+    /^\s*藥囑\s*[:：]/i.test(text) ||
     /^\s*(?:order|orders?|meds?|藥囑)\s*[:：]/i.test(text) ||
-    /^\s*藥囑已收起\b/i.test(text) ||
     /^\s*(?:Abx|Anticoag\/AP|Steroid\/Immuno|Cardio\/Renal|Resp|Insulin\/Glucose|IVF\/Lyte|Nutrition|Monitoring|PRN|Routine(?: hidden)?)\s*:/i.test(text) ||
-    /\b(?:order|check|replace|repeat|trend|monitor|start|stop|hold|resume|continue|complete|taper|titrate|wean)\b/i.test(text) ||
+    (/\b(?:start|stop|hold|resume|continue|complete|taper|titrate|wean)\b/i.test(text) &&
+      /\b(?:abx|antibiotic|cef|vanco|teico|levofloxacin|ciprofloxacin|moxifloxacin|mero|tazo|zosyn|heparin|apixaban|warfarin|insulin|steroid|methylpred|prednisolone|lasix|furosemide|morphine|fentanyl)\b/i.test(text)) ||
+    (/\b(?:vs|v\/s|vital|i\/o|input\/output|spo2|glucose|sugar)\b/i.test(text) &&
+      /\b(?:q\d+\s*h|q\d+h|qd|bid|tid|qid|ac\/hs|stat|once)\b/i.test(text)) ||
     (/\b(?:iv|po|sc|im|mg|mcg|g|unit|units|q\d+h|qd|bid|tid|qid|prn|stat|x\s*\d+\s*d(?:ay)?s?)\b/i.test(text) &&
       /\b(?:abx|antibiotic|cef|vanco|teico|levo|cipro|mero|tazo|zosyn|morphine|fentanyl|lasix|furosemide|heparin|insulin|ppi|pantoprazole|steroid|methylpred|prednisolone)\b/i.test(text))
   );
@@ -149,7 +152,7 @@ export function isTaskSoapLineVisible(line: string, layout: RoundingLayoutPrefer
 }
 
 export function isDcSoapLineVisible(line: string, layout: RoundingLayoutPreferences | undefined) {
-  const isPrep = /\b(meds?|opd|certificate|cert|diagnosis certificate|診斷|帶藥|門診)\b/i.test(line);
+  const isPrep = /\b(meds?|opd|certificate|cert|diagnosis certificate)\b|帶藥|門診|診斷書/i.test(line);
   return isPrep ? isLayoutSectionVisible(layout, "dcPrep") : isLayoutSectionVisible(layout, "dcBarriers");
 }
 

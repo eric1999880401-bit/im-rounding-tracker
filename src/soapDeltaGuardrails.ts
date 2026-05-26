@@ -1,4 +1,5 @@
 import { classifyClinicalLine } from "./clinicalLineClassifier";
+import { ensureAntibioticApInDraft } from "./antibioticPlan";
 import { formatSoapDraft, parseSoapText, type SoapApProblem, type SoapDraft } from "./soapDraft";
 import { safeClinicalLine } from "./utils";
 
@@ -159,6 +160,7 @@ function ensureObjectivePrefix(line: string, prefix: "V/S" | "PE" | "Lab" | "Ima
 
 function isOrderLine(line: string) {
   const text = String(line ?? "").replace(/^!+\s*/, "").trim();
+  if (/^\s*藥囑\s*[:：]/i.test(text)) return true;
   if (/^\s*(?:order|orders?|meds?|藥囑)\s*[:：]/i.test(text)) return true;
   return (
     /^\s*(?:order|orders?|meds?|藥囑)\s*[:：]/i.test(text) ||
@@ -183,6 +185,20 @@ function isLowValueRoutineOrderLine(line: string) {
 
 function sourceHas(value: unknown) {
   return String(value ?? "").trim().length > 0;
+}
+
+function sourceFieldsText(fields: RoundSoapSourceFields) {
+  return [
+    fields.vitals,
+    fields.labs,
+    fields.images,
+    fields.orders,
+    fields.other,
+    fields.admission,
+    fields.lastSoap,
+  ]
+    .filter(sourceHas)
+    .join("\n");
 }
 
 function sourceProfile(fields: RoundSoapSourceFields) {
@@ -317,6 +333,56 @@ function isProtectedLine(line: string) {
   return /\b(abx|antibiotic|teicoplanin|vancomycin|ceftriaxone|cefepime|meropenem|culture|b\/c|bcx|pending|source|de-escalation|duration|dc|discharge|opd|certificate|meds?)\b/i.test(line);
 }
 
+function hasEquivalentLine(lines: string[], target: string) {
+  const key = normalizeLine(target);
+  return Boolean(key && lines.some((line) => {
+    const lineKey = normalizeLine(line);
+    return Boolean(lineKey && (lineKey.includes(key) || key.includes(lineKey)));
+  }));
+}
+
+function carryForwardProtectedDraft(baseline: SoapDraft, candidate: SoapDraft) {
+  let changed = false;
+  const next: SoapDraft = {
+    ...candidate,
+    apProblems: candidate.apProblems.map((problem) => ({ ...problem, lines: [...problem.lines] })),
+    taskLines: [...candidate.taskLines],
+    dcLines: [...candidate.dcLines],
+  };
+
+  baseline.apProblems.forEach((baselineProblem) => {
+    const protectedApLines = baselineProblem.lines.filter(isProtectedLine);
+    if (protectedApLines.length === 0 && !isProtectedLine(baselineProblem.title)) return;
+    let target = findMatchingProblem(baselineProblem, next.apProblems);
+    if (!target) {
+      target = { title: baselineProblem.title, lines: [] };
+      next.apProblems.push(target);
+      changed = true;
+    }
+    const missingLines = protectedApLines.filter((line) => !hasEquivalentLine(next.apProblems.flatMap((problem) => problem.lines), line));
+    if (missingLines.length > 0) {
+      target.lines = uniqueLines([...missingLines, ...target.lines], 2);
+      changed = true;
+    }
+  });
+
+  const missingTasks = baseline.taskLines.filter((line) => isProtectedLine(line) && !hasEquivalentLine(next.taskLines, line));
+  if (missingTasks.length > 0) {
+    next.taskLines = uniqueLines([...next.taskLines, ...missingTasks], 8);
+    changed = true;
+  }
+  const missingDc = baseline.dcLines.filter((line) => isProtectedLine(line) && !hasEquivalentLine(next.dcLines, line));
+  if (missingDc.length > 0) {
+    next.dcLines = uniqueLines([...next.dcLines, ...missingDc], 6);
+    changed = true;
+  }
+
+  return {
+    draft: next,
+    warnings: changed ? ["Protected antibiotic/culture/DC item(s) were carried forward from reviewed SOAP."] : [],
+  };
+}
+
 function totalLineCount(draft: SoapDraft) {
   return draft.header.length + draft.sLines.length + draft.oLines.length + draft.apProblems.flatMap((problem) => [problem.title, ...problem.lines]).length + draft.taskLines.length + draft.dcLines.length;
 }
@@ -348,7 +414,7 @@ function analyzeChangedSections(baseline: SoapDraft, candidate: SoapDraft) {
   return changed;
 }
 
-function draftForDailyUpdate(baseline: SoapDraft, candidate: SoapDraft, fields: RoundSoapSourceFields) {
+function draftForDailyUpdate(baseline: SoapDraft, candidate: SoapDraft, fields: RoundSoapSourceFields, selectedDate = "") {
   const profile = sourceProfile(fields);
   const warnings: string[] = [];
   const highRiskWarnings: string[] = [];
@@ -435,8 +501,7 @@ function draftForDailyUpdate(baseline: SoapDraft, candidate: SoapDraft, fields: 
     highRiskWarnings.push("AI output was much shorter than baseline; unrelated deletions were blocked where possible.");
   }
 
-  return {
-    draft: {
+  const draftBeforeAntibiotics = {
       header: baseline.header,
       sLines: profile.allowed.has("s") && candidate.sLines.length > 0 ? candidate.sLines : baseline.sLines,
       oLines: mergeObjective(nextObjective),
@@ -444,7 +509,18 @@ function draftForDailyUpdate(baseline: SoapDraft, candidate: SoapDraft, fields: 
       taskLines: uniqueLines([...nextOrders, ...nextTasks], 8),
       dcLines: nextDc,
       warnings: uniqueLines([...baseline.warnings, ...candidate.warnings], 5),
-    } satisfies SoapDraft,
+    } satisfies SoapDraft;
+  const draftWithAntibiotics = ensureAntibioticApInDraft(
+    draftBeforeAntibiotics,
+    [sourceFieldsText(fields), formatSoapDraft(candidate), formatSoapDraft(baseline)].join("\n"),
+    selectedDate,
+  );
+  if (!sameProblems(draftBeforeAntibiotics.apProblems, draftWithAntibiotics.apProblems)) {
+    pushChanged(changed, "ap", "A/P preserved antibiotic/culture plan from source", "normal", false);
+  }
+
+  return {
+    draft: draftWithAntibiotics,
     changed,
     warnings,
     highRiskWarnings,
@@ -457,15 +533,24 @@ export function guardRoundSoapDelta({
   candidateText,
   sourceFields,
   candidateWarnings = [],
+  selectedDate = "",
 }: {
   workflowMode: RoundSoapWorkflowMode;
   baselineText: string;
   candidateText: string;
   sourceFields: RoundSoapSourceFields;
   candidateWarnings?: string[];
+  selectedDate?: string;
 }): SoapDeltaReview {
   const baseline = parseSoapText(baselineText);
-  const candidate = parseSoapText(candidateText || baselineText);
+  const parsedCandidate = parseSoapText(candidateText || baselineText);
+  const candidateWithAntibiotics = ensureAntibioticApInDraft(
+    parsedCandidate,
+    [sourceFieldsText(sourceFields), candidateText, baselineText].join("\n"),
+    selectedDate,
+  );
+  const protectedCandidate = carryForwardProtectedDraft(baseline, candidateWithAntibiotics);
+  const candidate = workflowMode === "dailyUpdate" ? parsedCandidate : protectedCandidate.draft;
   const normalizedBaselineText = formatSoapDraft(baseline);
   const normalizedCandidateText = formatSoapDraft(candidate);
   if (workflowMode !== "dailyUpdate") {
@@ -475,12 +560,12 @@ export function guardRoundSoapDelta({
       candidateText: normalizedCandidateText,
       acceptedText: normalizedCandidateText,
       changedSections: analyzeChangedSections(baseline, candidate),
-      warnings: uniqueLines(candidateWarnings, 6),
-      highRiskWarnings: [],
+      warnings: uniqueLines([...candidateWarnings, ...protectedCandidate.warnings], 6),
+      highRiskWarnings: protectedCandidate.warnings.length > 0 ? protectedCandidate.warnings : [],
     };
   }
 
-  const daily = draftForDailyUpdate(baseline, candidate, sourceFields);
+  const daily = draftForDailyUpdate(baseline, candidate, sourceFields, selectedDate);
   const acceptedText = formatSoapDraft(daily.draft);
   return {
     workflowMode,

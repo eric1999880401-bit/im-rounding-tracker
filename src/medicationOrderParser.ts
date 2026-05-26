@@ -82,11 +82,13 @@ function normalizeWhitespace(value: string) {
 
 function cleanRawOrderLine(value: string) {
   return normalizeWhitespace(value)
-    .replace(/^[\s\-*•●‧·]+/, "")
+    .replace(/^[\s\-*+•·‧]+/, "")
     .replace(/^!!?\s*/, "")
-    .replace(/^\d+[\.)、]\s*/, "")
-    .replace(/^(?:order|orders?|meds?|藥囑)\s*[:：]\s*/i, "")
+    .replace(/^藥囑\s*[:：\s]*/i, "")
+    .replace(/^\d+[\.)、\s]*/, "")
+    .replace(/^(?:order|orders?|meds?|藥囑)\s*[:：\s]*/i, "")
     .replace(/^\d{4}[/-]\d{1,2}[/-]\d{1,2}\s+/, "")
+    .replace(/^\/?\d{1,2}[/-]\d{1,2}\s+/, "")
     .replace(/^\d{1,2}[/-]\d{1,2}(?:\s+\d{1,2}:\d{2})?\s+/, "")
     .replace(/\s+/g, " ")
     .trim();
@@ -105,7 +107,8 @@ export function stripOrderLinePrefix(value: string) {
   return String(value ?? "")
     .replace(/^\s*!!?\s*/, "")
     .replace(/^\s*\*\s*/, "")
-    .replace(/^\s*(?:order|orders?|meds?|藥囑)\s*[:：]\s*/i, "")
+    .replace(/^\s*藥囑\s*[:：\s]*/i, "")
+    .replace(/^\s*(?:order|orders?|meds?|藥囑)\s*[:：\s]*/i, "")
     .trim();
 }
 
@@ -116,12 +119,12 @@ function stripOrderInputPrefix(value: string) {
 }
 
 function inferAction(text: string): MedicationOrderAction {
-  if (/\b(hold|withhold|suspend|停)\b/i.test(text)) return "hold";
-  if (/\b(resume|restart|re-start|恢復)\b/i.test(text)) return "resume";
-  if (/\b(stop|dc|discontinue|d\/c|停用)\b/i.test(text)) return "stop";
+  if (/\b(hold|withhold|suspend)\b/i.test(text)) return "hold";
+  if (/\b(resume|restart|re-start)\b/i.test(text)) return "resume";
+  if (/\b(stop|dc|discontinue|d\/c)\b/i.test(text)) return "stop";
   if (/\b(complete|finish|x\s*\d+\s*d)\b/i.test(text)) return "complete";
   if (/\b(start|add|new)\b/i.test(text)) return "start";
-  if (/\b(replace|supplement|correct|補|kcl|mgso4|phosphate|bicarbonate)\b/i.test(text)) return "replace";
+  if (/\b(replace|supplement|correct|鋆kcl|mgso4|phosphate|bicarbonate)\b/i.test(text)) return "replace";
   if (/\b(vs|v\/s|vital|monitor|check|i\/o|io|input\/output|spo2|sugar check|glucose check)\b/i.test(text)) return "monitor";
   if (/\bprn|sos\b/i.test(text)) return "prn";
   if (/\bcontinue|cont\b/i.test(text)) return "continue";
@@ -283,7 +286,7 @@ export function summarizeMedicationOrders(
     const hiddenCount = orders.filter((order) => order.hiddenReason).length;
     return hiddenCount > 0 && mode !== "collapsed" ? [`Routine hidden: ${hiddenCount}`] : [];
   }
-  if (mode === "collapsed") return [`藥囑已收起 (${source.length})`];
+  if (mode === "collapsed") return [`藥囑 hidden (${source.length})`];
 
   const lines = groupOrders(source).map((group) => {
     const items =
@@ -310,7 +313,7 @@ export function formatMedicationOrderLinesForDisplay(lines: string[], mode: Orde
   if (cleanLines.length === 0) return [];
   const parsed = parseMedicationOrders(cleanLines.join("\n"));
   if (parsed.length === 0) {
-    if (mode === "collapsed") return [`藥囑已收起 (${cleanLines.length})`];
+    if (mode === "collapsed") return [`藥囑 hidden (${cleanLines.length})`];
     return cleanLines.slice(0, maxLines).map((line) => safeClinicalLine(line, 110)).filter(Boolean);
   }
   return summarizeMedicationOrders(parsed, { mode, maxLines });

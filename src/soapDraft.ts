@@ -1,4 +1,5 @@
 import { getRoundingDigest } from "./roundingDigest";
+import { ensureAntibioticApInDraft } from "./antibioticPlan";
 import type { AiSoapDraft, AssessmentPlanItem, DailyNote, Patient, PatientTask, TaskCategory, TaskPriority } from "./types";
 import {
   createId,
@@ -315,11 +316,70 @@ export function localRoundSoapFromPaste(patient: Patient, dailyNotes: DailyNote[
     .filter((line) => /\b(f\/u|follow|pending|repeat|call|consult|order|arrange|hold|resume|define|dc|discharge|opd)\b/i.test(line))
     .forEach((line) => addUniqueLine(baseline.taskLines, line.replace(/^tasks?\s*:\s*/i, ""), 6, 130));
 
-  return formatSoapDraft({
+  const mergedDraft = {
     ...baseline,
     apProblems: dedupeApProblems(baseline.apProblems).slice(0, 6),
     warnings: uniqueSoapLines([...baseline.warnings, "Local demo SOAP merge. Review before saving."], 3, 120),
-  });
+  } satisfies SoapDraft;
+
+  return formatSoapDraft(ensureAntibioticApInDraft(mergedDraft, [rawText, formatSoapDraft(baseline)].join("\n"), selectedDate));
+}
+
+function fallbackAntibioticSourceText(patient: Patient, dailyNotes: DailyNote[] = [], selectedDate = "") {
+  const selectedNote = dailyNotes.find((note) => note.date === selectedDate);
+  const legacyNotes = [
+    selectedNote,
+    ...sortedNotes(dailyNotes).filter((note) => note.date !== selectedDate),
+  ].filter(Boolean) as DailyNote[];
+  return [
+    patient.oneLiner,
+    patient.primaryDiagnosis,
+    patient.activeProblems,
+    patient.chiefComplaint,
+    patient.presentIllnessOrHPI,
+    patient.admissionBriefFreeText,
+    patient.initialAssessment,
+    patient.initialPlan,
+    patient.earlyHospitalCourse,
+    patient.hospitalCourseHighlights,
+    patient.importantRedFlags,
+    patient.vitalSigns,
+    patient.rawLabText,
+    patient.newLabs,
+    patient.newImaging,
+    patient.assessment,
+    patient.plan,
+    patient.dischargePlan,
+    patient.vsOrder,
+    ...patient.tasks.map((task) => task.text),
+    ...patient.assessmentPlanItems.flatMap((item) => [
+      item.problemTitle,
+      item.assessmentSummary,
+      ...item.evidenceOrCourseItems,
+      ...item.planItems,
+    ]),
+    ...legacyNotes.flatMap((note) => [
+      note.importantRedFlags,
+      note.overnightEvents,
+      note.subjectiveOrChiefConcern,
+      note.vitalSigns,
+      note.labSummary,
+      note.imageSummary,
+      note.assessment,
+      note.plan,
+      note.dischargePlan,
+      note.vsOrder,
+      note.rawLabText,
+      ...note.assessmentPlanItems.flatMap((item) => [
+        item.problemTitle,
+        item.assessmentSummary,
+        ...item.evidenceOrCourseItems,
+        ...item.planItems,
+      ]),
+    ]),
+  ]
+    .filter(hasText)
+    .join("\n");
 }
 
 function patientToFallbackSoapDraft(patient: Patient, dailyNotes: DailyNote[] = [], selectedDate = ""): SoapDraft {
@@ -341,7 +401,7 @@ function patientToFallbackSoapDraft(patient: Patient, dailyNotes: DailyNote[] = 
     150,
   );
   const prep = dischargePrepText(patient);
-  return {
+  const draft = {
     header,
     sLines: uniqueSoapLines([digest.subjective], 4, 120),
     oLines: makeObjectiveLines(digest.objective, digest.lab, digest.image),
@@ -349,7 +409,8 @@ function patientToFallbackSoapDraft(patient: Patient, dailyNotes: DailyNote[] = 
     taskLines: uniqueSoapLines([digest.tasks], 6, 120),
     dcLines: uniqueSoapLines([digest.discharge, prep ? `Prep: ${prep}` : ""], 4, 120),
     warnings: [],
-  };
+  } satisfies SoapDraft;
+  return ensureAntibioticApInDraft(draft, fallbackAntibioticSourceText(patient, dailyNotes, selectedDate), selectedDate);
 }
 
 export function patientToSoapDraft(patient: Patient, dailyNotes: DailyNote[] = [], selectedDate = ""): SoapDraft {
@@ -378,6 +439,27 @@ function aiLabLine(lab: AiSoapDraft["objective"]["labs"][number]) {
 
 function aiImageLine(image: AiSoapDraft["objective"]["images"][number]) {
   return [image.date, image.studyType, image.impression || image.finding].filter(hasText).join(": ");
+}
+
+function aiDraftAntibioticSourceText(draft: AiSoapDraft) {
+  return [
+    draft.oneLiner,
+    draft.admissionSummary,
+    draft.isbarHandoff,
+    ...(draft.objective?.labs ?? []).map(aiLabLine),
+    ...(draft.objective?.images ?? []).map(aiImageLine),
+    ...(draft.assessmentPlan ?? []).flatMap((item) => [
+      item.problemTitle,
+      item.assessmentSummary,
+      ...item.evidenceOrCourseItems,
+      ...item.planItems,
+    ]),
+    ...(draft.tasks ?? []).map((task) => task.text),
+    ...(draft.dischargeIssues ?? []),
+    ...(draft.uncertainty ?? []),
+  ]
+    .filter(hasText)
+    .join("\n");
 }
 
 export function aiSoapDraftToSoapDraft(draft: AiSoapDraft, patient?: Patient, selectedDate = ""): SoapDraft {
@@ -422,7 +504,7 @@ export function aiSoapDraftToSoapDraft(draft: AiSoapDraft, patient?: Patient, se
     })),
   ).slice(0, 6);
 
-  return {
+  const soapDraft = {
     header,
     sLines,
     oLines,
@@ -430,7 +512,9 @@ export function aiSoapDraftToSoapDraft(draft: AiSoapDraft, patient?: Patient, se
     taskLines: uniqueSoapLines((draft.tasks ?? []).map((task) => task.text), 6, 120),
     dcLines: uniqueSoapLines(draft.dischargeIssues ?? [], 4, 120),
     warnings: uniqueSoapLines(draft.uncertainty ?? [], 4, 120),
-  };
+  } satisfies SoapDraft;
+
+  return ensureAntibioticApInDraft(soapDraft, aiDraftAntibioticSourceText(draft), selectedDate);
 }
 
 export function formatSoapDraft(draft: SoapDraft) {

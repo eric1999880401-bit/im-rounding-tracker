@@ -10,11 +10,11 @@ import {
   emptySoapEditorLine,
   emptySoapEditorProblem,
   lintSoapEditorDraft,
+  splitSoapEditorTaskLines,
   type SoapEditorDraft,
   type SoapEditorLine,
   type SoapEditorProblem,
 } from "../soapEditorDraft";
-import { isOrderSoapLine } from "../userPreferences";
 import MedicationOrderReviewPanel, { type MedicationOrderSummaryLine } from "./MedicationOrderReviewPanel";
 
 interface StructuredSoapEditorProps {
@@ -41,10 +41,6 @@ const objectiveKindOptions: Array<{ value: ClinicalLineKind; label: string }> = 
 
 function cleanLines(lines: SoapEditorLine[]) {
   return lines.filter((line) => line.text.trim());
-}
-
-function isEditorOrderLine(line: SoapEditorLine) {
-  return line.subtype === "order" || isOrderSoapLine(line.text);
 }
 
 function asOrderLines(lines: SoapEditorLine[]) {
@@ -139,7 +135,7 @@ function SelectionColorToolbar({
         title="Clear selected color"
         aria-label="Clear selected color"
       >
-        ×
+        ?
       </button>
     </div>
   );
@@ -206,9 +202,9 @@ function LineEditor({
           controlRef={textareaRef}
         />
         <div className="structured-soap-line-actions">
-          <button type="button" className="secondary compact-button" onClick={onMoveUp} title="Move up">↑</button>
-          <button type="button" className="secondary compact-button" onClick={onMoveDown} title="Move down">↓</button>
-          <button type="button" className="secondary compact-button" onClick={onRemove} title="Remove">×</button>
+          <button type="button" className="secondary compact-button" onClick={onMoveUp} title="Move up">Up</button>
+          <button type="button" className="secondary compact-button" onClick={onMoveDown} title="Move down">Down</button>
+          <button type="button" className="secondary compact-button" onClick={onRemove} title="Remove">Remove</button>
         </div>
       </div>
     </div>
@@ -321,9 +317,9 @@ function ProblemEditor({
             </select>
           </div>
           <div className="structured-soap-line-actions">
-            <button type="button" className="secondary compact-button" onClick={onMoveUp} title="Move problem up">↑</button>
-            <button type="button" className="secondary compact-button" onClick={onMoveDown} title="Move problem down">↓</button>
-            <button type="button" className="secondary compact-button" onClick={onRemove} title="Remove problem">×</button>
+            <button type="button" className="secondary compact-button" onClick={onMoveUp} title="Move problem up">Up</button>
+            <button type="button" className="secondary compact-button" onClick={onMoveDown} title="Move problem down">Down</button>
+            <button type="button" className="secondary compact-button" onClick={onRemove} title="Remove problem">Remove</button>
           </div>
         </div>
       </div>
@@ -365,8 +361,7 @@ export function StructuredSoapEditor({
   const issues = lintSoapEditorDraft(draft);
   const updateDraft = (patch: Partial<SoapEditorDraft>) => onChange({ ...draft, ...patch });
   const problems = draft.apProblems.length > 0 ? draft.apProblems : [emptySoapEditorProblem()];
-  const orderLines = draft.taskLines.filter(isEditorOrderLine);
-  const taskOnlyLines = draft.taskLines.filter((line) => !isEditorOrderLine(line));
+  const { orderLines, taskOnlyLines } = splitSoapEditorTaskLines(draft.taskLines);
   const applyOrderSummaries = (lines: MedicationOrderSummaryLine[]) => {
     const nextOrderLines = lines.map((line) => ({
       ...emptySoapEditorLine("task"),

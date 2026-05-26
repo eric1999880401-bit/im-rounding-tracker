@@ -124,7 +124,7 @@ export function classifyPrintVisualItem(item: { raw: string; text: string }, fal
   const markedText = visualPrintText(isOrderSoapLine(source) ? stripOrderLinePrefix(source) : source);
   return {
     kind: classified.kind as PrintVisualKind,
-    label: label.includes("亙") ? "藥囑" : label,
+    label: label.includes("藥囑") ? "藥囑" : label,
     text: removePrintEllipsis(markedText || (isOrderSoapLine(source) ? stripOrderLinePrefix(classified.text) : classified.text)),
     tone: classified.tone,
   };
