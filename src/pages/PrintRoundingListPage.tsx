@@ -774,7 +774,7 @@ function PrintRoundingListPage({
       });
     const apText = printListItems(apLines, "ap", limits.apProblems, limits.detailChars + 24)
       .map((item) => item.raw)
-      .join(roundingLayout.apDisplayMode === "merged" ? " | " : "\n");
+      .join("\n");
     return apText || issueSummary(patient) || diagnosisSummary(patient);
   }
 
@@ -816,8 +816,17 @@ function PrintRoundingListPage({
   function sectionBox(title: string, value: string, extra?: ReactNode, fallbackKind: PrintVisualKind = "other") {
     const visibleItems = printListItems(value.split(/\r?\n/), fallbackKind);
     if (visibleItems.length === 0 && !extra) return null;
+    const sectionClass = title === "S"
+      ? "print-section-subjective"
+      : title === "O"
+        ? "print-section-objective"
+        : fallbackKind === "ap"
+          ? "print-section-ap"
+          : fallbackKind === "task"
+            ? "print-section-taskdc"
+            : "";
     return (
-      <div className="print-section-box">
+      <div className={["print-section-box", sectionClass].filter(Boolean).join(" ")}>
         <div className="print-section-title">{title}</div>
         {renderPrintVisualItems(visibleItems, title, fallbackKind)}
         {extra}
