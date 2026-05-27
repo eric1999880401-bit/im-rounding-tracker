@@ -59,6 +59,7 @@ const {
   isObjectiveSoapLineVisible,
   isOrderSoapLine,
   isTaskSoapLineVisible,
+  normalizeKeywordHighlightRules,
   normalizeRoundingLayoutPreferences,
   visibleSectionsForPreset,
 } = await server.ssrLoadModule("/src/userPreferences.ts");
@@ -73,7 +74,8 @@ const {
   restoreSoapDeltaSection,
 } = await server.ssrLoadModule("/src/soapDeltaGuardrails.ts");
 const { displayPrintLine } = await server.ssrLoadModule("/src/printPriority.ts");
-const { applyClinicalColorMarkup, clearClinicalColorMarkupAtSelection } = await server.ssrLoadModule("/src/clinicalColorMarkup.ts");
+const { applyClinicalColorMarkup, applyUserKeywordHighlights, clearClinicalColorMarkupAtSelection } = await server.ssrLoadModule("/src/clinicalColorMarkup.ts");
+const { labReferenceText } = await server.ssrLoadModule("/src/labReference.ts");
 
 function haystack(plan) {
   return [
@@ -1419,6 +1421,38 @@ try {
   if (!/B\/C pending|Teicoplanin|CT neck\/chest/i.test(mergedLocalSoap)) {
     throw new Error(`Local demo SOAP merge lost treatment/pending/image facts:\n${mergedLocalSoap}`);
   }
+  const cholangitisLocalSoap = localRoundSoapFromPaste(
+    {
+      ...emptyPatient(),
+      bed: "9A-09",
+      patientCode: "TEST-0528",
+      age: 72,
+      sex: "M",
+      primaryDiagnosis: "Acute cholangitis sepsis",
+      activeProblems: "AKI; O2 wean",
+      underlyingDiseases: "CKD3b, HFrEF EF35%, AF on apixaban",
+    },
+    [],
+    "2026-05-28",
+    [
+      "Admission:",
+      "Fever/RUQ pain/jaundice/hypotension.",
+      "V/S:",
+      "T 38.6, BP 86/52, HR 118, RR 24, SpO2 91% NC 3L. PE: icteric sclera, RUQ tenderness.",
+      "Lab:",
+      "5/28 WBC 18.9, Cr 2.8 from baseline 1.6, K 5.4, lactate 3.4. B/C x2 pending.",
+      "Image:",
+      "CT A/P 5/28: CBD stone with cholangitis. ERCP 5/28: CBD stone extraction + plastic biliary stent.",
+      "藥囑:",
+      "piperacillin/tazobactam 5/28-, hold apixaban, O2 NC 3L.",
+    ].join("\n"),
+  );
+  if (!/piperacillin\/tazobactam 5\/28-/i.test(cholangitisLocalSoap) || !/ERCP 5\/28/i.test(cholangitisLocalSoap) || !/PE: icteric sclera/i.test(cholangitisLocalSoap)) {
+    throw new Error(`Local demo New SOAP merge lost abx/procedure/PE facts:\n${cholangitisLocalSoap}`);
+  }
+  if (/V\/S:\s*PE:/i.test(cholangitisLocalSoap)) {
+    throw new Error(`Local demo New SOAP merge mislabeled PE as V/S:\n${cholangitisLocalSoap}`);
+  }
   const highlighted = soapTextWithDerivedHighlights(reviewedSoapText);
   if (!/!!- Teicoplanin 5\/13-/i.test(highlighted) || !/\[\[orange:.*OPD oncology/i.test(highlighted)) {
     throw new Error(`Derived SOAP highlight did not mark infection/DC signals:\n${highlighted}`);
@@ -1785,14 +1819,41 @@ try {
   if (clearedColor !== "Cr 2.7 improving") {
     throw new Error(`Color clear helper did not remove surrounding mark: ${clearedColor}`);
   }
+  const keywordRules = normalizeKeywordHighlightRules([
+    { id: "teico", label: "Teico", pattern: "Teicoplanin", matchMode: "containsInsensitive", color: "orange", style: "highlight", enabled: true, priority: 0 },
+    { id: "cr", label: "Cr", pattern: "Cr", matchMode: "exact", color: "yellow", style: "text", enabled: true, priority: 1 },
+    { id: "disabled", label: "Mero", pattern: "Meropenem", matchMode: "containsInsensitive", color: "purple", style: "highlight", enabled: false, priority: 2 },
+  ]);
+  const highlightedKeywords = applyUserKeywordHighlights("Continue teicoplanin; Cr 6.1; Meropenem", keywordRules);
+  if (!highlightedKeywords.includes("[[orange:teicoplanin]]") || !highlightedKeywords.includes("[[yellow-text:Cr]] 6.1") || highlightedKeywords.includes("[[purple:Meropenem]]")) {
+    throw new Error(`Keyword highlights were not applied deterministically: ${highlightedKeywords}`);
+  }
+  const manualMarkupWins = applyUserKeywordHighlights("[[blue:Teicoplanin]] Cr 1.2", keywordRules);
+  if (!manualMarkupWins.includes("[[blue:Teicoplanin]]") || !manualMarkupWins.includes("[[yellow-text:Cr]] 1.2")) {
+    throw new Error(`Manual markup did not win over keyword rules: ${manualMarkupWins}`);
+  }
 
   const visibleSections = { ...visibleSectionsForPreset("compactSoap"), objectiveImages: false, tasks: false, dcBarriers: false, dcPrep: true };
-  const layout = normalizeRoundingLayoutPreferences({ preset: "compactSoap", visibleSections, apDisplayMode: "merged", orderDisplayMode: "category" });
+  const layout = normalizeRoundingLayoutPreferences({
+    preset: "compactSoap",
+    visibleSections,
+    apDisplayMode: "merged",
+    orderDisplayMode: "category",
+    printFontSize: "large",
+    printLineSpacing: "airy",
+    printPadding: "dense",
+  });
   if (layout.apDisplayMode !== "merged") {
     throw new Error("A/P display mode setting was not preserved");
   }
   if (layout.orderDisplayMode !== "category") {
     throw new Error("Order display mode setting was not preserved");
+  }
+  if (layout.printFontSize !== "large" || layout.printLineSpacing !== "airy" || layout.printPadding !== "dense") {
+    throw new Error(`Print appearance settings were not preserved: ${JSON.stringify(layout)}`);
+  }
+  if (!/3\.5-5\.1/.test(labReferenceText("K")) || labReferenceText("untrusted-custom-lab")) {
+    throw new Error("Lab reference display should only show known trusted single-value references");
   }
   if (isObjectiveSoapLineVisible("Image: CXR: improved opacity", layout)) {
     throw new Error("O Image remained visible after objectiveImages was disabled");

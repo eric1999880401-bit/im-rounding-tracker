@@ -1,6 +1,6 @@
 import { Link } from "react-router-dom";
 import { useEffect, useState } from "react";
-import type { AnalyzePatientBatchTextInput, DailyNote, DailyNotesByPatient, Patient, PatientImportDraft, SortMode, TaskCategory, TaskPriority, UserPreferences } from "../types";
+import type { AnalyzePatientBatchTextInput, DailyNote, DailyNotesByPatient, KeywordHighlightRule, Patient, PatientImportDraft, SortMode, TaskCategory, TaskPriority, UserPreferences } from "../types";
 import {
   createId,
   createTodayFromYesterday,
@@ -117,12 +117,21 @@ function classifyBoardVisualLine(line: string, fallbackKind: BoardVisualKind = "
   return {
     kind: classified.kind,
     label: isOrder ? "藥囑" : classified.label,
-    text: /\[\[(?:red|orange|yellow|blue|green|purple):/i.test(displayText) ? displayText : safeClinicalLine(displayText || classified.text, maxChars),
+    text: /\[\[(?:red|orange|yellow|blue|green|purple)(?:-(?:highlight|text))?:/i.test(displayText) ? displayText : safeClinicalLine(displayText || classified.text, maxChars),
     tone: classified.tone,
   };
 }
 
-function renderBoardVisualLines(lines: string[], fallback: string, fallbackKind: BoardVisualKind = "other", maxLines = 4) {
+function boardVisualLabelForSection(label: string, fallbackKind: BoardVisualKind) {
+  const normalized = label.includes("藥") ? "藥囑" : label;
+  if (fallbackKind === "s" && normalized === "S") return "";
+  if (fallbackKind === "ap" && normalized === "A/P") return "";
+  if (fallbackKind === "task" && /^(?:TASK|藥囑)$/i.test(normalized)) return "";
+  if (fallbackKind === "dc" && normalized === "DC") return "";
+  return normalized;
+}
+
+function renderBoardVisualLines(lines: string[], fallback: string, fallbackKind: BoardVisualKind = "other", maxLines = 4, keywordRules: KeywordHighlightRule[] = []) {
   const visibleLines = lines.map((line) => line.trim()).filter(Boolean).slice(0, maxLines);
   if (visibleLines.length === 0) return <span className="board-visual-empty">{fallback}</span>;
 
@@ -130,14 +139,15 @@ function renderBoardVisualLines(lines: string[], fallback: string, fallbackKind:
     <div className="board-visual-stack">
       {visibleLines.map((line, index) => {
         const visual = classifyBoardVisualLine(line, fallbackKind);
+        const visualLabel = boardVisualLabelForSection(visual.label, fallbackKind);
         return (
           <div
-            className={`board-visual-line board-visual-line-${visual.kind} board-visual-line-${visual.tone}`}
+            className={`board-visual-line ${visualLabel ? "" : "board-visual-line-unlabeled"} board-visual-line-${visual.kind} board-visual-line-${visual.tone}`}
             key={`${line}-${index}`}
           >
-            <span className="board-visual-label">{visual.label}</span>
+            {visualLabel && <span className="board-visual-label">{visualLabel}</span>}
             <span className="board-visual-text">
-              <ClinicalInlineText value={visual.text} />
+              <ClinicalInlineText value={visual.text} keywordRules={keywordRules} />
             </span>
           </div>
         );
@@ -1509,13 +1519,13 @@ function PatientBoardPage({
                     {isLayoutSectionVisible(roundingLayout, "subjective") && (
                       <div className="board-soap-row">
                         <span className="board-label">S</span>
-                        {renderBoardVisualLines(visibleSubjectiveLines, "-", "s", 2)}
+                        {renderBoardVisualLines(visibleSubjectiveLines, "-", "s", 2, preferences.keywordHighlightRules)}
                       </div>
                     )}
                     {visibleObjectiveLines.length > 0 && (
                       <div className="board-soap-row">
                         <span className="board-label">O</span>
-                        {renderBoardVisualLines(prioritizedObjectiveLines, "-", "other", 6)}
+                        {renderBoardVisualLines(prioritizedObjectiveLines, "-", "other", 6, preferences.keywordHighlightRules)}
                       </div>
                     )}
                   </section>
@@ -1525,15 +1535,15 @@ function PatientBoardPage({
                   <section className="patient-board-section patient-board-soap-ap">
                     <span className="board-label">A/P</span>
                     {roundingLayout.apDisplayMode === "merged" ? (
-                      renderBoardVisualLines(mergedApLine ? [mergedApLine] : [], "-", "ap", 1)
+                      renderBoardVisualLines(mergedApLine ? [mergedApLine] : [], "-", "ap", 1, preferences.keywordHighlightRules)
                     ) : (
                       <div className="board-soap-ap-list">
                         {visibleApProblems.slice(0, roundingLayout.boardDensity === "normal" ? 5 : 4).map((problem) => (
                           <div className={boardProblemClass(problem.title, problem.lines)} key={`${problem.title}-${problem.lines.join("|")}`}>
-                            <strong>#<ClinicalInlineText value={problem.title} maxChars={56} /></strong>
+                            <strong>#<ClinicalInlineText value={problem.title} maxChars={56} keywordRules={preferences.keywordHighlightRules} /></strong>
                             {problem.lines.length > 0 && (
                               <span>
-                                <ClinicalInlineText value={problem.lines.slice(0, 2).join("; ")} maxChars={92} />
+                                <ClinicalInlineText value={problem.lines.slice(0, 2).join("; ")} maxChars={92} keywordRules={preferences.keywordHighlightRules} />
                               </span>
                             )}
                           </div>
@@ -1549,7 +1559,7 @@ function PatientBoardPage({
                     {isLayoutSectionVisible(roundingLayout, "orders") && (
                       <div className="board-subsection patient-board-orders">
                         <span className="board-label">藥囑</span>
-                        {renderBoardVisualLines(displayOrderLines, roundingLayout.orderDisplayMode === "collapsed" ? "藥囑已收起" : "無藥囑", "task", 4)}
+                        {renderBoardVisualLines(displayOrderLines, roundingLayout.orderDisplayMode === "collapsed" ? "藥囑已收起" : "無藥囑", "task", 4, preferences.keywordHighlightRules)}
                       </div>
                     )}
                     {isLayoutSectionVisible(roundingLayout, "tasks") && (
@@ -1561,13 +1571,13 @@ function PatientBoardPage({
                             <span>{pendingTaskCount} pending</span>
                           </span>
                         </div>
-                        {renderBoardVisualLines(visibleTaskLines, "No pending tasks", "task", 4)}
+                        {renderBoardVisualLines(visibleTaskLines, "No pending tasks", "task", 4, preferences.keywordHighlightRules)}
                       </div>
                     )}
                     {(isLayoutSectionVisible(roundingLayout, "dcBarriers") || isLayoutSectionVisible(roundingLayout, "dcPrep")) && (
                       <div className="board-subsection patient-board-discharge">
                         <span className="board-label">DC</span>
-                        {renderBoardVisualLines(visibleDcLines, "TBD", "dc", 2)}
+                        {renderBoardVisualLines(visibleDcLines, "TBD", "dc", 2, preferences.keywordHighlightRules)}
                         {dischargeReminder(patient) && isLayoutSectionVisible(roundingLayout, "dcPrep") && <div className="important-line">{dischargeReminder(patient)}</div>}
                       </div>
                     )}
@@ -1661,6 +1671,7 @@ function PatientBoardPage({
                     compact
                     layoutPreferences={roundingLayout}
                     aiStyleProfile={preferences.aiStyleProfile}
+                    keywordRules={preferences.keywordHighlightRules}
                     onSavePatient={onSavePatient}
                     onSaveDailyNote={onSaveDailyNote}
                   />

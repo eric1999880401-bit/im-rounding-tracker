@@ -42,7 +42,7 @@ const kindLabels: Record<ClinicalLineKind, string> = {
 
 export function stripClinicalMarkup(value: string) {
   return String(value ?? "")
-    .replace(/\[\[(red|orange|yellow|blue|green|purple):([\s\S]*?)\]\]/gi, "$2")
+    .replace(/\[\[(red|orange|yellow|blue|green|purple)(?:-(?:highlight|text))?:([\s\S]*?)\]\]/gi, "$2")
     .replace(/^!!+\s*/, "")
     .replace(/^!+\s*/, "")
     .replace(/^\*\s*/, "")
@@ -66,9 +66,9 @@ export function normalizeClinicalDisplayText(value: string) {
 
 export function normalizeClinicalDisplayTextPreservingMarks(value: string) {
   const marks: string[] = [];
-  const tokenized = String(value ?? "").replace(/\[\[(red|orange|yellow|blue|green|purple):([\s\S]*?)\]\]/gi, (_, color: string, inner: string) => {
+  const tokenized = String(value ?? "").replace(/\[\[(red|orange|yellow|blue|green|purple)(?:-(highlight|text))?:([\s\S]*?)\]\]/gi, (_, color: string, style: string, inner: string) => {
     const token = `__CLINICAL_MARK_${marks.length}__`;
-    marks.push(`[[${color.toLowerCase()}:${normalizeClinicalDisplayText(inner)}]]`);
+    marks.push(`[[${color.toLowerCase()}${style ? `-${style}` : ""}:${normalizeClinicalDisplayText(inner)}]]`);
     return token;
   });
 

@@ -681,21 +681,21 @@ function PatientDetailPage({
             <summary>{note.date}</summary>
             {note.soapText?.trim() ? (
               <div className="soap-history-reviewed">
-                <ClinicalText value={note.soapText} />
+                <ClinicalText value={note.soapText} keywordRules={preferences.keywordHighlightRules} />
               </div>
             ) : (
             <div className="soap-history-grid">
-              <div><strong>Red Flags</strong><ClinicalText value={note.importantRedFlags} importantDefault /></div>
-              <div><strong>Overnight Event</strong><ClinicalText value={note.overnightEvents} /></div>
-              <div><strong>S</strong><ClinicalText value={note.subjectiveOrChiefConcern} /></div>
-              <div><strong>V/S</strong><ClinicalText value={note.vitalSigns} /></div>
-              <div><strong>Blood sugar</strong><ClinicalText value={note.bloodSugar} /></div>
-              <div><strong>PE</strong><ClinicalText value={note.physicalExam} /></div>
-              <div><strong>Lab</strong><ClinicalText value={note.rawLabText || note.labSummary} /></div>
-              <div><strong>Image</strong><ClinicalText value={note.imageSummary} /></div>
-              <div><strong>A</strong><ClinicalText value={note.assessment} /></div>
-              <div><strong>P</strong><ClinicalText value={note.plan} /></div>
-              <div><strong>DC / VS</strong><ClinicalText value={[note.dischargePlan, note.vsOrder].filter(Boolean).join("\n")} /></div>
+              <div><strong>Red Flags</strong><ClinicalText value={note.importantRedFlags} importantDefault keywordRules={preferences.keywordHighlightRules} /></div>
+              <div><strong>Overnight Event</strong><ClinicalText value={note.overnightEvents} keywordRules={preferences.keywordHighlightRules} /></div>
+              <div><strong>S</strong><ClinicalText value={note.subjectiveOrChiefConcern} keywordRules={preferences.keywordHighlightRules} /></div>
+              <div><strong>V/S</strong><ClinicalText value={note.vitalSigns} keywordRules={preferences.keywordHighlightRules} /></div>
+              <div><strong>Blood sugar</strong><ClinicalText value={note.bloodSugar} keywordRules={preferences.keywordHighlightRules} /></div>
+              <div><strong>PE</strong><ClinicalText value={note.physicalExam} keywordRules={preferences.keywordHighlightRules} /></div>
+              <div><strong>Lab</strong><ClinicalText value={note.rawLabText || note.labSummary} keywordRules={preferences.keywordHighlightRules} /></div>
+              <div><strong>Image</strong><ClinicalText value={note.imageSummary} keywordRules={preferences.keywordHighlightRules} /></div>
+              <div><strong>A</strong><ClinicalText value={note.assessment} keywordRules={preferences.keywordHighlightRules} /></div>
+              <div><strong>P</strong><ClinicalText value={note.plan} keywordRules={preferences.keywordHighlightRules} /></div>
+              <div><strong>DC / VS</strong><ClinicalText value={[note.dischargePlan, note.vsOrder].filter(Boolean).join("\n")} keywordRules={preferences.keywordHighlightRules} /></div>
             </div>
             )}
           </details>
@@ -737,6 +737,7 @@ function PatientDetailPage({
           externalSoapStatus={externalSoapDraft.status}
           layoutPreferences={roundingLayout}
           aiStyleProfile={preferences.aiStyleProfile}
+          keywordRules={preferences.keywordHighlightRules}
           onDirtyChange={updateRoundSoapDirty}
         />
       </section>
@@ -792,7 +793,7 @@ function PatientDetailPage({
         </div>
         {headerRedFlags && (
           <div className="detail-header-red-flags">
-            <strong>Red Flags:</strong> <ClinicalText value={headerRedFlags} maxLines={3} maxCharsPerLine={72} importantDefault />
+            <strong>Red Flags:</strong> <ClinicalText value={headerRedFlags} maxLines={3} maxCharsPerLine={72} importantDefault keywordRules={preferences.keywordHighlightRules} />
           </div>
         )}
       </section>

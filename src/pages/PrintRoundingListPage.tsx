@@ -1,6 +1,18 @@
 import { useState } from "react";
 import type { ReactNode } from "react";
-import type { DailyNotesByPatient, MiscTask, Patient, PhonebookContact, PrintDensity, SortMode, StudyTopic, UserPreferences } from "../types";
+import type {
+  DailyNotesByPatient,
+  MiscTask,
+  Patient,
+  PhonebookContact,
+  PrintDensity,
+  PrintFontSize,
+  PrintLineSpacing,
+  PrintPadding,
+  SortMode,
+  StudyTopic,
+  UserPreferences,
+} from "../types";
 import {
   getActiveProblemItems,
   getActiveAttendingNames,
@@ -61,7 +73,10 @@ function PrintRoundingListPage({
   const [admissionBriefPrintMode, setAdmissionBriefPrintMode] = useState("compact");
   const [selectedAttending, setSelectedAttending] = useState("");
   const [hideCompletedTasks, setHideCompletedTasks] = useState(true);
-  const [density, setDensity] = useState<PrintDensity>(roundingLayout.printDensity === "ultra-compact" ? "ultra-compact" : "normal");
+  const [density, setDensity] = useState<PrintDensity>(roundingLayout.printDensity);
+  const [fontSize, setFontSize] = useState<PrintFontSize>(roundingLayout.printFontSize);
+  const [lineSpacing, setLineSpacing] = useState<PrintLineSpacing>(roundingLayout.printLineSpacing);
+  const [padding, setPadding] = useState<PrintPadding>(roundingLayout.printPadding);
   const [sortMode, setSortMode] = useState<SortMode>("bed");
   const [team, setTeam] = useState("Team A");
   const [attending, setAttending] = useState("");
@@ -265,6 +280,7 @@ function PrintRoundingListPage({
 
   function printVisualLabelForSection(label: string, fallbackKind: PrintVisualKind) {
     const normalized = label.includes("藥囑") ? "藥囑" : label;
+    if (label.includes("藥") || label.includes("亙") || /order/i.test(label)) return "藥囑";
     if (fallbackKind === "s" && normalized === "S") return "";
     if (fallbackKind === "ap" && normalized === "A/P") return "";
     return normalized;
@@ -284,7 +300,7 @@ function PrintRoundingListPage({
             >
               {visualLabel && <span className="print-visual-label">{visualLabel}</span>}
               <span className="print-visual-text">
-                <ClinicalInlineText value={visual.text} />
+                <ClinicalInlineText value={visual.text} keywordRules={preferences.keywordHighlightRules} labReferenceDisplay={density === "normal" ? "inline" : "tooltip"} />
               </span>
             </div>
           );
@@ -975,25 +991,25 @@ function PrintRoundingListPage({
         <div className="brief-grid">
           <div className="span-2">
             <strong>Chief Concern</strong>
-            <ClinicalText value={chiefComplaint} />
+            <ClinicalText value={chiefComplaint} keywordRules={preferences.keywordHighlightRules} />
           </div>
           <div className="span-2">
             <strong>PI / HPI</strong>
-            <ClinicalText value={hpi} />
+            <ClinicalText value={hpi} keywordRules={preferences.keywordHighlightRules} />
           </div>
           {summary && (
             <div className="span-2">
               <strong>Concise Admission Summary</strong>
-              <ClinicalText value={summary} />
+              <ClinicalText value={summary} keywordRules={preferences.keywordHighlightRules} />
             </div>
           )}
           <div>
             <strong>Key PMH</strong>
-            <ClinicalText value={patient.admissionPMH || patient.underlyingDiseases} />
+            <ClinicalText value={patient.admissionPMH || patient.underlyingDiseases} keywordRules={preferences.keywordHighlightRules} />
           </div>
           <div>
             <strong>Key Labs / Images</strong>
-            <ClinicalText value={[keyLabs ? `Lab: ${keyLabs}` : "", keyImages ? `Image: ${keyImages}` : ""].filter(Boolean).join("\n")} />
+            <ClinicalText value={[keyLabs ? `Lab: ${keyLabs}` : "", keyImages ? `Image: ${keyImages}` : ""].filter(Boolean).join("\n")} keywordRules={preferences.keywordHighlightRules} labReferenceDisplay={density === "normal" ? "inline" : "tooltip"} />
           </div>
         </div>
       </section>
@@ -1001,7 +1017,7 @@ function PrintRoundingListPage({
   }
 
   return (
-    <div className={`page print-page density-${density}`}>
+    <div className={`page print-page density-${density} print-font-${fontSize} print-line-${lineSpacing} print-padding-${padding}`}>
       <header className="page-header no-print">
         <div>
           <h2>{t("print.title")}</h2>
@@ -1087,6 +1103,29 @@ function PrintRoundingListPage({
             <option value="normal">{t("print.detailed")}</option>
             <option value="compact">{t("print.compact")}</option>
             <option value="ultra-compact">{t("print.ultraCompact")}</option>
+          </select>
+        </label>
+        <label>
+          Font size
+          <select value={fontSize} onChange={(event) => setFontSize(event.target.value as PrintFontSize)}>
+            <option value="small">Small</option>
+            <option value="default">Default</option>
+            <option value="large">Large</option>
+          </select>
+        </label>
+        <label>
+          Line spacing
+          <select value={lineSpacing} onChange={(event) => setLineSpacing(event.target.value as PrintLineSpacing)}>
+            <option value="tight">Tight</option>
+            <option value="normal">Normal</option>
+            <option value="airy">Airy</option>
+          </select>
+        </label>
+        <label>
+          Section padding
+          <select value={padding} onChange={(event) => setPadding(event.target.value as PrintPadding)}>
+            <option value="dense">Dense</option>
+            <option value="balanced">Balanced</option>
           </select>
         </label>
         <label className="checkbox-label">

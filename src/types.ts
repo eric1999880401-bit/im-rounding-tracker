@@ -15,6 +15,12 @@ export type TaskCategory =
 
 export type PrintDensity = "normal" | "compact" | "ultra-compact";
 export type OrderDisplayMode = "summary" | "category" | "collapsed";
+export type PrintFontSize = "small" | "default" | "large";
+export type PrintLineSpacing = "tight" | "normal" | "airy";
+export type PrintPadding = "dense" | "balanced";
+export type KeywordHighlightColor = "red" | "orange" | "yellow" | "blue" | "green" | "purple";
+export type KeywordHighlightStyle = "highlight" | "text";
+export type KeywordHighlightMatchMode = "contains" | "containsInsensitive" | "exact";
 
 export type SortMode = "bed" | "dischargeDate" | "urgentFirst";
 
@@ -500,6 +506,20 @@ export interface RoundingLayoutPreferences {
   orderDisplayMode: OrderDisplayMode;
   printDensity: PrintDensity;
   boardDensity: PrintDensity;
+  printFontSize: PrintFontSize;
+  printLineSpacing: PrintLineSpacing;
+  printPadding: PrintPadding;
+}
+
+export interface KeywordHighlightRule {
+  id: string;
+  label: string;
+  pattern: string;
+  matchMode: KeywordHighlightMatchMode;
+  color: KeywordHighlightColor;
+  style: KeywordHighlightStyle;
+  enabled: boolean;
+  priority: number;
 }
 
 export interface UserAiStyleProfile {
@@ -519,6 +539,7 @@ export interface UserPreferences {
   theme: ThemePreference;
   language: LanguagePreference;
   roundingLayout: RoundingLayoutPreferences;
+  keywordHighlightRules: KeywordHighlightRule[];
   aiStyleProfile?: UserAiStyleProfile;
 }
 

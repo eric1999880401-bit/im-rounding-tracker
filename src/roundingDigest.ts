@@ -91,7 +91,7 @@ function digestLimits(mode: DigestMode) {
 
 function cleanDigestLine(value: string) {
   return value
-    .replace(/\[\[(red|orange|yellow|blue|green|purple):([\s\S]*?)\]\]/gi, "$2")
+    .replace(/\[\[(red|orange|yellow|blue|green|purple)(?:-(?:highlight|text))?:([\s\S]*?)\]\]/gi, "$2")
     .replace(/\s+-\s*Reason:\s*.*$/i, "")
     .replace(/\s*\(\s*source:\s*AI\s*\)\s*$/i, "")
     .replace(/\s+/g, " ")

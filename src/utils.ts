@@ -172,7 +172,7 @@ export function splitHighlightLines(value: string): HighlightLine[] {
 }
 
 export function stripColorMarkup(value: string) {
-  return value.replace(/\[\[(red|orange|yellow|blue|green|purple):([\s\S]*?)\]\]/gi, "$2");
+  return value.replace(/\[\[(red|orange|yellow|blue|green|purple)(?:-(?:highlight|text))?:([\s\S]*?)\]\]/gi, "$2");
 }
 
 function hasSpecificImagingTail(value: string) {

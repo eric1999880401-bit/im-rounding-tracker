@@ -385,7 +385,13 @@ export function localRoundSoapFromPaste(patient: Patient, dailyNotes: DailyNote[
       addUniqueLine(baseline.sLines, line.replace(/^Admission\s*:\s*/i, ""), 5, 140);
     }
   });
-  sourceSentences(source.vitals).forEach((line) => addUniqueLine(baseline.oLines, prefixedLine("V/S", line), 12, 160));
+  sourceSentences(source.vitals).forEach((line) => {
+    if (/^PE\s*:/i.test(line)) {
+      addUniqueLine(baseline.oLines, prefixedLine("PE", line.replace(/^PE\s*:\s*/i, "")), 12, 150);
+      return;
+    }
+    addUniqueLine(baseline.oLines, prefixedLine("V/S", line), 12, 160);
+  });
   sourceSentences(source.labs).forEach((line) => addUniqueLine(baseline.oLines, prefixedLine("Lab", line), 12, 170));
   sourceSentences(source.images).forEach((line) => addUniqueLine(baseline.oLines, prefixedLine("Image", line), 12, 170));
   sourceSentences(source.other).forEach((line) => {
@@ -393,13 +399,13 @@ export function localRoundSoapFromPaste(patient: Patient, dailyNotes: DailyNote[
   });
 
   const nextProblems = removeEmptyApProblems(baseline.apProblems);
-  if (/\b(cholangitis|sepsis|biliary|ercp|bile|culture|cx|meropenem|vanco|vancomycin)\b/i.test(sourceAll)) {
+  if (/\b(cholangitis|sepsis|biliary|ercp|bile|culture|cx|meropenem|vanco|vancomycin|piperacillin|tazobactam|pip\/?tazo|zosyn)\b/i.test(sourceAll)) {
     addProblem(nextProblems, "Cholangitis / sepsis", [
       compactProblemLine([
         firstMatch(source.labs, /\bWBC\s*[\d.]+/i),
         firstMatch(source.labs, /\blactate\s*[\d.]+(?:\s*[-=]>\s*[\d.]+)?/i),
         firstSourceLine(source.labs, /\b(?:b\/c|blood|bile|culture|cx).*(?:pending|positive|ngtd|growth)/i),
-        matchingSnippets(source.orders, /\b(?:meropenem|vanco|vancomycin)\b/i, 2),
+        matchingSnippets(source.orders, /\b(?:meropenem|vanco|vancomycin|piperacillin|tazobactam|pip\/?tazo|zosyn)\b/i, 2),
         matchingSnippets(source.other, /\b(?:ERCP|stent|source control|GI|ID)\b/i, 2),
       ]),
     ]);
@@ -425,7 +431,7 @@ export function localRoundSoapFromPaste(patient: Patient, dailyNotes: DailyNote[
   }
 
   const treatmentLines = fragments.filter((line) =>
-    /\b(teicoplanin|vancomycin|cef|zosyn|pip\/tazo|meropenem|ertapenem|abx|antibiotic|culture|b\/c|bcx|source control|j-tube|feeding|nutrition|anemia|hb)\b/i.test(line),
+    /\b(teicoplanin|vancomycin|cef|zosyn|pip\/?tazo|piperacillin|tazobactam|meropenem|ertapenem|abx|antibiotic|culture|b\/c|bcx|source control|j-tube|feeding|nutrition|anemia|hb)\b/i.test(line),
   );
   if (treatmentLines.length > 0) {
     const infectionLine = treatmentLines.find((line) => /mrsa|enterococcus|bacteremia|culture|teicoplanin|vancomycin|abx/i.test(line));
@@ -441,7 +447,7 @@ export function localRoundSoapFromPaste(patient: Patient, dailyNotes: DailyNote[
     .filter((line) => /\b(f\/u|follow|pending|repeat|call|consult|arrange|dc|discharge|opd|culture|cx)\b/i.test(line))
     .forEach((line) => addUniqueLine(baseline.taskLines, line.replace(/^tasks?\s*:\s*/i, ""), 6, 130));
   sourceSentences(source.orders)
-    .filter((line) => /\b(meropenem|vanco|vancomycin|hold|resume|lokelma|o2|strict i\/o|vs q|insulin|lasix|heparin|apixaban)\b/i.test(line))
+    .filter((line) => /\b(meropenem|vanco|vancomycin|piperacillin|tazobactam|pip\/?tazo|zosyn|hold|resume|lokelma|o2|strict i\/o|vs q|insulin|lasix|heparin|apixaban)\b/i.test(line))
     .forEach((line) => addUniqueLine(baseline.taskLines, `Order: ${line}`, 6, 130));
   sourceSentences(source.other)
     .filter((line) => /\b(dc|discharge|not ready|barrier|opd|certificate)\b/i.test(line))

@@ -39,7 +39,7 @@ const antibioticPattern = new RegExp(`\\b(?:${antibioticNames.map((name) => name
 
 function cleanText(value: string, maxChars = 220) {
   const clean = value
-    .replace(/\[\[(?:red|orange|yellow|blue|green|purple):([\s\S]*?)\]\]/gi, "$1")
+    .replace(/\[\[(?:red|orange|yellow|blue|green|purple)(?:-(?:highlight|text))?:([\s\S]*?)\]\]/gi, "$1")
     .replace(/\s+/g, " ")
     .replace(/\s+([,.;:])/g, "$1")
     .trim();

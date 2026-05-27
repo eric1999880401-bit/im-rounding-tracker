@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { AiClinicalSourceType, DailyNote, Patient, RoundingLayoutPreferences, UserAiStyleProfile } from "../types";
+import type { AiClinicalSourceType, DailyNote, KeywordHighlightRule, Patient, RoundingLayoutPreferences, UserAiStyleProfile } from "../types";
 import { generateRoundSoap } from "../firebase/aiService";
 import { ClinicalText } from "./ClinicalText";
 import {
@@ -35,6 +35,7 @@ interface RoundSoapComposerProps {
   externalSoapStatus?: string;
   layoutPreferences?: RoundingLayoutPreferences;
   aiStyleProfile?: UserAiStyleProfile;
+  keywordRules?: KeywordHighlightRule[];
   onDirtyChange?: (dirty: boolean) => void;
 }
 
@@ -174,6 +175,7 @@ function RoundSoapComposer({
   externalSoapStatus = "",
   layoutPreferences,
   aiStyleProfile,
+  keywordRules = [],
   onDirtyChange,
 }: RoundSoapComposerProps) {
   const canonical = getCanonicalSoapText(patient, dailyNotes, selectedDate);
@@ -814,7 +816,7 @@ function RoundSoapComposer({
       {warnings.length > 0 && (
         <div className="round-soap-warnings">
           <strong>Warnings</strong>
-          <ClinicalText value={warnings.join("\n")} maxLines={4} />
+          <ClinicalText value={warnings.join("\n")} maxLines={4} keywordRules={keywordRules} />
         </div>
       )}
 
@@ -901,7 +903,7 @@ function RoundSoapComposer({
           </details>
         </section>
         <section className="round-soap-preview" aria-label="Highlighted SOAP preview">
-          <SoapVisualPreview value={soapText} compact={compact} layoutPreferences={layoutPreferences} />
+          <SoapVisualPreview value={soapText} compact={compact} layoutPreferences={layoutPreferences} keywordRules={keywordRules} />
         </section>
       </div>
 

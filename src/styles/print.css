@@ -46,6 +46,49 @@
   --print-cell-padding: 1px;
 }
 
+.print-font-small {
+  --print-font-size: 5.8pt;
+  --print-small-font-size: 5.4pt;
+  --print-chip-font-size: 5.4pt;
+  --print-section-title-size: 6pt;
+}
+
+.print-font-default {
+  --print-font-size: 6.2pt;
+  --print-small-font-size: 5.8pt;
+  --print-chip-font-size: 5.8pt;
+  --print-section-title-size: 6.5pt;
+}
+
+.print-font-large {
+  --print-font-size: 6.8pt;
+  --print-small-font-size: 6.2pt;
+  --print-chip-font-size: 6.1pt;
+  --print-section-title-size: 7pt;
+}
+
+.print-line-tight {
+  --print-line-height: 1.02;
+}
+
+.print-line-normal {
+  --print-line-height: 1.08;
+}
+
+.print-line-airy {
+  --print-line-height: 1.16;
+}
+
+.print-padding-dense {
+  --print-card-padding: 0 1.5px;
+  --print-cell-padding: 1px;
+}
+
+.print-padding-balanced {
+  --print-card-padding: 1px 2px;
+  --print-cell-padding: 2px;
+}
+
 .print-title {
   border: 1px solid #1f2933;
   border-bottom: 0;
@@ -212,6 +255,36 @@
 .rounding-table .clinical-mark-purple,
 .print-admission-brief .clinical-mark-purple {
   color: #6d28d9 !important;
+}
+
+.rounding-table .clinical-mark-text,
+.print-admission-brief .clinical-mark-text,
+.print-page .clinical-mark-text {
+  background: transparent !important;
+  border: 0 !important;
+  padding: 0 1px;
+}
+
+.rounding-table .clinical-lab-value,
+.print-admission-brief .clinical-lab-value,
+.print-page .clinical-lab-value {
+  border-bottom: 0.5px dotted currentColor;
+  font-weight: 800;
+  position: relative;
+}
+
+.rounding-table .clinical-lab-ref-inline,
+.print-admission-brief .clinical-lab-ref-inline,
+.print-page .clinical-lab-ref-inline {
+  color: #475569;
+  font-size: var(--print-small-font-size);
+  font-weight: 700;
+}
+
+@media print {
+  .clinical-lab-popover {
+    display: none !important;
+  }
 }
 
 .print-red-flags {
@@ -575,9 +648,10 @@
   font-size: var(--print-font-size);
   line-height: var(--print-line-height);
   min-width: 0;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
   padding: var(--print-card-padding);
   page-break-inside: auto;
+  word-break: normal;
 }
 
 .print-section-title {
@@ -607,8 +681,9 @@
 .print-soap-item {
   border-left: 1px solid #94a3b8;
   line-height: var(--print-line-height);
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
   padding-left: 3px;
+  word-break: normal;
 }
 
 .print-visual-list {
@@ -666,7 +741,8 @@
   font-weight: 650;
   line-height: var(--print-line-height);
   min-width: 0;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
+  word-break: normal;
 }
 
 .print-visual-text .clinical-mark {
@@ -828,7 +904,8 @@
 .print-lab-mini-values {
   line-height: var(--print-line-height);
   min-width: 0;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
+  word-break: normal;
   padding: 0 2px;
 }
 
@@ -932,9 +1009,10 @@
   line-height: 1.05;
   margin: 1px;
   max-width: 100%;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
   padding: 1px 3px;
   white-space: normal;
+  word-break: normal;
 }
 
 .print-lab-chip.important {
@@ -1149,6 +1227,12 @@
   .print-admission-brief .clinical-mark-purple {
     background-color: #ede9fe !important;
     color: #6d28d9 !important;
+  }
+
+  .print-sheet .clinical-mark-text,
+  .print-admission-brief .clinical-mark-text {
+    background-color: transparent !important;
+    border: 0 !important;
   }
 
   .print-ap-problem,

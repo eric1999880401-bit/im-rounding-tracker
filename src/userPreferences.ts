@@ -1,8 +1,15 @@
 import type {
   DailyNotesByPatient,
+  KeywordHighlightColor,
+  KeywordHighlightMatchMode,
+  KeywordHighlightRule,
+  KeywordHighlightStyle,
   OrderDisplayMode,
   Patient,
   PrintDensity,
+  PrintFontSize,
+  PrintLineSpacing,
+  PrintPadding,
   RoundingLayoutPreferences,
   RoundingLayoutPreset,
   RoundingLayoutSection,
@@ -67,12 +74,16 @@ export const defaultRoundingLayoutPreferences: RoundingLayoutPreferences = {
   orderDisplayMode: "summary",
   printDensity: "normal",
   boardDensity: "compact",
+  printFontSize: "default",
+  printLineSpacing: "normal",
+  printPadding: "balanced",
 };
 
 export const defaultPreferences: UserPreferences = {
   theme: "system",
   language: "en",
   roundingLayout: defaultRoundingLayoutPreferences,
+  keywordHighlightRules: [],
 };
 
 function normalizePrintDensity(value: unknown, fallback: PrintDensity): PrintDensity {
@@ -85,6 +96,52 @@ function normalizePreset(value: unknown): RoundingLayoutPreset {
 
 function normalizeOrderDisplayMode(value: unknown): OrderDisplayMode {
   return value === "category" || value === "collapsed" ? value : "summary";
+}
+
+function normalizePrintFontSize(value: unknown): PrintFontSize {
+  return value === "small" || value === "large" ? value : "default";
+}
+
+function normalizePrintLineSpacing(value: unknown): PrintLineSpacing {
+  return value === "tight" || value === "airy" ? value : "normal";
+}
+
+function normalizePrintPadding(value: unknown): PrintPadding {
+  return value === "dense" ? value : "balanced";
+}
+
+function normalizeKeywordHighlightColor(value: unknown): KeywordHighlightColor {
+  return value === "red" || value === "orange" || value === "yellow" || value === "blue" || value === "green" || value === "purple" ? value : "yellow";
+}
+
+function normalizeKeywordHighlightStyle(value: unknown): KeywordHighlightStyle {
+  return value === "text" ? "text" : "highlight";
+}
+
+function normalizeKeywordHighlightMatchMode(value: unknown): KeywordHighlightMatchMode {
+  return value === "exact" || value === "contains" ? value : "containsInsensitive";
+}
+
+export function normalizeKeywordHighlightRules(value: unknown): KeywordHighlightRule[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((entry, index) => {
+      const source = (entry && typeof entry === "object" ? entry : {}) as Partial<KeywordHighlightRule>;
+      const pattern = String(source.pattern ?? "").trim();
+      return {
+        id: String(source.id ?? `keyword-rule-${index}-${(pattern || "new").toLowerCase().replace(/[^a-z0-9]+/g, "-")}`),
+        label: String(source.label ?? pattern).trim() || pattern || "New highlight",
+        pattern,
+        matchMode: normalizeKeywordHighlightMatchMode(source.matchMode),
+        color: normalizeKeywordHighlightColor(source.color),
+        style: normalizeKeywordHighlightStyle(source.style),
+        enabled: source.enabled !== false,
+        priority: Number.isFinite(Number(source.priority)) ? Number(source.priority) : index,
+      };
+    })
+    .filter((rule): rule is KeywordHighlightRule => Boolean(rule))
+    .sort((a, b) => a.priority - b.priority || a.pattern.localeCompare(b.pattern))
+    .slice(0, 50);
 }
 
 export function normalizeRoundingLayoutPreferences(value: unknown): RoundingLayoutPreferences {
@@ -101,6 +158,9 @@ export function normalizeRoundingLayoutPreferences(value: unknown): RoundingLayo
     orderDisplayMode: normalizeOrderDisplayMode(source.orderDisplayMode),
     printDensity: normalizePrintDensity(source.printDensity, defaultRoundingLayoutPreferences.printDensity),
     boardDensity: normalizePrintDensity(source.boardDensity, defaultRoundingLayoutPreferences.boardDensity),
+    printFontSize: normalizePrintFontSize(source.printFontSize),
+    printLineSpacing: normalizePrintLineSpacing(source.printLineSpacing),
+    printPadding: normalizePrintPadding(source.printPadding),
   };
 }
 
@@ -110,6 +170,7 @@ export function normalizeUserPreferences(value: unknown): UserPreferences {
     theme: source.theme === "light" || source.theme === "dark" || source.theme === "system" ? source.theme : defaultPreferences.theme,
     language: source.language === "zh-TW" ? "zh-TW" : "en",
     roundingLayout: normalizeRoundingLayoutPreferences(source.roundingLayout),
+    keywordHighlightRules: normalizeKeywordHighlightRules(source.keywordHighlightRules),
     aiStyleProfile: normalizeUserAiStyleProfile(source.aiStyleProfile),
   };
 }

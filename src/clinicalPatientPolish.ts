@@ -5,7 +5,7 @@ import { nowIso, safeClinicalLine } from "./utils";
 
 function cleanLine(value: string, maxChars = 220) {
   const clean = value
-    .replace(/\[\[(?:red|yellow|green):([^\]]+)\]\]/gi, "$1")
+    .replace(/\[\[(?:red|orange|yellow|blue|green|purple)(?:-(?:highlight|text))?:([^\]]+)\]\]/gi, "$1")
     .replace(/\bwith done\b/gi, "")
     .replace(/\bmonitor closely\b/gi, "")
     .replace(/\bcontinue current management\b/gi, "")

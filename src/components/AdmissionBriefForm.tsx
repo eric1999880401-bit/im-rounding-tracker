@@ -65,7 +65,7 @@ function AdmissionBriefForm({
     const summaryLines = [diagnosisLine || lines[0], symptomLine, labLine, imageLine, treatmentLine]
       .map((line) => line.replace(/\s+/g, " ").trim())
       .filter(Boolean);
-    return summaryLines.slice(0, 4).join(" ");
+    return summaryLines.slice(0, 5).join(" ");
   }
 
   function buildLocalAdmissionSummary(sourceText: string) {
