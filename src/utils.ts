@@ -175,17 +175,31 @@ export function stripColorMarkup(value: string) {
   return value.replace(/\[\[(red|orange|yellow|blue|green|purple):([\s\S]*?)\]\]/gi, "$2");
 }
 
-export function cleanClinicalTail(value: string) {
+function hasSpecificImagingTail(value: string) {
+  return /\b(?:brain|head|neck|chest|lung|abd(?:omen|ominal)?|a\/p|ap|pelvis|pelvic|spine|cervical|thoracic|lumbar|sinus|cardiac|coronary)\s+(?:CT|MRI|CXR)\.?$/i.test(value)
+    || /\b(?:CT|MRI)\s+(?:brain|head|neck|chest|lung|abd(?:omen|ominal)?|a\/p|ap|pelvis|pelvic|spine|cervical|thoracic|lumbar|sinus|cardiac|coronary)\.?$/i.test(value)
+    || /\b(?:pending|f\/u|follow(?:-?up)?|repeat|order|arrange|scheduled|review|check)\s+(?:CT|MRI|CXR)\.?$/i.test(value);
+}
+
+function stripDanglingImagingAcronym(value: string) {
+  if (!/\b(?:CT|MRI|CXR)\.?$/i.test(value) || hasSpecificImagingTail(value)) return value;
+  return value.replace(/\s+\b(?:CT|MRI|CXR)\.?$/i, "").trim();
+}
+
+export function cleanClinicalTail(value: string, options: { stripDanglingImagingAcronym?: boolean } = {}) {
   let clean = value
     .replace(/\s+[+,;:/-]\s*$/g, "")
     .replace(/\s+\.\s*$/g, ".")
     .trim();
   const danglingTail =
-    /(?:^|\s)(?:if|and|or|with|without|w\/|for|to|from|of|the|a|an|when|as|in|on|by|after|before|through|via|define|confirm|clarify|review|monitor|trend|repeat|continue|maintain|start|stop|hold|resume|call|contact|arrange|source|duration|coverage|feeding|course|ct|mri|cxr|image|still|remain(?:s|ing)?)\.?$/i;
+    /(?:^|\s)(?:if|and|or|with|without|w\/|for|to|from|of|the|a|an|when|as|in|on|by|after|before|through|via|define|confirm|clarify|review|monitor|trend|repeat|continue|maintain|start|stop|hold|resume|call|contact|arrange|source|duration|coverage|feeding|course|image|still|remain(?:s|ing)?)\.?$/i;
   for (let index = 0; index < 4; index += 1) {
     const next = clean.replace(danglingTail, "").replace(/\s+[+,;:/-]\s*$/g, "").trim();
     if (next === clean) break;
     clean = next;
+  }
+  if (options.stripDanglingImagingAcronym) {
+    clean = stripDanglingImagingAcronym(clean);
   }
   return clean;
 }
@@ -206,11 +220,11 @@ export function safeClinicalLine(value: string, maxChars = 120) {
     hardSlice.lastIndexOf(","),
   ].filter((index) => index >= Math.min(18, Math.max(8, limit - 18)));
   const clauseCut = clauseCandidates.length > 0 ? Math.max(...clauseCandidates) : -1;
-  if (clauseCut > 0) return cleanClinicalTail(hardSlice.slice(0, clauseCut));
+  if (clauseCut > 0) return cleanClinicalTail(hardSlice.slice(0, clauseCut), { stripDanglingImagingAcronym: true });
 
   const lastSpace = hardSlice.lastIndexOf(" ");
-  if (lastSpace >= Math.min(16, limit - 1)) return cleanClinicalTail(hardSlice.slice(0, lastSpace));
-  return cleanClinicalTail(hardSlice);
+  if (lastSpace >= Math.min(16, limit - 1)) return cleanClinicalTail(hardSlice.slice(0, lastSpace), { stripDanglingImagingAcronym: true });
+  return cleanClinicalTail(hardSlice, { stripDanglingImagingAcronym: true });
 }
 
 export function importantLines(value: string) {

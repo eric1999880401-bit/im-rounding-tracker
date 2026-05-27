@@ -1091,6 +1091,10 @@ try {
   if (/\b(?:define|after|and|with|ct|feeding)$/i.test(clipped)) {
     throw new Error(`safe clinical line left dangling tail: ${clipped}`);
   }
+  const chestCtTask = safeClinicalLine("pending chest CT", 170);
+  if (chestCtTask !== "pending chest CT") {
+    throw new Error(`safe clinical line incorrectly removed valid imaging study tail: ${chestCtTask}`);
+  }
 
   const reports = parseLabReports(
     "5/12 WBC 8.0, Neu 70, Hb 10.2, K 3.8\n5/15 WBC 12.7, Neu 88.9, Hb 9.4, K 3.0",
@@ -1476,6 +1480,13 @@ try {
   });
   if (!/Tasks:[\s\S]*Order: VS q4h[\s\S]*f\/u Cx/i.test(orderSoap)) {
     throw new Error(`structured editor did not serialize order lines safely:\n${orderSoap}`);
+  }
+  const imagingTaskSoap = editorDraftToSoapText({
+    ...orderEditorDraft,
+    taskLines: [{ ...orderEditorDraft.taskLines[2], text: "pending chest CT", tone: "important" }],
+  });
+  if (!/Tasks:[\s\S]*! pending chest CT/i.test(imagingTaskSoap)) {
+    throw new Error(`structured editor dropped valid CT task tail:\n${imagingTaskSoap}`);
   }
   console.log("PASS Structured SOAP editor normalizes symbols and shares clinical severity");
   supplementalPasses += 1;
