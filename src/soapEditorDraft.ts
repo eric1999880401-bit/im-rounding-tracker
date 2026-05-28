@@ -119,6 +119,39 @@ export function splitSoapEditorTaskLines(lines: SoapEditorLine[]) {
   };
 }
 
+function orderLineKey(value: string) {
+  return stripOrderPrefix(withoutTonePrefix(value))
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function orderSourceLines(sourceText: string) {
+  return String(sourceText ?? "")
+    .split(/\r?\n|[\u2028\u2029]/)
+    .map(stripOrderPrefix)
+    .map((line) => safeClinicalLine(line, 170))
+    .filter(Boolean)
+    .map((line) => ({ ...makeLine(line, "task"), subtype: "order" as const }));
+}
+
+export function mergeOrderSourceIntoEditorDraft(draft: SoapEditorDraft, sourceText: string): SoapEditorDraft {
+  const additions = orderSourceLines(sourceText);
+  if (additions.length === 0) return draft;
+
+  const { orderLines, taskOnlyLines } = splitSoapEditorTaskLines(draft.taskLines);
+  const seen = new Set(orderLines.map((line) => orderLineKey(line.text)).filter(Boolean));
+  const nextOrderLines = additions.filter((line) => {
+    const key = orderLineKey(line.text);
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+
+  if (nextOrderLines.length === 0) return draft;
+  return { ...draft, taskLines: [...orderLines, ...nextOrderLines, ...taskOnlyLines] };
+}
+
 export function parseSoapTextToEditorDraft(text: string): SoapEditorDraft {
   const normalized = normalizeSoapTextForEditor(text);
   const draft = parseSoapText(normalized);

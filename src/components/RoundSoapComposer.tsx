@@ -9,7 +9,7 @@ import {
   soapTextToPatientPatch,
   type SoapEditorFormat,
 } from "../soapDraft";
-import { editorDraftToSoapText, emptySoapEditorLine, parseSoapTextToEditorDraft, splitSoapEditorTaskLines } from "../soapEditorDraft";
+import { editorDraftToSoapText, emptySoapEditorLine, mergeOrderSourceIntoEditorDraft, parseSoapTextToEditorDraft, splitSoapEditorTaskLines } from "../soapEditorDraft";
 import { emptyDailyNote, nowIso } from "../utils";
 import { SoapVisualPreview } from "./SoapVisualPreview";
 import StructuredSoapEditor from "./StructuredSoapEditor";
@@ -127,6 +127,12 @@ const deltaSectionLabels: Record<SoapDeltaSection, string> = {
   dc: "DC",
 };
 
+const emptyPendingOrderSources: Record<WorkflowMode, boolean> = {
+  dailyUpdate: false,
+  newSoap: false,
+  transferHandoff: false,
+};
+
 function patientContext(patient: Patient) {
   return {
     age: patient.age,
@@ -188,19 +194,22 @@ function RoundSoapComposer({
   const [editorDraft, setEditorDraft] = useState(() => parseSoapTextToEditorDraft(canonical.text));
   const [rawSoapText, setRawSoapText] = useState(canonical.text);
   const [dirty, setDirty] = useState(false);
+  const [pendingOrderSources, setPendingOrderSources] = useState<Record<WorkflowMode, boolean>>(emptyPendingOrderSources);
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
   const [warnings, setWarnings] = useState<string[]>([]);
   const [deltaReview, setDeltaReview] = useState<SoapDeltaReview | null>(null);
+  const editorDraftRef = useRef(editorDraft);
   const isComposingRef = useRef(false);
   const externalSoapRevisionRef = useRef(externalSoapRevision);
   const pendingSavedSoapRef = useRef<{ date: string; text: string } | null>(null);
+  const pendingOrderSourcesRef = useRef<Record<WorkflowMode, boolean>>(emptyPendingOrderSources);
   const soapText = editorDraftToSoapText(editorDraft);
 
   useEffect(() => {
-    onDirtyChange?.(dirty);
-  }, [dirty, onDirtyChange]);
+    onDirtyChange?.(dirty || Object.values(pendingOrderSources).some(Boolean));
+  }, [dirty, onDirtyChange, pendingOrderSources]);
 
   useEffect(() => {
     if (dirty || isComposingRef.current) return;
@@ -210,7 +219,7 @@ function RoundSoapComposer({
       pendingSavedSoapRef.current = null;
     }
     const nextDraft = parseSoapTextToEditorDraft(canonical.text);
-    setEditorDraft(nextDraft);
+    setEditorDraftState(nextDraft);
     setRawSoapText(editorDraftToSoapText(nextDraft));
     setDeltaReview(null);
   }, [canonical.text, dirty, selectedDate]);
@@ -222,7 +231,7 @@ function RoundSoapComposer({
     if (!nextSoapText) return;
     pendingSavedSoapRef.current = null;
     const nextDraft = parseSoapTextToEditorDraft(nextSoapText);
-    setEditorDraft(nextDraft);
+    setEditorDraftState(nextDraft);
     setRawSoapText(editorDraftToSoapText(nextDraft));
     setDirty(true);
     setError("");
@@ -232,23 +241,43 @@ function RoundSoapComposer({
   }, [externalSoapRevision, externalSoapStatus, externalSoapText]);
 
   function updateEditorDraft(nextDraft: typeof editorDraft) {
-    setEditorDraft(nextDraft);
+    setEditorDraftState(nextDraft);
     setRawSoapText(editorDraftToSoapText(nextDraft));
     setDirty(true);
+  }
+
+  function setEditorDraftState(nextDraft: typeof editorDraft) {
+    editorDraftRef.current = nextDraft;
+    setEditorDraft(nextDraft);
   }
 
   const workflow = workflowModes.find((item) => item.value === workflowMode) ?? workflowModes[0];
 
   function updateDailyField(field: keyof DailyUpdateFields, value: string) {
     setDailyFields((current) => ({ ...current, [field]: value }));
+    if (field === "orders") updatePendingOrderSource("dailyUpdate", value);
   }
 
   function updateNewSoapField(field: keyof NewSoapFields, value: string) {
     setNewSoapFields((current) => ({ ...current, [field]: value }));
+    if (field === "orders") updatePendingOrderSource("newSoap", value);
   }
 
   function updateTransferField(field: keyof TransferSoapFields, value: string) {
     setTransferFields((current) => ({ ...current, [field]: value }));
+    if (field === "orders") updatePendingOrderSource("transferHandoff", value);
+  }
+
+  function updatePendingOrderSource(mode: WorkflowMode, value: string | boolean) {
+    const isPending = typeof value === "boolean" ? value : value.trim().length > 0;
+    const next = { ...pendingOrderSourcesRef.current, [mode]: isPending };
+    pendingOrderSourcesRef.current = next;
+    setPendingOrderSources(next);
+  }
+
+  function clearPendingOrderSources() {
+    pendingOrderSourcesRef.current = emptyPendingOrderSources;
+    setPendingOrderSources(emptyPendingOrderSources);
   }
 
   function sourceSection(label: string, value: string) {
@@ -308,17 +337,18 @@ function RoundSoapComposer({
   }
 
   function applyMedicationOrderSummaries(lines: MedicationOrderSummaryLine[]) {
-    const { taskOnlyLines } = splitSoapEditorTaskLines(editorDraft.taskLines);
+    const { taskOnlyLines } = splitSoapEditorTaskLines(editorDraftRef.current.taskLines);
     const nextOrderLines = lines.map((line) => ({
       ...emptySoapEditorLine("task"),
       text: line.text,
       tone: line.tone,
       subtype: "order" as const,
     }));
-    const nextDraft = { ...editorDraft, taskLines: [...nextOrderLines, ...taskOnlyLines] };
-    setEditorDraft(nextDraft);
+    const nextDraft = { ...editorDraftRef.current, taskLines: [...nextOrderLines, ...taskOnlyLines] };
+    setEditorDraftState(nextDraft);
     setRawSoapText(editorDraftToSoapText(nextDraft));
     setDirty(true);
+    updatePendingOrderSource(workflowMode, false);
     setError("");
     setStatus("藥囑摘要 applied to local SOAP draft. Save reviewed SOAP to write Firestore.");
     setDeltaReview(null);
@@ -328,10 +358,12 @@ function RoundSoapComposer({
     setDailyFields(emptyDailyFields);
     setNewSoapFields(emptyNewSoapFields);
     setTransferFields(emptyTransferFields);
+    clearPendingOrderSources();
   }
 
   async function handleGenerate() {
     const rawText = composeRawText();
+    const currentSoapText = editorDraftToSoapText(editorDraftRef.current);
     setError("");
     setStatus("");
     setWarnings([]);
@@ -363,7 +395,7 @@ function RoundSoapComposer({
             sourceType: workflow.sourceType,
             workflowMode,
             rawText,
-            currentSoapBaseline: soapText || canonical.text,
+            currentSoapBaseline: currentSoapText || canonical.text,
             deidentifiedConfirmed: true,
             patientContext: patientContext(patient),
             userStyleProfile: aiStyleProfile,
@@ -371,16 +403,17 @@ function RoundSoapComposer({
 
       const guarded = guardRoundSoapDelta({
         workflowMode,
-        baselineText: soapText || canonical.text,
+        baselineText: currentSoapText || canonical.text,
         candidateText: result.soapText.trim() || canonical.text,
         sourceFields: currentSourceFields(),
         candidateWarnings: result.warnings ?? [],
         selectedDate,
       });
       const nextDraft = parseSoapTextToEditorDraft(guarded.acceptedText);
-      setEditorDraft(nextDraft);
+      setEditorDraftState(nextDraft);
       setRawSoapText(editorDraftToSoapText(nextDraft));
       setDirty(true);
+      updatePendingOrderSource(workflowMode, false);
       setWarnings([...guarded.warnings, ...guarded.highRiskWarnings]);
       setDeltaReview(guarded);
       setStatus(
@@ -395,13 +428,41 @@ function RoundSoapComposer({
     }
   }
 
-  async function handleSave() {
-    const reviewedText = editorDraftToSoapText(editorDraft).trim();
-    if (!reviewedText || isComposingRef.current) return;
+  function waitForNextFrame() {
+    return new Promise<void>((resolve) => {
+      if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
+        window.requestAnimationFrame(() => resolve());
+        return;
+      }
+      globalThis.setTimeout(resolve, 0);
+    });
+  }
 
-    setLoading(true);
+  async function waitForCompositionToSettle() {
+    if (!isComposingRef.current) return true;
+    await waitForNextFrame();
+    if (!isComposingRef.current) return true;
+    await waitForNextFrame();
+    return !isComposingRef.current;
+  }
+
+  async function handleSave() {
     setError("");
     setStatus("");
+
+    if (!(await waitForCompositionToSettle())) {
+      setError("Finish the current Chinese input composition, then click Save reviewed SOAP again.");
+      return;
+    }
+
+    const hasPendingOrderSource = Boolean(pendingOrderSourcesRef.current[workflowMode] && currentOrderSourceText().trim());
+    const draftForSave = hasPendingOrderSource
+      ? mergeOrderSourceIntoEditorDraft(editorDraftRef.current, currentOrderSourceText())
+      : editorDraftRef.current;
+    const reviewedText = editorDraftToSoapText(draftForSave).trim();
+    if (!reviewedText) return;
+
+    setLoading(true);
     try {
       const patch = soapTextToPatientPatch(reviewedText, patient, selectedDate);
       const nextPatient = { ...patch.patient, updatedAt: nowIso() };
@@ -410,7 +471,7 @@ function RoundSoapComposer({
       await onSaveDailyNote(nextPatient.id, nextNote);
       const nextDraft = parseSoapTextToEditorDraft(reviewedText);
       pendingSavedSoapRef.current = { date: selectedDate, text: reviewedText };
-      setEditorDraft(nextDraft);
+      setEditorDraftState(nextDraft);
       setRawSoapText(editorDraftToSoapText(nextDraft));
       clearSourceText();
       setDirty(false);
@@ -427,7 +488,7 @@ function RoundSoapComposer({
     if (!rawSoapText.trim() || isComposingRef.current) return;
     const normalized = formatSoapTextForEditorStyle(rawSoapText, soapFormat);
     const nextDraft = parseSoapTextToEditorDraft(normalized);
-    setEditorDraft(nextDraft);
+    setEditorDraftState(nextDraft);
     setRawSoapText(editorDraftToSoapText(nextDraft));
     setDirty(true);
     setError("");
@@ -437,7 +498,7 @@ function RoundSoapComposer({
 
   function loadDeltaSoapText(nextText: string, nextStatus: string) {
     const nextDraft = parseSoapTextToEditorDraft(nextText);
-    setEditorDraft(nextDraft);
+    setEditorDraftState(nextDraft);
     setRawSoapText(editorDraftToSoapText(nextDraft));
     setDirty(true);
     setStatus(nextStatus);
@@ -455,13 +516,13 @@ function RoundSoapComposer({
 
   function acceptDeltaSection(section: SoapDeltaSection) {
     if (!deltaReview) return;
-    const nextText = acceptSoapDeltaSection(editorDraftToSoapText(editorDraft), deltaReview.candidateText, section);
+    const nextText = acceptSoapDeltaSection(editorDraftToSoapText(editorDraftRef.current), deltaReview.candidateText, section);
     loadDeltaSoapText(nextText, `${deltaSectionLabels[section]} accepted from AI draft locally.`);
   }
 
   function restoreDeltaSection(section: SoapDeltaSection) {
     if (!deltaReview) return;
-    const nextText = restoreSoapDeltaSection(editorDraftToSoapText(editorDraft), deltaReview.baselineText, section);
+    const nextText = restoreSoapDeltaSection(editorDraftToSoapText(editorDraftRef.current), deltaReview.baselineText, section);
     loadDeltaSoapText(nextText, `${deltaSectionLabels[section]} restored from baseline locally.`);
   }
 
@@ -495,7 +556,7 @@ function RoundSoapComposer({
           <button type="button" className="secondary" onClick={() => {
             pendingSavedSoapRef.current = null;
             const nextDraft = parseSoapTextToEditorDraft(canonical.text);
-            setEditorDraft(nextDraft);
+            setEditorDraftState(nextDraft);
             setRawSoapText(editorDraftToSoapText(nextDraft));
             setDirty(false);
             setStatus("");
@@ -907,7 +968,7 @@ function RoundSoapComposer({
         </section>
       </div>
 
-      {dirty && <p className="muted">Edited preview is not saved yet. Firestore changes only after Save reviewed SOAP.</p>}
+      {(dirty || Object.values(pendingOrderSources).some(Boolean)) && <p className="muted">Edited preview or pending order source is not saved yet. Firestore changes only after Save reviewed SOAP.</p>}
     </section>
   );
 }

@@ -51,7 +51,7 @@ const { buildConcisePatientClinicalUpdate } = await server.ssrLoadModule("/src/c
 const { sanitizeAiSoapDraftForReview } = await server.ssrLoadModule("/src/aiDraftSanitizer.ts");
 const { routePatientImportDraft, routePatientClinicalFields } = await server.ssrLoadModule("/src/clinicalFieldRouter.ts");
 const { classifyClinicalLine, normalizeClinicalDisplayText, normalizeClinicalDisplayTextPreservingMarks } = await server.ssrLoadModule("/src/clinicalLineClassifier.ts");
-const { editorDraftToSoapText, lintSoapEditorDraft, parseSoapTextToEditorDraft, splitSoapEditorTaskLines } = await server.ssrLoadModule("/src/soapEditorDraft.ts");
+const { editorDraftToSoapText, lintSoapEditorDraft, mergeOrderSourceIntoEditorDraft, parseSoapTextToEditorDraft, splitSoapEditorTaskLines } = await server.ssrLoadModule("/src/soapEditorDraft.ts");
 const { buildAntibioticApSummary, ensureAntibioticApInDraft } = await server.ssrLoadModule("/src/antibioticPlan.ts");
 const {
   buildUserAiStyleProfile,
@@ -1514,6 +1514,15 @@ try {
   });
   if (!/Tasks:[\s\S]*Order: VS q4h[\s\S]*f\/u Cx/i.test(orderSoap)) {
     throw new Error(`structured editor did not serialize order lines safely:\n${orderSoap}`);
+  }
+  const sourceMergedOrderDraft = mergeOrderSourceIntoEditorDraft(orderEditorDraft, "hold apixaban\nVS q6h");
+  const sourceMergedOrderSoap = editorDraftToSoapText(sourceMergedOrderDraft);
+  if (!/Tasks:[\s\S]*Order: hold apixaban[\s\S]*Order: VS q6h/i.test(sourceMergedOrderSoap)) {
+    throw new Error(`pending order source was not merged into saved SOAP:\n${sourceMergedOrderSoap}`);
+  }
+  const duplicateOrderDraft = mergeOrderSourceIntoEditorDraft(sourceMergedOrderDraft, "Order: VS q6h");
+  if (duplicateOrderDraft.taskLines.filter((line) => /VS q6h/i.test(line.text)).length !== 1) {
+    throw new Error(`pending order source merge duplicated existing order lines: ${JSON.stringify(duplicateOrderDraft.taskLines)}`);
   }
   const imagingTaskSoap = editorDraftToSoapText({
     ...orderEditorDraft,
