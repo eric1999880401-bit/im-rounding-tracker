@@ -68,7 +68,7 @@ const categoryOrder: MedicationOrderCategory[] = [
 ];
 
 const routePattern = /\b(IVD?|IVPB|IVF|PO|NG|N\/G|SC|SQ|IM|INH|NEB|SL|TOP|PR|PEG|J[- ]?tube|tube)\b/i;
-const frequencyPattern = /\b(q\d+\s*h|q\d+h|qod|qd|qday|bid|tid|qid|qhs|hs|ac|pc|ac\/hs|stat|once|prn|sos|continuous|drip)\b/i;
+const frequencyPattern = /\b(q\d+\s*h|q\d+h|qod|qd|qday|qam|qpm|qn|bid|tid|qid|qhs|hs|ac|pc|ac\/hs|stat|once|prn|sos|continuous|drip)\b/i;
 const durationPattern = /\b(?:x\s*\d+\s*(?:d|day|days|wk|week|weeks)|\d{1,2}\/\d{1,2}\s*[-~]\s*|\d{1,2}\/\d{1,2}\s*-\s*|for\s+\d+\s*(?:d|days|wk|weeks))\b/i;
 
 function normalizeWhitespace(value: string) {
@@ -275,16 +275,61 @@ function compactDisplayText(order: MedicationOrderDraft) {
   return safeClinicalLine(text, 90);
 }
 
+function appendUniqueOrderPart(parts: string[], value: string) {
+  const clean = normalizeWhitespace(value);
+  if (!clean) return;
+  const lower = clean.toLowerCase();
+  if (parts.some((part) => part.toLowerCase() === lower || part.toLowerCase().includes(lower))) return;
+  parts.push(clean);
+}
+
+function compactRoutineOrderText(order: MedicationOrderDraft) {
+  const parts: string[] = [];
+  appendUniqueOrderPart(parts, order.medicationName || order.displayText);
+  appendUniqueOrderPart(parts, order.route);
+  appendUniqueOrderPart(parts, order.frequency);
+  appendUniqueOrderPart(parts, order.duration);
+  if (order.action === "prn" && !parts.some((part) => /\b(?:prn|sos)\b/i.test(part))) {
+    appendUniqueOrderPart(parts, "PRN");
+  }
+  return safeClinicalLine(parts.join(" ") || order.displayText, 30);
+}
+
+function summarizeHiddenRoutineOrders(orders: MedicationOrderDraft[], mode: OrderDisplayMode, maxLines: number) {
+  const hiddenOrders = orders.filter((order) => order.hiddenReason);
+  if (hiddenOrders.length === 0 || maxLines <= 0) return [];
+
+  const uniqueItems = Array.from(new Set(hiddenOrders.map(compactRoutineOrderText).filter(Boolean)));
+  if (uniqueItems.length === 0) return [];
+
+  const itemsPerLine = mode === "category" ? 3 : 2;
+  const lineLimit = mode === "category" ? Math.min(maxLines, 2) : Math.min(maxLines, 1);
+  const lines: string[] = [];
+  for (let lineIndex = 0; lineIndex < lineLimit; lineIndex += 1) {
+    const start = lineIndex * itemsPerLine;
+    const end = Math.min(start + itemsPerLine, uniqueItems.length);
+    const items = uniqueItems.slice(start, end);
+    if (items.length === 0) break;
+    const remaining = uniqueItems.length - end;
+    const suffix = remaining > 0 ? ` +${remaining}` : "";
+    lines.push(safeClinicalLine(`Routine: ${items.join(", ")}${suffix}`, 110));
+  }
+  return lines;
+}
+
 export function summarizeMedicationOrders(
   orders: MedicationOrderDraft[],
   options: { includeHidden?: boolean; maxLines?: number; mode?: OrderDisplayMode } = {},
 ) {
   const mode = options.mode ?? "summary";
-  const maxLines = options.maxLines ?? 6;
+  const maxLines = Math.max(0, options.maxLines ?? 6);
+  if (maxLines === 0) return [];
   const source = options.includeHidden ? orders : orders.filter((order) => !order.hiddenReason);
   if (source.length === 0) {
     const hiddenCount = orders.filter((order) => order.hiddenReason).length;
-    return hiddenCount > 0 && mode !== "collapsed" ? [`Routine hidden: ${hiddenCount}`] : [];
+    if (hiddenCount === 0 || mode === "collapsed") return [];
+    const routineSummary = summarizeHiddenRoutineOrders(orders, mode, maxLines);
+    return routineSummary.length > 0 ? routineSummary : [`Routine hidden: ${hiddenCount}`];
   }
   if (mode === "collapsed") return [`藥囑 hidden (${source.length})`];
 

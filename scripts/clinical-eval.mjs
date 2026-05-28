@@ -2116,6 +2116,27 @@ try {
   if (!displayLines.some((line) => /Abx:.*Teicoplanin/i.test(line)) || !displayLines.some((line) => /PRN:.*Morphine/i.test(line)) || displayLines.some((line) => /Pantoprazole/i.test(line))) {
     throw new Error(`Order display formatting did not hide routine meds while keeping high-yield PRN:\n${displayLines.join("\n")}`);
   }
+  const routineOnlyDisplayLines = formatMedicationOrderLinesForDisplay(
+    ["Order: Amlodipine 5 mg PO qd", "Order: Atorvastatin 20 mg PO qn"],
+    "summary",
+    6,
+  );
+  if (
+    routineOnlyDisplayLines.length !== 1 ||
+    !/Routine:.*Amlodipine.*PO.*qd.*Atorvastatin.*PO.*qn/i.test(routineOnlyDisplayLines[0]) ||
+    /^Routine hidden:\s*2$/i.test(routineOnlyDisplayLines[0]) ||
+    routineOnlyDisplayLines[0].length > 110
+  ) {
+    throw new Error(`All-routine order display should abbreviate meds instead of hiding all content:\n${routineOnlyDisplayLines.join("\n")}`);
+  }
+  const collapsedRoutineLines = formatMedicationOrderLinesForDisplay(
+    ["Order: Amlodipine 5 mg PO qd", "Order: Atorvastatin 20 mg PO qn"],
+    "collapsed",
+    6,
+  );
+  if (collapsedRoutineLines.some((line) => /Amlodipine|Atorvastatin/i.test(line))) {
+    throw new Error(`Collapsed order display should remain intentionally hidden:\n${collapsedRoutineLines.join("\n")}`);
+  }
   console.log("PASS Medication order cleaner summarizes noisy HIS orders without saving raw text");
   supplementalPasses += 1;
 } catch (error) {
