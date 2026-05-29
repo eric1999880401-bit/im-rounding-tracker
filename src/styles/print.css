@@ -266,13 +266,6 @@
 }
 
 .rounding-table .clinical-lab-value,
-.print-admission-brief .clinical-lab-value,
-.print-page .clinical-lab-value {
-  border-bottom: 0.5px dotted currentColor;
-  font-weight: 800;
-  position: relative;
-}
-
 .rounding-table .clinical-lab-ref-inline,
 .print-admission-brief .clinical-lab-ref-inline,
 .print-page .clinical-lab-ref-inline {
@@ -282,7 +275,7 @@
 }
 
 @media print {
-  .clinical-lab-popover {
+  .clinical-lab-ref-detail {
     display: none !important;
   }
 }

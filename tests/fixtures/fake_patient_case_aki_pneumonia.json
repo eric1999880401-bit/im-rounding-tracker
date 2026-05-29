@@ -1,0 +1,131 @@
+{
+  "fixtureNotice": "FAKE DATA ONLY. Do not use real patient identifiers.",
+  "patientId": "fake-aki-pna-001",
+  "redactedDisplay": "P001",
+  "location": {
+    "ward": "8A",
+    "bed": "12"
+  },
+  "demographics": {
+    "age": 72,
+    "sex": "M"
+  },
+  "admission": {
+    "date": "2026-05-20",
+    "hospitalDay": 5,
+    "reason": "community-acquired pneumonia"
+  },
+  "codeStatus": null,
+  "allergies": [],
+  "isolation": [
+    "droplet"
+  ],
+  "pmh": [
+    "CKD stage 3",
+    "type 2 diabetes mellitus",
+    "hypertension"
+  ],
+  "overnightEvents": [
+    {
+      "time": "2026-05-25T02:00:00+08:00",
+      "text": "Tmax 38.5 C; blood cultures repeated."
+    }
+  ],
+  "vitals": {
+    "temperature": {
+      "tmaxC": 38.5,
+      "sourceRef": "vitals.temperature"
+    },
+    "bpRange": "95/60-128/76",
+    "hrRange": "102-118",
+    "spo2": "93% on nasal cannula 3 L"
+  },
+  "io": {
+    "urineOutputMlPerDay": 650,
+    "netBalanceMl": 850
+  },
+  "labs": {
+    "creatinine": [
+      {
+        "date": "2026-05-24",
+        "value": 1.4
+      },
+      {
+        "date": "2026-05-25",
+        "value": 2.1
+      }
+    ],
+    "potassium": [
+      {
+        "date": "2026-05-25",
+        "value": 5.6
+      }
+    ],
+    "wbc": [
+      {
+        "date": "2026-05-24",
+        "value": 11.0
+      },
+      {
+        "date": "2026-05-25",
+        "value": 15.0
+      }
+    ],
+    "hemoglobin": [
+      {
+        "date": "2026-05-25",
+        "value": 9.8
+      }
+    ]
+  },
+  "micro": {
+    "bloodCultures": [
+      {
+        "date": "2026-05-25",
+        "result": "pending"
+      }
+    ],
+    "sputumCulture": null
+  },
+  "imaging": [
+    {
+      "date": "2026-05-24",
+      "study": "CXR",
+      "impression": "Right lower lobe opacity, no pleural effusion."
+    }
+  ],
+  "medications": [
+    {
+      "name": "ceftriaxone",
+      "indication": "pneumonia",
+      "day": 3
+    },
+    {
+      "name": "azithromycin",
+      "indication": "pneumonia",
+      "day": 3
+    },
+    {
+      "name": "insulin sliding scale",
+      "indication": "diabetes"
+    }
+  ],
+  "linesDevices": [
+    "peripheral IV"
+  ],
+  "consults": [],
+  "todayPlan": [
+    "Repeat BMP in afternoon.",
+    "Follow blood culture results.",
+    "Assess volume status and review nephrotoxic medications."
+  ],
+  "discharge": {
+    "status": "not_ready",
+    "barriers": [
+      "oxygen requirement",
+      "AKI",
+      "fever overnight"
+    ]
+  },
+  "contingency": null
+}

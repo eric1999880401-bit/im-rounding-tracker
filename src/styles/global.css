@@ -2774,10 +2774,9 @@ tbody tr:last-child td {
 
 .clinical-lab-value {
   border-bottom: 1px dotted currentColor;
-  cursor: help;
-  display: inline-block;
+  cursor: inherit;
+  display: inline;
   font-weight: 700;
-  position: relative;
 }
 
 .clinical-lab-value-clickable {
@@ -2795,22 +2794,19 @@ tbody tr:last-child td {
   font-weight: 600;
 }
 
-.clinical-lab-popover {
-  background: var(--surface-raised);
-  border: 1px solid var(--border-strong);
+.clinical-lab-ref-detail {
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent-soft-border);
   border-radius: var(--radius-sm);
-  box-shadow: var(--shadow-sm);
-  color: var(--text);
+  color: var(--text-muted);
+  display: block;
   font-size: 11px;
   font-weight: 700;
-  left: 0;
   line-height: 1.25;
-  min-width: max-content;
-  padding: 4px 6px;
-  position: absolute;
-  top: calc(100% + 3px);
-  white-space: nowrap;
-  z-index: 20;
+  margin: 3px 0 0;
+  padding: 3px 6px;
+  white-space: normal;
 }
 
 .important-input {
@@ -3225,6 +3221,88 @@ tbody tr:last-child td {
 .discharge-checklist h3 {
   grid-column: span 3;
   margin: 0;
+}
+
+.dc-prep-checks,
+.board-dc-prep-checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.dc-prep-item,
+.board-dc-prep-item {
+  align-items: center;
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  display: inline-flex;
+  gap: 4px;
+  min-height: 30px;
+  padding: 3px 4px 3px 7px;
+}
+
+.dc-prep-item-na {
+  opacity: 0.78;
+}
+
+.dc-prep-check,
+.board-dc-prep-check {
+  align-items: center;
+  color: var(--text);
+  display: inline-flex;
+  font-size: 12px;
+  font-weight: 700;
+  gap: 5px;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.dc-prep-check input,
+.board-dc-prep-check input {
+  height: 14px;
+  margin: 0;
+  width: 14px;
+}
+
+.dc-prep-na-button {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-subtle);
+  font-size: 10.5px;
+  font-weight: 800;
+  min-height: 21px;
+  padding: 1px 4px;
+}
+
+.dc-prep-na-button:hover,
+.dc-prep-na-active {
+  background: var(--surface);
+  border-color: var(--border);
+  color: var(--text);
+}
+
+.detail-dc-target,
+.board-dc-target-row,
+.dc-alert-target {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.detail-dc-target input,
+.board-dc-target-row input,
+.dc-alert-target input {
+  min-height: 30px;
+  padding: 5px 7px;
+  width: auto;
+}
+
+.board-dc-target-text {
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 800;
 }
 
 .dc-alert-panel {

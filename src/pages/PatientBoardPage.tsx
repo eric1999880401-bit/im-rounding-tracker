@@ -70,6 +70,7 @@ interface PageProps {
 const taskCategories: TaskCategory[] = ["lab", "imaging", "consult", "discharge", "family", "order", "other"];
 type BulkImportMode = NonNullable<AnalyzePatientBatchTextInput["importMode"]>;
 type BoardVisualKind = Extract<ClinicalLineKind, "s" | "vs" | "pe" | "lab" | "image" | "ap" | "task" | "dc" | "other">;
+type DischargePrepField = "dischargeMedsStatus" | "opdAppointmentStatus" | "diagnosisCertificateStatus";
 
 function uniqueLines(...values: string[]) {
   const seen = new Set<string>();
@@ -681,6 +682,11 @@ function PatientBoardPage({
     const digest = boardDigest(patient);
     return Boolean(digest.subjective || digest.objective || digest.lab || digest.image || pendingTasks(patient).length > 0);
   }).length;
+  const dischargePrepChecklist: Array<{ field: DischargePrepField; label: string; shortLabel: string }> = [
+    { field: "dischargeMedsStatus", label: t("dc.meds"), shortLabel: "Meds" },
+    { field: "opdAppointmentStatus", label: t("dc.opd"), shortLabel: "OPD" },
+    { field: "diagnosisCertificateStatus", label: t("dc.certificate"), shortLabel: "Cert" },
+  ];
 
   useEffect(() => {
     if (bulkLoading || bulkError || bulkStatus || bulkDrafts.length > 0) {
@@ -988,10 +994,53 @@ function PatientBoardPage({
 
   async function updateDischargePrep(
     patient: Patient,
-    field: "dischargeMedsStatus" | "opdAppointmentStatus" | "diagnosisCertificateStatus",
+    field: DischargePrepField,
     status: Patient[typeof field],
   ) {
-    await onSavePatient({ ...patient, [field]: status, updatedAt: nowIso() });
+    const sourcePatient = patients.find((item) => item.id === patient.id) ?? patient;
+    await onSavePatient({ ...sourcePatient, [field]: status, updatedAt: nowIso() });
+  }
+
+  async function updateDischargeTargetDate(patient: Patient, dischargeTargetDate: string) {
+    const sourcePatient = patients.find((item) => item.id === patient.id) ?? patient;
+    await onSavePatient({ ...sourcePatient, dischargeTargetDate, updatedAt: nowIso() });
+  }
+
+  function renderDischargePrepChecklist(patient: Patient, variant: "board" | "alert") {
+    const wrapperClass = variant === "board" ? "board-dc-prep-checks" : "dc-prep-checks";
+    const itemClass = variant === "board" ? "board-dc-prep-item" : "dc-prep-item";
+    const labelClass = variant === "board" ? "board-dc-prep-check" : "dc-prep-check";
+
+    return (
+      <div className={wrapperClass} aria-label="Discharge prep checklist">
+        {dischargePrepChecklist.map(({ field, label, shortLabel }) => {
+          const status = patient[field];
+          const isNotNeeded = status === "notNeeded";
+          return (
+            <div className={`${itemClass}${isNotNeeded ? " dc-prep-item-na" : ""}`} key={field}>
+              <label className={labelClass} title={label}>
+                <input
+                  type="checkbox"
+                  checked={status === "done"}
+                  disabled={isNotNeeded}
+                  onChange={(event) => void updateDischargePrep(patient, field, event.target.checked ? "done" : "pending")}
+                />
+                <span>{shortLabel}</span>
+              </label>
+              <button
+                type="button"
+                className={`dc-prep-na-button${isNotNeeded ? " dc-prep-na-active" : ""}`}
+                onClick={() => void updateDischargePrep(patient, field, isNotNeeded ? "pending" : "notNeeded")}
+                aria-label={`${label} ${isNotNeeded ? "reset to pending" : "not needed"}`}
+                title={isNotNeeded ? "Reset to pending" : t("dc.notNeeded")}
+              >
+                N/A
+              </button>
+            </div>
+          );
+        })}
+      </div>
+    );
   }
 
   function renderCockpitColumn(title: string, items: Patient[], emptyText: string, kind: "admission" | "discharge") {
@@ -1365,54 +1414,19 @@ function PatientBoardPage({
                 <strong>
                   Bed {patient.bed || "-"} / {patient.patientCode || "-"}
                 </strong>
+                <div className="dc-alert-target">
+                  <span>{patient.dischargeTargetDate ? `DC ${patient.dischargeTargetDate}` : "DC TBD"}</span>
+                  <input
+                    type="date"
+                    value={patient.dischargeTargetDate}
+                    onChange={(event) => void updateDischargeTargetDate(patient, event.target.value)}
+                    aria-label={`Discharge target date for ${patient.bed || patient.patientCode || "patient"}`}
+                  />
+                </div>
                 <div>Upcoming discharge prep: {pending.join(" / ")} pending</div>
               </div>
               <div className="dc-alert-actions">
-                {patient.dischargeMedsStatus === "pending" && (
-                  <>
-                    <button type="button" onClick={() => updateDischargePrep(patient, "dischargeMedsStatus", "done")}>
-                      Mark meds done
-                    </button>
-                    <button
-                      type="button"
-                      className="secondary"
-                      onClick={() => updateDischargePrep(patient, "dischargeMedsStatus", "notNeeded")}
-                    >
-                      Meds N/A
-                    </button>
-                  </>
-                )}
-                {patient.opdAppointmentStatus === "pending" && (
-                  <>
-                    <button type="button" onClick={() => updateDischargePrep(patient, "opdAppointmentStatus", "done")}>
-                      Mark OPD done
-                    </button>
-                    <button
-                      type="button"
-                      className="secondary"
-                      onClick={() => updateDischargePrep(patient, "opdAppointmentStatus", "notNeeded")}
-                    >
-                      OPD N/A
-                    </button>
-                  </>
-                )}
-                {patient.diagnosisCertificateStatus === "pending" && (
-                  <>
-                    <button
-                      type="button"
-                      onClick={() => updateDischargePrep(patient, "diagnosisCertificateStatus", "done")}
-                    >
-                      Mark certificate done
-                    </button>
-                    <button
-                      type="button"
-                      className="secondary"
-                      onClick={() => updateDischargePrep(patient, "diagnosisCertificateStatus", "notNeeded")}
-                    >
-                      Cert N/A
-                    </button>
-                  </>
-                )}
+                {renderDischargePrepChecklist(patient, "alert")}
               </div>
             </div>
           ))}
@@ -1472,8 +1486,11 @@ function PatientBoardPage({
               roundingLayout.boardDensity === "normal" ? 6 : 4,
             );
             const visibleTaskLines = visibleTaskSourceLines.filter((line) => !isOrderSoapLine(line));
-            const visibleDcLines = (soap.dcLines.length > 0 ? soap.dcLines : patient.dischargeTargetDate ? [`Target: ${patient.dischargeTargetDate}`] : [])
-              .filter((line) => isDcSoapLineVisible(line, roundingLayout));
+            const visibleDcLines = (soap.dcLines.length > 0 ? soap.dcLines : [])
+              .filter((line) => isDcSoapLineVisible(line, roundingLayout))
+              .filter((line) => !/^Target\s*:?/i.test(line))
+              .filter((line) => !/^Prep\s*:/i.test(line))
+              .filter((line) => !/^Pending\s*:?\s*(?:Meds|OPD|Cert|meds|certificate)\b/i.test(line));
             const pendingTaskCount = pendingTasks(patient).length;
             const urgentTaskCount = pendingTasks(patient).filter(
               (task) => task.priority === "urgent" || task.text.trim().startsWith("!"),
@@ -1577,7 +1594,19 @@ function PatientBoardPage({
                     {(isLayoutSectionVisible(roundingLayout, "dcBarriers") || isLayoutSectionVisible(roundingLayout, "dcPrep")) && (
                       <div className="board-subsection patient-board-discharge">
                         <span className="board-label">DC</span>
-                        {renderBoardVisualLines(visibleDcLines, "TBD", "dc", 2, preferences.keywordHighlightRules)}
+                        <div className="board-dc-target-row">
+                          <span className="board-dc-target-text">
+                            {patient.dischargeTargetDate ? `DC ${patient.dischargeTargetDate}` : "DC TBD"}
+                          </span>
+                          <input
+                            type="date"
+                            value={patient.dischargeTargetDate}
+                            onChange={(event) => void updateDischargeTargetDate(patient, event.target.value)}
+                            aria-label={`Discharge target date for ${patient.bed || patient.patientCode || "patient"}`}
+                          />
+                        </div>
+                        {isLayoutSectionVisible(roundingLayout, "dcPrep") && renderDischargePrepChecklist(patient, "board")}
+                        {visibleDcLines.length > 0 && renderBoardVisualLines(visibleDcLines, "", "dc", 2, preferences.keywordHighlightRules)}
                         {dischargeReminder(patient) && isLayoutSectionVisible(roundingLayout, "dcPrep") && <div className="important-line">{dischargeReminder(patient)}</div>}
                       </div>
                     )}

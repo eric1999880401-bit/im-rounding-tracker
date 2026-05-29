@@ -787,7 +787,15 @@ function PatientDetailPage({
         </div>
         <div className="detail-header-grid">
           {headerDigest.diagnosis && <div><strong>Dx:</strong> {headerDigest.diagnosis}</div>}
-          {currentPatient.dischargeTargetDate && <div><strong>DC:</strong> {currentPatient.dischargeTargetDate}</div>}
+          <div className="detail-dc-target">
+            <strong>{currentPatient.dischargeTargetDate ? `DC ${currentPatient.dischargeTargetDate}` : "DC TBD"}</strong>
+            <input
+              type="date"
+              value={currentPatient.dischargeTargetDate}
+              onChange={(event) => updateField("dischargeTargetDate", event.target.value)}
+              aria-label="Discharge target date"
+            />
+          </div>
           {headerDigest.risks && <div><strong>Risk:</strong> {headerDigest.risks}</div>}
           {headerDigest.issues && <div><strong>Issues:</strong> {headerDigest.issues}</div>}
         </div>

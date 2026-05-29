@@ -219,20 +219,40 @@ export function isDcSoapLineVisible(line: string, layout: RoundingLayoutPreferen
 
 const abbreviationWhitelist = [
   "w/",
+  "w/o",
   "s/p",
+  "c/f",
   "r/o",
   "f/u",
+  "cont",
   "Abx",
   "Cx",
   "B/C",
+  "U/C",
+  "Sputum Cx",
   "PNA",
+  "UTI",
   "RF",
   "AKI",
   "CKD",
   "ESRD",
   "HD",
+  "CHF",
+  "HF",
+  "AF",
+  "CAD",
+  "DM",
+  "HTN",
+  "COPD",
+  "SpO2",
+  "O2",
+  "NC",
+  "RA",
   "CT",
   "CXR",
+  "MRI",
+  "U/S",
+  "EGD",
   "TTE",
   "OPD",
   "DC",
@@ -315,8 +335,9 @@ function inferApOrganization(drafts: ReturnType<typeof parseSoapText>[]): UserAi
 function inferAbbreviationStyle(preferredTerms: string[], reviewedTexts: string[]): UserAiStyleProfile["abbreviationStyle"] {
   const lineCount = Math.max(1, reviewedTexts.join("\n").split(/\r?\n/).filter(Boolean).length);
   const density = preferredTerms.length / lineCount;
+  if (reviewedTexts.length === 0) return "heavy";
   if (preferredTerms.length >= 6 || density >= 0.18) return "heavy";
-  if (preferredTerms.length <= 1 || density < 0.04) return "minimal";
+  if (preferredTerms.length <= 1 || density < 0.04) return "moderate";
   return "moderate";
 }
 

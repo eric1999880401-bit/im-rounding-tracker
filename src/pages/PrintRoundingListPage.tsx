@@ -300,7 +300,7 @@ function PrintRoundingListPage({
             >
               {visualLabel && <span className="print-visual-label">{visualLabel}</span>}
               <span className="print-visual-text">
-                <ClinicalInlineText value={visual.text} keywordRules={preferences.keywordHighlightRules} labReferenceDisplay={density === "normal" ? "inline" : "tooltip"} />
+                <ClinicalInlineText value={visual.text} keywordRules={preferences.keywordHighlightRules} />
               </span>
             </div>
           );
@@ -1009,7 +1009,7 @@ function PrintRoundingListPage({
           </div>
           <div>
             <strong>Key Labs / Images</strong>
-            <ClinicalText value={[keyLabs ? `Lab: ${keyLabs}` : "", keyImages ? `Image: ${keyImages}` : ""].filter(Boolean).join("\n")} keywordRules={preferences.keywordHighlightRules} labReferenceDisplay={density === "normal" ? "inline" : "tooltip"} />
+            <ClinicalText value={[keyLabs ? `Lab: ${keyLabs}` : "", keyImages ? `Image: ${keyImages}` : ""].filter(Boolean).join("\n")} keywordRules={preferences.keywordHighlightRules} />
           </div>
         </div>
       </section>

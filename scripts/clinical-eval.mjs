@@ -75,7 +75,7 @@ const {
 } = await server.ssrLoadModule("/src/soapDeltaGuardrails.ts");
 const { displayPrintLine } = await server.ssrLoadModule("/src/printPriority.ts");
 const { applyClinicalColorMarkup, applyUserKeywordHighlights, clearClinicalColorMarkupAtSelection } = await server.ssrLoadModule("/src/clinicalColorMarkup.ts");
-const { labReferenceText } = await server.ssrLoadModule("/src/labReference.ts");
+const { labReferenceText, parseClinicalLabTokens } = await server.ssrLoadModule("/src/labReference.ts");
 
 function haystack(plan) {
   return [
@@ -1864,6 +1864,23 @@ try {
   if (!/3\.5-5\.1/.test(labReferenceText("K")) || labReferenceText("untrusted-custom-lab")) {
     throw new Error("Lab reference display should only show known trusted single-value references");
   }
+  const trustedLabTokens = parseClinicalLabTokens("WBC 7.1, Hb 9.1, PLT 122, BUN 24, Cr 0.83, Na 130, K 4.0, ALT 11");
+  const trustedLabLabels = new Set(trustedLabTokens.filter((token) => token.confidence === "high" && token.reference).map((token) => token.canonicalLabel));
+  ["WBC", "Hb", "Plt", "BUN", "Cr", "Na", "K", "ALT"].forEach((label) => {
+    if (!trustedLabLabels.has(label)) {
+      throw new Error(`Trusted lab parser did not identify ${label}: ${JSON.stringify(trustedLabTokens)}`);
+    }
+  });
+  const unknownLabTokens = parseClinicalLabTokens("XYZ 9.9, customLab 12");
+  if (unknownLabTokens.some((token) => token.reference || token.confidence === "high")) {
+    throw new Error(`Unknown labs should not get guessed references: ${JSON.stringify(unknownLabTokens)}`);
+  }
+  if (classifyClinicalLine("Lab: K 4.0", { fallbackKind: "lab" }).tone === "critical") {
+    throw new Error("Normal potassium should not be elevated to critical by reference lookup");
+  }
+  if (classifyClinicalLine("Lab: K 6.1", { fallbackKind: "lab" }).tone !== "critical") {
+    throw new Error("Critical potassium should remain critical");
+  }
   if (isObjectiveSoapLineVisible("Image: CXR: improved opacity", layout)) {
     throw new Error("O Image remained visible after objectiveImages was disabled");
   }
@@ -1905,6 +1922,78 @@ try {
   }
   if (profile.typicalApProblemCount !== 2 || profile.typicalApLineLimit !== 1 || !profile.styleSummary.some((line) => /A\/P/i.test(line))) {
     throw new Error(`Style profile should keep density as a weak hint and summarize style: ${JSON.stringify(profile)}`);
+  }
+  const emptyProfile = buildUserAiStyleProfile([], {});
+  if (emptyProfile.abbreviationStyle !== "heavy") {
+    throw new Error(`Default AI style profile should be abbreviation-forward without reviewed notes: ${JSON.stringify(emptyProfile)}`);
+  }
+  const compactAiDraft = sanitizeAiSoapDraftForReview(
+    {
+      oneLiner: "Pneumonia with oxygen requirement on nasal cannula.",
+      admissionSummary: "Patient with pneumonia and respiratory failure; continue antibiotics and follow up blood culture.",
+      isbarHandoff: "Recommendation: follow up blood culture and continue antibiotics.",
+      subjective: {
+        chiefConcern: "Shortness of breath without chest pain",
+        symptoms: ["dyspnea without chest pain"],
+        overnightEvents: [],
+        importantSymptoms: ["dyspnea without chest pain"],
+        importantOvernightEvents: [],
+      },
+      objective: {
+        vitals: [
+          {
+            date: "2026-05-20",
+            name: "oxygen saturation",
+            value: "92% on nasal cannula",
+            interpretation: "oxygen requirement",
+            isAbnormal: true,
+            isImportant: true,
+          },
+        ],
+        bloodSugars: [],
+        physicalExam: [],
+        labs: [],
+        images: [
+          {
+            date: "2026-05-20",
+            studyType: "chest x-ray",
+            finding: "right lower lobe pneumonia",
+            impression: "right lower lobe pneumonia",
+            isImportant: true,
+          },
+        ],
+      },
+      assessmentPlan: [
+        {
+          problemTitle: "Pneumonia with respiratory failure",
+          assessmentSummary: "Concern for pneumonia with oxygen requirement",
+          evidenceOrCourseItems: ["Chest x-ray shows pneumonia"],
+          planItems: ["Continue antibiotics", "Follow up blood culture"],
+          isImportant: true,
+        },
+      ],
+      redFlags: [],
+      tasks: [{ text: "Follow up blood culture and continue antibiotics", priority: "normal", category: "lab", dueDate: "" }],
+      dischargeIssues: ["Arrange outpatient clinic follow-up and diagnosis certificate"],
+      thinkingPrompts: [],
+      uncertainty: [],
+    },
+    [
+      "2026-05-20 chest x-ray right lower lobe pneumonia.",
+      "oxygen saturation 92% on nasal cannula.",
+      "continue antibiotics; follow up blood culture.",
+      "Arrange outpatient clinic follow-up and diagnosis certificate.",
+    ].join("\n"),
+    "mixed",
+  );
+  const compactAiText = JSON.stringify(compactAiDraft);
+  ["PNA", "O2 req", "NC", "CXR", "B/C", "f/u", "cont Abx", "OPD", "Cert"].forEach((term) => {
+    if (!compactAiText.includes(term)) {
+      throw new Error(`AI draft sanitizer did not preserve compressed term ${term}: ${compactAiText}`);
+    }
+  });
+  if (/pneumonia|oxygen requirement|nasal cannula|chest x-ray|blood culture|follow up|continue antibiotics|outpatient clinic|diagnosis certificate/i.test(compactAiText)) {
+    throw new Error(`AI draft sanitizer left verbose phrases instead of medical shorthand: ${compactAiText}`);
   }
   console.log("PASS Layout preferences lock print labels and build abstract AI style profile");
   supplementalPasses += 1;
@@ -2108,12 +2197,18 @@ try {
   if (!/Pantoprazole/i.test(routineHidden) || !/Senna/i.test(routineHidden) || !/Vitamin B/i.test(routineHidden)) {
     throw new Error(`Routine hidden list did not keep retrievable low-yield meds:\n${routineHidden}`);
   }
+  const routineEnglishLabelPattern = /\bRoutine(?: hidden)?\s*:/i;
   const displayLines = formatMedicationOrderLinesForDisplay(
     ["Order: Teicoplanin 400 mg IV qd 5/13-", "Order: Pantoprazole 40 mg IV qd", "Order: Morphine 5 mg IV PRN dyspnea"],
     "summary",
     6,
   );
-  if (!displayLines.some((line) => /Abx:.*Teicoplanin/i.test(line)) || !displayLines.some((line) => /PRN:.*Morphine/i.test(line)) || displayLines.some((line) => /Pantoprazole/i.test(line))) {
+  if (
+    !displayLines.some((line) => /Abx:.*Teicoplanin/i.test(line)) ||
+    !displayLines.some((line) => /PRN:.*Morphine/i.test(line)) ||
+    displayLines.some((line) => /Pantoprazole/i.test(line)) ||
+    displayLines.some((line) => routineEnglishLabelPattern.test(line))
+  ) {
     throw new Error(`Order display formatting did not hide routine meds while keeping high-yield PRN:\n${displayLines.join("\n")}`);
   }
   const routineOnlyDisplayLines = formatMedicationOrderLinesForDisplay(
@@ -2123,11 +2218,23 @@ try {
   );
   if (
     routineOnlyDisplayLines.length !== 1 ||
-    !/Routine:.*Amlodipine.*PO.*qd.*Atorvastatin.*PO.*qn/i.test(routineOnlyDisplayLines[0]) ||
-    /^Routine hidden:\s*2$/i.test(routineOnlyDisplayLines[0]) ||
+    !/Amlodipine.*PO.*qd.*Atorvastatin.*PO.*qn/i.test(routineOnlyDisplayLines[0]) ||
+    routineOnlyDisplayLines.some((line) => routineEnglishLabelPattern.test(line)) ||
     routineOnlyDisplayLines[0].length > 110
   ) {
     throw new Error(`All-routine order display should abbreviate meds instead of hiding all content:\n${routineOnlyDisplayLines.join("\n")}`);
+  }
+  const mixedCategoryDisplayLines = formatMedicationOrderLinesForDisplay(
+    ["Order: Teicoplanin 400 mg IV qd 5/13-", "Order: Pantoprazole 40 mg IV qd"],
+    "category",
+    6,
+  );
+  if (
+    mixedCategoryDisplayLines.some((line) => routineEnglishLabelPattern.test(line)) ||
+    mixedCategoryDisplayLines.some((line) => /Pantoprazole/i.test(line)) ||
+    !mixedCategoryDisplayLines.some((line) => /另有常規藥囑\s*1\s*筆/.test(line))
+  ) {
+    throw new Error(`Category order display should hide routine meds without English Routine labels:\n${mixedCategoryDisplayLines.join("\n")}`);
   }
   const collapsedRoutineLines = formatMedicationOrderLinesForDisplay(
     ["Order: Amlodipine 5 mg PO qd", "Order: Atorvastatin 20 mg PO qn"],

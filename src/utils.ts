@@ -1694,9 +1694,9 @@ export function keyLabItems(items: ParsedLabItem[], maxItems = 8) {
 
 export function pendingDischargePrep(patient: Patient) {
   const labels: Array<[DischargePrepStatus, string]> = [
-    [patient.dischargeMedsStatus, "meds"],
+    [patient.dischargeMedsStatus, "Meds"],
     [patient.opdAppointmentStatus, "OPD"],
-    [patient.diagnosisCertificateStatus, "certificate"],
+    [patient.diagnosisCertificateStatus, "Cert"],
   ];
 
   return labels.filter(([status]) => status === "pending").map(([, label]) => label);

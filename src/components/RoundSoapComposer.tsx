@@ -964,7 +964,7 @@ function RoundSoapComposer({
           </details>
         </section>
         <section className="round-soap-preview" aria-label="Highlighted SOAP preview">
-          <SoapVisualPreview value={soapText} compact={compact} layoutPreferences={layoutPreferences} keywordRules={keywordRules} />
+          <SoapVisualPreview value={soapText} compact={compact} layoutPreferences={layoutPreferences} keywordRules={keywordRules} labReferenceDisplay={compact ? "none" : "detail"} />
         </section>
       </div>
 

@@ -6,6 +6,20 @@ interface LabReferenceRange {
   unit?: string;
 }
 
+export type LabReferenceConfidence = "high" | "none";
+
+export interface ClinicalLabToken {
+  raw: string;
+  label: string;
+  canonicalLabel: string;
+  value: string;
+  unit: string;
+  reference: string;
+  confidence: LabReferenceConfidence;
+  start: number;
+  end: number;
+}
+
 const commonReferenceRanges: Record<string, LabReferenceRange> = {
   WBC: { ref: "4.0-10.0", unit: "k/uL" },
   Hb: { ref: "12-16", unit: "g/dL" },
@@ -30,6 +44,40 @@ const commonReferenceRanges: Record<string, LabReferenceRange> = {
   Glucose: { ref: "70-140", unit: "mg/dL" },
 };
 
+const labAliases: Record<string, string> = {
+  WBC: "WBC",
+  Hb: "Hb",
+  Hgb: "Hb",
+  HCT: "Hct",
+  Hct: "Hct",
+  PLT: "Plt",
+  Plt: "Plt",
+  platelet: "Plt",
+  Neu: "Neu",
+  Neut: "Neu",
+  Na: "Na",
+  K: "K",
+  Cl: "Cl",
+  BUN: "BUN",
+  Cr: "Cr",
+  Ca: "Ca",
+  Mg: "Mg",
+  P: "P",
+  Phos: "P",
+  AST: "AST",
+  ALT: "ALT",
+  "T-bil": "T-Bil",
+  TBil: "T-Bil",
+  Bil: "T-Bil",
+  Alb: "Alb",
+  CRP: "CRP",
+  Lactate: "Lactate",
+  Lac: "Lactate",
+  INR: "INR",
+  Glucose: "Glucose",
+  Glu: "Glucose",
+};
+
 export function labReferenceForLabel(label: string): LabReferenceRange | undefined {
   const normalized = normalizeLabDisplayName(label);
   return commonReferenceRanges[normalized] ?? commonReferenceRanges[findLabDictionaryItem(label)?.displayName ?? ""];
@@ -39,6 +87,43 @@ export function labReferenceText(label: string) {
   const reference = labReferenceForLabel(label);
   if (!reference) return "";
   return `ref ${reference.ref}${reference.unit ? ` ${reference.unit}` : ""}`;
+}
+
+function canonicalLabLabel(label: string) {
+  const clean = label.trim();
+  return labAliases[clean] ?? labAliases[clean.replace(/\s+/g, "")] ?? normalizeLabDisplayName(clean);
+}
+
+export function parseClinicalLabTokens(text: string): ClinicalLabToken[] {
+  const source = String(text ?? "");
+  const aliasPattern = Object.keys(labAliases)
+    .sort((a, b) => b.length - a.length)
+    .map((alias) => alias.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    .join("|");
+  const pattern = new RegExp(`\\b(${aliasPattern})\\s*[:=]?\\s*([<>]?\\d+(?:\\.\\d+)?)\\b`, "gi");
+  const tokens: ClinicalLabToken[] = [];
+  let match: RegExpExecArray | null;
+
+  while ((match = pattern.exec(source))) {
+    const label = match[1] ?? "";
+    const value = match[2] ?? "";
+    const canonicalLabel = canonicalLabLabel(label);
+    const reference = labReferenceText(canonicalLabel);
+    const end = match.index + match[0].length;
+    tokens.push({
+      raw: source.slice(match.index, end),
+      label,
+      canonicalLabel,
+      value,
+      unit: labReferenceForLabel(canonicalLabel)?.unit ?? "",
+      reference,
+      confidence: reference ? "high" : "none",
+      start: match.index,
+      end,
+    });
+  }
+
+  return tokens;
 }
 
 export function labItemReferenceText(item: ParsedLabItem) {

@@ -19,6 +19,8 @@ interface DailyNoteFormProps {
   onCompositionEnd?: () => void;
 }
 
+type DischargePrepField = "dischargeMedsStatus" | "opdAppointmentStatus" | "diagnosisCertificateStatus";
+
 function DailyNoteForm({
   patient,
   onChange,
@@ -38,6 +40,10 @@ function DailyNoteForm({
 
   function updateField<K extends keyof Patient>(field: K, value: Patient[K]) {
     onChange({ ...patient, [field]: value, updatedAt: new Date().toISOString() });
+  }
+
+  function updateDischargePrep(field: DischargePrepField, status: Patient[DischargePrepField]) {
+    updateField(field, status);
   }
 
   function updateLabs(rawValue: string, parsedLabItems = patient.parsedLabItems, labReports = patient.labReports) {
@@ -524,23 +530,39 @@ function DailyNoteForm({
                 ["dischargeMedsStatus", t("dc.meds")],
                 ["opdAppointmentStatus", t("dc.opd")],
                 ["diagnosisCertificateStatus", t("dc.certificate")],
-              ].map(([field, label]) => (
-                <label key={field}>
-                  {label}
-                  <select
-                    value={patient[field as keyof Patient] as string}
-                    onChange={(event) => updateField(field as keyof Patient, event.target.value as Patient[keyof Patient])}
-                    onBlur={commitOnBlur}
-                  >
-                    <option value="pending">{t("dc.pending")}</option>
-                    <option value="done">{t("dc.done")}</option>
-                    <option value="notNeeded">{t("dc.notNeeded")}</option>
-                  </select>
-                </label>
-              ))}
+              ].map(([field, label]) => {
+                const prepField = field as DischargePrepField;
+                const status = patient[prepField];
+                const isNotNeeded = status === "notNeeded";
+                return (
+                  <div className={`dc-prep-item${isNotNeeded ? " dc-prep-item-na" : ""}`} key={field}>
+                    <label className="dc-prep-check">
+                      <input
+                        type="checkbox"
+                        checked={status === "done"}
+                        disabled={isNotNeeded}
+                        onChange={(event) => updateDischargePrep(prepField, event.target.checked ? "done" : "pending")}
+                        onBlur={commitOnBlur}
+                      />
+                      <span>{label}</span>
+                    </label>
+                    <button
+                      type="button"
+                      className={`dc-prep-na-button${isNotNeeded ? " dc-prep-na-active" : ""}`}
+                      onClick={() => updateDischargePrep(prepField, isNotNeeded ? "pending" : "notNeeded")}
+                      onBlur={commitOnBlur}
+                      aria-label={`${label} ${isNotNeeded ? "reset to pending" : t("dc.notNeeded")}`}
+                      title={isNotNeeded ? t("dc.pending") : t("dc.notNeeded")}
+                    >
+                      N/A
+                    </button>
+                  </div>
+                );
+              })}
             </div>
             <label>
               {t("field.dischargeTarget")}
+              <span className="field-hint">{patient.dischargeTargetDate ? `Target ${patient.dischargeTargetDate}` : "TBD"}</span>
               <input
                 type="date"
                 value={patient.dischargeTargetDate}

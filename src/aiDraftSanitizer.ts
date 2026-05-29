@@ -1,4 +1,5 @@
 import type { AiClinicalSourceType, AiSoapDraft } from "./types";
+import { compactMedicalAbbreviations } from "./medicalAbbreviations";
 
 type Vital = AiSoapDraft["objective"]["vitals"][number];
 type Lab = AiSoapDraft["objective"]["labs"][number];
@@ -28,26 +29,7 @@ function normalizeText(value: unknown) {
 }
 
 function abbreviate(value: string) {
-  return value
-    .replace(/\bvital signs?\b/gi, "V/S")
-    .replace(/\bblood pressure\b/gi, "BP")
-    .replace(/\btemperature\b/gi, "T")
-    .replace(/\brespiratory rate\b/gi, "RR")
-    .replace(/\boxygen saturation\b/gi, "SpO2")
-    .replace(/\bcomputed tomography\b/gi, "CT")
-    .replace(/\bmagnetic resonance imaging\b/gi, "MRI")
-    .replace(/\bantibiotics?\b/gi, "Abx")
-    .replace(/\bantimicrobial\b/gi, "Abx")
-    .replace(/\bfollow[- ]?up\b/gi, "f/u")
-    .replace(/\bwithout\b/gi, "w/o")
-    .replace(/\bwith\b/gi, "w/")
-    .replace(/\bstatus post\b/gi, "s/p")
-    .replace(/\bconcern for\b/gi, "c/f")
-    .replace(/\brule out\b/gi, "r/o")
-    .replace(/\bblood culture\b/gi, "B/C")
-    .replace(/\burine culture\b/gi, "U/C")
-    .replace(/\bsputum culture\b/gi, "Sputum Cx")
-    .replace(/\bculture\b/gi, "Cx");
+  return compactMedicalAbbreviations(value);
 }
 
 function compactLine(value: unknown, maxChars = 180) {

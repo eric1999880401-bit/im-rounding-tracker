@@ -50,7 +50,7 @@ const categoryLabels: Record<MedicationOrderCategory, string> = {
   nutrition: "Nutrition",
   monitoring: "Monitoring",
   highRiskPrn: "PRN",
-  routine: "Routine",
+  routine: "常規藥",
 };
 
 const categoryOrder: MedicationOrderCategory[] = [
@@ -114,7 +114,7 @@ export function stripOrderLinePrefix(value: string) {
 
 function stripOrderInputPrefix(value: string) {
   return stripOrderLinePrefix(value)
-    .replace(/^\s*(?:Abx|Anticoag\/AP|Steroid\/Immuno|Cardio\/Renal|Resp|Insulin\/Glucose|IVF\/Lyte|Nutrition|Monitoring|PRN|Routine(?: hidden)?)\s*:\s*/i, "")
+    .replace(/^\s*(?:Abx|Anticoag\/AP|Steroid\/Immuno|Cardio\/Renal|Resp|Insulin\/Glucose|IVF\/Lyte|Nutrition|Monitoring|PRN|Routine(?: hidden)?|常規藥囑?|一般藥)\s*[:：]\s*/i, "")
     .trim();
 }
 
@@ -312,7 +312,7 @@ function summarizeHiddenRoutineOrders(orders: MedicationOrderDraft[], mode: Orde
     if (items.length === 0) break;
     const remaining = uniqueItems.length - end;
     const suffix = remaining > 0 ? ` +${remaining}` : "";
-    lines.push(safeClinicalLine(`Routine: ${items.join(", ")}${suffix}`, 110));
+    lines.push(safeClinicalLine(`${items.join(", ")}${suffix}`, 110));
   }
   return lines;
 }
@@ -329,7 +329,7 @@ export function summarizeMedicationOrders(
     const hiddenCount = orders.filter((order) => order.hiddenReason).length;
     if (hiddenCount === 0 || mode === "collapsed") return [];
     const routineSummary = summarizeHiddenRoutineOrders(orders, mode, maxLines);
-    return routineSummary.length > 0 ? routineSummary : [`Routine hidden: ${hiddenCount}`];
+    return routineSummary.length > 0 ? routineSummary : [`常規藥囑已收起 (${hiddenCount})`];
   }
   if (mode === "collapsed") return [`藥囑 hidden (${source.length})`];
 
@@ -345,7 +345,7 @@ export function summarizeMedicationOrders(
   const visible = lines.slice(0, maxLines);
   const hiddenCount = orders.filter((order) => order.hiddenReason).length;
   if (mode === "category" && hiddenCount > 0 && visible.length < maxLines) {
-    visible.push(`Routine hidden: ${hiddenCount}`);
+    visible.push(`另有常規藥囑 ${hiddenCount} 筆`);
   }
   if (lines.length > visible.length) {
     visible[visible.length - 1] = `${visible[visible.length - 1]} +${lines.length - visible.length} categories`;

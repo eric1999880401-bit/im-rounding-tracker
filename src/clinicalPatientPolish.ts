@@ -1,5 +1,6 @@
 import { applyClinicalKnowledgeToText, formatRuleBasedSbar, formatRuleBasedWeeklySummary } from "./clinicalKnowledge";
 import { specificAntibioticPlan } from "./clinicalFieldRouter";
+import { compactMedicalAbbreviations } from "./medicalAbbreviations";
 import type { AssessmentPlanItem, DailyNote, GeneratedClinicalPlan, Patient, PatientTask, TaskCategory, TaskPriority } from "./types";
 import { nowIso, safeClinicalLine } from "./utils";
 
@@ -11,7 +12,7 @@ function cleanLine(value: string, maxChars = 220) {
     .replace(/\bcontinue current management\b/gi, "")
     .replace(/\s+/g, " ")
     .trim();
-  return safeClinicalLine(clean, maxChars);
+  return safeClinicalLine(compactMedicalAbbreviations(clean), maxChars);
 }
 
 function cleanTail(value: string) {

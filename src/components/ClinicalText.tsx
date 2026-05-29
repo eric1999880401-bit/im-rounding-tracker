@@ -4,7 +4,9 @@ import type { HighlightLine, KeywordHighlightRule } from "../types";
 import { safeClinicalLine, splitHighlightLines } from "../utils";
 import { classifyClinicalLine, normalizeClinicalDisplayTextPreservingMarks } from "../clinicalLineClassifier";
 import { applyUserKeywordHighlights, clinicalMarkPattern } from "../clinicalColorMarkup";
-import { labReferenceText } from "../labReference";
+import { parseClinicalLabTokens } from "../labReference";
+
+export type LabReferenceDisplayMode = "none" | "inline" | "detail" | "tooltip";
 
 interface ClinicalTextProps {
   value: string;
@@ -13,7 +15,7 @@ interface ClinicalTextProps {
   maxCharsPerLine?: number;
   importantDefault?: boolean;
   keywordRules?: KeywordHighlightRule[];
-  labReferenceDisplay?: "none" | "tooltip" | "inline";
+  labReferenceDisplay?: LabReferenceDisplayMode;
 }
 
 function shortenText(text: string, maxChars?: number) {
@@ -56,35 +58,34 @@ const colorClassNames: Record<string, string> = {
   purple: "clinical-mark-purple",
 };
 
-function renderLabReferenceText(text: string, display: "none" | "tooltip" | "inline" = "none") {
+function renderLabReferenceText(text: string, display: LabReferenceDisplayMode = "none") {
   if (display === "none") return <span>{text}</span>;
-  const pattern = /\b(WBC|Hb|Hgb|Plt|Neu|Na|K|Cr|BUN|AST|ALT|INR|CRP|Lactate|Glucose)\s*[:=]?\s*([<>]?\d+(?:\.\d+)?)\b/gi;
+  const tokens = parseClinicalLabTokens(text).filter((token) => token.confidence === "high");
+  if (tokens.length === 0) return <span>{text}</span>;
   const parts: ReactNode[] = [];
   let cursor = 0;
-  let match: RegExpExecArray | null;
-  while ((match = pattern.exec(text))) {
-    if (match.index > cursor) parts.push(<span key={`plain-${cursor}`}>{text.slice(cursor, match.index)}</span>);
-    const label = match[1] === "Hgb" ? "Hb" : match[1];
-    const ref = labReferenceText(label);
-    const token = text.slice(match.index, match.index + match[0].length);
-    parts.push(<LabValueSpan display={display} key={`${token}-${match.index}`} referenceText={ref} token={token} />);
-    cursor = match.index + match[0].length;
-  }
+  tokens.forEach((token) => {
+    if (token.start > cursor) parts.push(<span key={`plain-${cursor}`}>{text.slice(cursor, token.start)}</span>);
+    parts.push(<LabValueSpan display={display} key={`${token.raw}-${token.start}`} referenceLabel={token.canonicalLabel} referenceText={token.reference} token={token.raw} />);
+    cursor = token.end;
+  });
   if (cursor < text.length) parts.push(<span key={`plain-${cursor}`}>{text.slice(cursor)}</span>);
   return parts.length > 0 ? parts : <span>{text}</span>;
 }
 
 function LabValueSpan({
   display,
+  referenceLabel,
   referenceText,
   token,
 }: {
-  display: "tooltip" | "inline";
+  display: Exclude<LabReferenceDisplayMode, "none">;
+  referenceLabel: string;
   referenceText: string;
   token: string;
 }) {
   const [open, setOpen] = useState(false);
-  const canOpen = Boolean(referenceText);
+  const canOpen = Boolean(referenceText) && display === "detail";
   const toggleOpen = () => {
     if (canOpen) setOpen((value) => !value);
   };
@@ -100,22 +101,24 @@ function LabValueSpan({
   };
 
   return (
-    <span
-      className={`clinical-lab-value ${canOpen ? "clinical-lab-value-clickable" : ""}`}
-      onClick={toggleOpen}
-      onKeyDown={onKeyDown}
-      role={canOpen ? "button" : undefined}
-      tabIndex={canOpen ? 0 : undefined}
-      title={referenceText || undefined}
-    >
-      {token}
-      {display === "inline" && referenceText && <span className="clinical-lab-ref-inline"> ({referenceText})</span>}
-      {open && referenceText && <span className="clinical-lab-popover">{referenceText}</span>}
-    </span>
+    <>
+      <span
+        className={`clinical-lab-value ${canOpen ? "clinical-lab-value-clickable" : ""}`}
+        onClick={toggleOpen}
+        onKeyDown={onKeyDown}
+        role={canOpen ? "button" : undefined}
+        tabIndex={canOpen ? 0 : undefined}
+        aria-label={canOpen ? `${token} ${referenceText}` : undefined}
+      >
+        {token}
+        {display === "inline" && referenceText && <span className="clinical-lab-ref-inline"> ({referenceText})</span>}
+      </span>
+      {open && referenceText && <span className="clinical-lab-ref-detail">Ref: {referenceLabel} {referenceText.replace(/^ref\s*/i, "")}</span>}
+    </>
   );
 }
 
-function renderMarkedText(text: string, keywordRules: KeywordHighlightRule[] = [], labReferenceDisplay: "none" | "tooltip" | "inline" = "none") {
+function renderMarkedText(text: string, keywordRules: KeywordHighlightRule[] = [], labReferenceDisplay: LabReferenceDisplayMode = "none") {
   const markedText = applyUserKeywordHighlights(text, keywordRules);
   const parts: Array<{ color?: string; style?: string; text: string }> = [];
   const pattern = new RegExp(clinicalMarkPattern.source, "gi");
@@ -145,7 +148,7 @@ function renderMarkedText(text: string, keywordRules: KeywordHighlightRule[] = [
   );
 }
 
-function renderLines(lines: HighlightLine[], fallback: string, importantDefault = false, maxCharsPerLine?: number, keywordRules: KeywordHighlightRule[] = [], labReferenceDisplay: "none" | "tooltip" | "inline" = "none") {
+function renderLines(lines: HighlightLine[], fallback: string, importantDefault = false, maxCharsPerLine?: number, keywordRules: KeywordHighlightRule[] = [], labReferenceDisplay: LabReferenceDisplayMode = "none") {
   if (lines.length === 0) return <span className="muted">{fallback}</span>;
 
   return groupLines(lines, maxCharsPerLine).map((line, index) => {
@@ -196,7 +199,7 @@ export function ClinicalText({
   maxCharsPerLine,
   importantDefault = false,
   keywordRules = [],
-  labReferenceDisplay = "tooltip",
+  labReferenceDisplay = "none",
 }: ClinicalTextProps) {
   const lines = splitHighlightLines(value);
   const important = lines.filter((line) => line.important);
@@ -214,10 +217,10 @@ interface ClinicalInlineTextProps {
   value: string;
   maxChars?: number;
   keywordRules?: KeywordHighlightRule[];
-  labReferenceDisplay?: "none" | "tooltip" | "inline";
+  labReferenceDisplay?: LabReferenceDisplayMode;
 }
 
-export function ClinicalInlineText({ value, maxChars, keywordRules = [], labReferenceDisplay = "tooltip" }: ClinicalInlineTextProps) {
+export function ClinicalInlineText({ value, maxChars, keywordRules = [], labReferenceDisplay = "none" }: ClinicalInlineTextProps) {
   const hasMarks = /\[\[(?:red|orange|yellow|blue|green|purple)(?:-(?:highlight|text))?:/i.test(value);
   const text = maxChars && !hasMarks ? safeClinicalLine(value, maxChars) : value;
   return <>{renderMarkedText(displayClinicalText(text), keywordRules, labReferenceDisplay)}</>;

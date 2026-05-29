@@ -1,0 +1,228 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PatientListAISummary",
+  "type": "object",
+  "required": [
+    "patientId",
+    "oneLiner",
+    "topAlerts",
+    "sections",
+    "todayTasks",
+    "discharge",
+    "missingData"
+  ],
+  "properties": {
+    "patientId": {
+      "type": "string"
+    },
+    "oneLiner": {
+      "type": "object",
+      "required": [
+        "text",
+        "sourceRefs"
+      ],
+      "properties": {
+        "text": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sourceRefs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "topAlerts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "label",
+          "severity",
+          "text",
+          "sourceRefs",
+          "confidence"
+        ],
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "severity": {
+            "enum": [
+              "low",
+              "medium",
+              "high",
+              "critical"
+            ]
+          },
+          "text": {
+            "type": "string"
+          },
+          "sourceRefs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1
+          },
+          "confidence": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "sections": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "title",
+          "bullets"
+        ],
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "bullets": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "text",
+                "sourceRefs",
+                "confidence"
+              ],
+              "properties": {
+                "text": {
+                  "type": "string"
+                },
+                "sourceRefs": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1
+                },
+                "confidence": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "todayTasks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "text",
+          "sourceRefs",
+          "status"
+        ],
+        "properties": {
+          "text": {
+            "type": "string"
+          },
+          "sourceRefs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1
+          },
+          "status": {
+            "enum": [
+              "planned",
+              "pending",
+              "needs_clinician_review",
+              "unknown"
+            ]
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "discharge": {
+      "type": "object",
+      "required": [
+        "status",
+        "barriers"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "unknown",
+            "not_ready",
+            "possibly_ready",
+            "ready"
+          ]
+        },
+        "barriers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "text",
+              "sourceRefs"
+            ],
+            "properties": {
+              "text": {
+                "type": "string"
+              },
+              "sourceRefs": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "minItems": 1
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "missingData": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "field",
+          "reason",
+          "severity"
+        ],
+        "properties": {
+          "field": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "severity": {
+            "enum": [
+              "low",
+              "medium",
+              "critical"
+            ]
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

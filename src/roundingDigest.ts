@@ -1079,8 +1079,8 @@ function subjectiveText(patient: Patient, maxItems: number, maxChars: number) {
 function dischargeText(patient: Patient, maxChars: number) {
   const pending = pendingDischargePrep(patient);
   return [
-    patient.dischargeTargetDate ? `Target: ${patient.dischargeTargetDate}` : "",
-    pending.length > 0 ? `Pending: ${pending.join("/")}` : "",
+    patient.dischargeTargetDate ? `Target ${patient.dischargeTargetDate}` : "",
+    pending.length > 0 ? `Pending ${pending.join("/")}` : "",
     compactText(patient.dischargePlan, 1, maxChars),
     patient.dischargeBarriers ? `Barrier: ${shortDigestText(patient.dischargeBarriers, maxChars)}` : "",
   ]

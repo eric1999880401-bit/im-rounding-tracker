@@ -2,13 +2,17 @@ import { Link } from "react-router-dom";
 import { useState } from "react";
 import type { Patient, PatientTask } from "../types";
 import { getActivePatients, hasUpcomingDischarge, nowIso, pendingDischargePrep } from "../utils";
+import { useT } from "../i18n";
 
 interface PageProps {
   patients: Patient[];
   onSavePatient: (patient: Patient) => Promise<void>;
 }
 
+type DischargePrepField = "dischargeMedsStatus" | "opdAppointmentStatus" | "diagnosisCertificateStatus";
+
 function TodayTasksPage({ patients, onSavePatient }: PageProps) {
+  const t = useT();
   const [showCompletedTasks, setShowCompletedTasks] = useState(false);
   const activePatients = getActivePatients(patients);
   const visibleTasks = activePatients.flatMap((patient) =>
@@ -49,10 +53,49 @@ function TodayTasksPage({ patients, onSavePatient }: PageProps) {
 
   async function updateDischargePrep(
     patient: Patient,
-    field: "dischargeMedsStatus" | "opdAppointmentStatus" | "diagnosisCertificateStatus",
+    field: DischargePrepField,
     status: Patient[typeof field],
   ) {
     await onSavePatient({ ...patient, [field]: status, updatedAt: nowIso() });
+  }
+
+  function renderDischargePrepChecklist(patient: Patient) {
+    const items: Array<{ field: DischargePrepField; label: string; shortLabel: string }> = [
+      { field: "dischargeMedsStatus", label: t("dc.meds"), shortLabel: "Meds" },
+      { field: "opdAppointmentStatus", label: t("dc.opd"), shortLabel: "OPD" },
+      { field: "diagnosisCertificateStatus", label: t("dc.certificate"), shortLabel: "Cert" },
+    ];
+
+    return (
+      <div className="dc-prep-checks" aria-label="Discharge prep checklist">
+        {items.map(({ field, label, shortLabel }) => {
+          const status = patient[field];
+          const isNotNeeded = status === "notNeeded";
+          return (
+            <div className={`dc-prep-item${isNotNeeded ? " dc-prep-item-na" : ""}`} key={field}>
+              <label className="dc-prep-check" title={label}>
+                <input
+                  type="checkbox"
+                  checked={status === "done"}
+                  disabled={isNotNeeded}
+                  onChange={(event) => void updateDischargePrep(patient, field, event.target.checked ? "done" : "pending")}
+                />
+                <span>{shortLabel}</span>
+              </label>
+              <button
+                type="button"
+                className={`dc-prep-na-button${isNotNeeded ? " dc-prep-na-active" : ""}`}
+                onClick={() => void updateDischargePrep(patient, field, isNotNeeded ? "pending" : "notNeeded")}
+                aria-label={`${label} ${isNotNeeded ? "reset to pending" : "not needed"}`}
+                title={isNotNeeded ? "Reset to pending" : t("dc.notNeeded")}
+              >
+                N/A
+              </button>
+            </div>
+          );
+        })}
+      </div>
+    );
   }
 
   return (
@@ -73,24 +116,7 @@ function TodayTasksPage({ patients, onSavePatient }: PageProps) {
               {pending.join(" / ")}
             </div>
             <div className="dc-alert-actions">
-              {patient.dischargeMedsStatus === "pending" && (
-                <button type="button" onClick={() => updateDischargePrep(patient, "dischargeMedsStatus", "done")}>
-                  Mark meds done
-                </button>
-              )}
-              {patient.opdAppointmentStatus === "pending" && (
-                <button type="button" onClick={() => updateDischargePrep(patient, "opdAppointmentStatus", "done")}>
-                  Mark OPD done
-                </button>
-              )}
-              {patient.diagnosisCertificateStatus === "pending" && (
-                <button
-                  type="button"
-                  onClick={() => updateDischargePrep(patient, "diagnosisCertificateStatus", "done")}
-                >
-                  Mark certificate done
-                </button>
-              )}
+              {renderDischargePrepChecklist(patient)}
             </div>
           </div>
         ))}

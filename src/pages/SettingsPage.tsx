@@ -314,7 +314,7 @@ function SettingsPage({ preferences, userName, onChange, onRefreshAiStyleProfile
           </div>
         </div>
         <div className={`settings-print-preview print-page density-${roundingLayout.printDensity} print-font-${roundingLayout.printFontSize} print-line-${roundingLayout.printLineSpacing} print-padding-${roundingLayout.printPadding}`}>
-          <ClinicalText value={printSampleSoap} keywordRules={keywordRules} labReferenceDisplay="inline" />
+          <ClinicalText value={printSampleSoap} keywordRules={keywordRules} labReferenceDisplay="detail" />
         </div>
         <SoapVisualPreview value={printSampleSoap} layoutPreferences={roundingLayout} keywordRules={keywordRules} compact />
       </section>
