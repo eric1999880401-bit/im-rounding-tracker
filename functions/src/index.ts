@@ -761,7 +761,7 @@ function sanitizeImportDraft(
     physicalExam: cleanClinicalLines(item.physicalExam, 5, 700),
     labText: cleanClinicalLines(item.labText, 10, 1200),
     imageText: cleanClinicalLines(item.imageText, 8, 1000),
-    admissionSummary: cleanClinicalLines(item.admissionSummary, 5, 900),
+    admissionSummary: cleanClinicalLines(item.admissionSummary, 3, 420),
     underlyingDiseases: cleanClinicalLines(item.underlyingDiseases, 8, 700),
     activeProblems: cleanClinicalLines(item.activeProblems, 8, 900),
     hospitalCourseHighlights: cleanClinicalLines(item.hospitalCourseHighlights, 8, 900),
@@ -924,7 +924,8 @@ function makeBatchImportPrompt(
     "- If bed or patientCode exactly matches an existing active patient, mark status updateCandidate and set matchPatientId to that existing id. Otherwise status new and matchPatientId empty.",
     "- Reuse existing IM Rounding Tracker fields: bed, patientCode, age, sex, attending, service, diagnosis, PMH, active problems, course, red flags, tasks, discharge/disposition.",
     "- Do not invent missing facts. Use empty strings/arrays when absent. Put uncertainty only for real ambiguity that blocks safe review.",
-    "- admissionSummary: 2-4 compact attending-rounds sentences. Include why admitted, key PMH/context, major prior course, active issues, today/pending/disposition.",
+    ...admissionSummaryStyleBullets.map((line) => `- ${line}`),
+    "- admissionSummary: include why admitted, key PMH/context, major prior course/treatment, active issues, today/pending/dispo; leave empty if there is no admission/course context.",
     "- oneLiner: one short diagnosis-oriented line.",
     "- todayUpdates: last 24h subjective/overnight/transfer status only.",
     "- vitalSigns: current meaningful V/S and O2 support.",
@@ -1042,7 +1043,8 @@ function makePrompt(sourceType: SourceType, rawText: string, patientContext: Rec
     "- Compression target is complete but compressed: preserve active problems, abnormal trends, Abx/procedure/consult status, pending tasks, and DC barriers while shortening wording.",
     "- Prefer common shorthand: w/, w/o, s/p, c/f, r/o, f/u, cont, Abx, Cx, B/C, U/C, Sputum Cx, PNA, UTI, AKI/CKD/ESRD/HD, RF, CHF/HF, AF, CAD, DM, HTN, COPD, SpO2/O2, NC/RA, CXR/CT/MRI/U/S, EGD, OPD.",
     "- Use DC for discharge; reserve d/c only for discontinue. Avoid rare or ambiguous abbreviations.",
-    "- admissionSummary: 3-4 compact attending-rounds sentences. Include admission reason, PMH/context, major course, current active problems, today/pending/dispo. Leave empty only if the pasted text has no admission/course context.",
+    ...admissionSummaryStyleBullets.map((line) => `- ${line}`),
+    "- admissionSummary: include admission reason, PMH/context, major course/treatment, current active problems, today/pending/dispo. Leave empty only if the pasted text has no admission/course context.",
     "- isbarHandoff: concise SBAR with headings exactly Situation, Background, Assessment, Recommendation. Include red flags, pending tasks, contingency/call parameters, and disposition. Leave empty only if there is too little patient context.",
     "- Remove boilerplate and generic phrases like monitor closely, continue current management, clinical correlation, and stable condition unless tied to a concrete trigger, action, or call threshold.",
     "- For vitals/lab/image-only source types, do not fabricate admissionSummary or isbarHandoff from isolated data; leave those fields empty unless the pasted text includes enough broader context.",
@@ -1198,6 +1200,14 @@ function documentTypeLabel(documentType: DocumentType) {
   return labels[documentType];
 }
 
+const admissionSummaryStyleBullets = [
+  "Admission summary style: write 2-3 short mixed Chinese-English clinical sentences, not an English paragraph.",
+  "Use abbreviation-forward inpatient IM style: s/p, c/f, r/o, f/u, cont, Abx, Cx, B/C, U/C, Sputum Cx, PNA, UTI, AKI/CKD, RF, HF, AF, CAD, DM, HTN, COPD, O2/SpO2, NC/RA, CXR/CT/MRI/U/S, EGD, DC, OPD.",
+  "Keep Dx/PMH, organisms, drug names, procedures, image studies, lab values, devices, and consult services in English; use Chinese only for connective clinical judgment such as 因, 背景, 住院中, 目前, 重點, 待.",
+  "Preferred structure: 因 [reason/Dx] 住院, 背景 [PMH/context]. 住院中 [major course/treatment/objective anchor]. 目前重點 [active issues], 待 [pending/dispo].",
+  "Do not write 'The patient is', full admission-note prose, copied full lab panels, routine normal data, or generic filler.",
+];
+
 function documentInstructions(documentType: DocumentType) {
   const shared = [
     "First fill clinicalReasoning before composing document sections.",
@@ -1223,12 +1233,13 @@ function documentInstructions(documentType: DocumentType) {
       "Use conciseSummary as a one-sentence admission summary.",
     ],
     admissionSummary: [
-      "Create a short attending-rounds admission summary in one compact paragraph.",
-      "Write like a senior IM resident's hand-written admission brief: diagnosis-oriented, clinically selective, and ready to paste into the rounding list.",
+      ...admissionSummaryStyleBullets,
+      "Create a short attending-rounds admission brief ready to paste into the rounding list.",
+      "Write like a senior IM resident's hand-written admission brief: diagnosis-oriented, clinically selective, abbreviation-forward, and mixed Chinese-English.",
       "Use this mental order without headings: admitted for/initial presentation, key PMH/context, major course/objective anchors, current active issues and today/pending/disposition.",
       "Emphasize why admitted, important PMH/context, key positive/negative findings, active problems, major prior course, today's important changes, initial/current treatment, and pending/disposition decisions.",
       "Exclude trivial daily stable updates unless they affect management, safety, discharge, or handoff.",
-      "Keep to 3-4 sentences; do not output a long admission note or every normal result.",
+      "Keep to 2-3 short sentences; complex patients may use 3 sentences but not more.",
       "Use conciseSummary as the best one-paragraph presentation.",
     ],
     dischargeHospitalCourse: [
@@ -1737,7 +1748,8 @@ export const analyzeClinicalText = onCall(
               "If shock or hypotension occurred earlier but the source later says BP recovered, off pressor, fluid-responsive, or latest BP is stable, do not output current shock/hypotension in V/S, redFlags, tasks, or A/P.",
               "If resolved shock is clinically relevant, phrase it only as resolved course, e.g. 'initial fluid-responsive hypotension, now BP stable'.",
               "Always also return admissionSummary and isbarHandoff for pasted admission, mixed, progress, consult, nursing, or daily-update chart text when enough context exists.",
-              "admissionSummary must be attending-ready: why admitted, important PMH/context, major hospital course, current active problems, today/pending/disposition, in 3-5 compact sentences.",
+              ...admissionSummaryStyleBullets,
+              "admissionSummary must be attending-ready: why admitted, important PMH/context, major hospital course/treatment, current active problems, today/pending/disposition, in 2-3 short mixed Chinese-English sentences.",
               "isbarHandoff must use headings Situation, Background, Assessment, Recommendation, with contingency plans, pending tasks, red flags, and call parameters when available.",
               "Assume the reviewer slept 3 hours and has seconds per patient: use telegraphic clinical fragments, not polished prose.",
               "Use the allowed patient context only to judge relevance and importance. Do not convert context-only facts into new SOAP draft items unless the pasted text explicitly supports them.",

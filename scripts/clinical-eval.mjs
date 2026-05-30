@@ -418,6 +418,12 @@ try {
   if (/negative head CT wording|old CVA without new focal deficit/i.test(combined)) {
     throw new Error(`shared document formatter leaked noise-to-ignore content: ${combined}`);
   }
+  if (!/[目前重點問題依據待]/.test(admission) || /The patient is|Admitted\/managed|PMH\/context|Key course|Active issues|Today\/pending/i.test(admission)) {
+    throw new Error(`admission summary did not use mixed Chinese-English brief style: ${admission}`);
+  }
+  if ((admission.match(/。/g) ?? []).length > 3) {
+    throw new Error(`admission summary should stay within 2-3 short sentences: ${admission}`);
+  }
   assertDocumentIncludes(admission, /AKI\/hyperK|Plt-limited anticoag|aspiration risk/i, "admission summary should lead with current transfer risks");
   assertDocumentIncludes(weekly, /Problem-Based A\/P[\s\S]*AKI on CKD with hyperK[\s\S]*Pending \/ Disposition/i, "weekly summary should keep A/P and pending structure");
   assertDocumentIncludes(sbar, /^Situation: .*septic shock.*AKI\/hyperK.*O2\/aspiration/im, "SBAR should lead with transfer risk");
@@ -436,6 +442,15 @@ try {
   const admission = formatRuleBasedAdmissionSummary(newAdmissionPlan);
   if (/monitor closely|continue current management|clinical correlation/i.test(admission)) {
     throw new Error(`rule-based new-admission summary retained filler: ${admission}`);
+  }
+  if (!/[因背景住院中目前重點待]/.test(admission) || /The patient is|Admitted\/managed|PMH\/context|Key course|Active issues|Today\/pending/i.test(admission)) {
+    throw new Error(`rule-based admission summary did not use mixed Chinese-English brief style: ${admission}`);
+  }
+  if ((admission.match(/。/g) ?? []).length > 3) {
+    throw new Error(`rule-based admission summary should stay within 2-3 short sentences: ${admission}`);
+  }
+  if (/pneumonia|oxygen requirement|blood culture|follow up|antibiotics/i.test(admission)) {
+    throw new Error(`rule-based admission summary should prefer clinical abbreviations: ${admission}`);
   }
   assertDocumentIncludes(admission, /PNA|sepsis|lactate|culture|O2|renal|anticoag/i, "new admission summary should preserve admission reason, active risks, and pending work");
   console.log("PASS Rule-based new-admission summary is concise and preserves key IM work");

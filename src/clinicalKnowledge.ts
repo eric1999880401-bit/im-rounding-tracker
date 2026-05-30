@@ -11,6 +11,7 @@ import type {
   TaskPriority,
 } from "./types";
 import { specificAntibioticPlan } from "./clinicalFieldRouter";
+import { compactMedicalAbbreviations } from "./medicalAbbreviations";
 
 type KnowledgeScope =
   | "neuro-stroke"
@@ -1360,25 +1361,26 @@ function dedupeRuleObjects<T extends Record<string, unknown>>(items: T[], key: k
 }
 
 export function formatRuleBasedAdmissionSummary(plan: GeneratedClinicalPlan) {
-  const diagnosis = compactDocFacts([...plan.facts.diagnoses, ...plan.facts.activeProblems], 2, 120).join("; ");
-  const pmh = compactDocFacts(plan.facts.pmh, 3, 90).join("; ");
-  const course = compactDocFacts([...plan.facts.hospitalCourse, ...plan.facts.objectiveFacts, ...plan.facts.antibiotics], 3, 110).join("; ");
-  const active = compactList(plan.problemBasedAP.map((item) => shortProblemTitle(item.problemTitle)), 4, 60).join("; ");
-  const pending = compactList(
+  const diagnosis = admissionSummaryFacts([...plan.facts.diagnoses, ...plan.facts.activeProblems], 1, 82).join("; ");
+  const pmh = admissionSummaryFacts(plan.facts.pmh, 1, 68).join("; ");
+  const course = admissionSummaryFacts([...plan.facts.hospitalCourse, ...plan.facts.antibiotics, ...plan.facts.objectiveFacts], 2, 84)
+    .filter((item) => !pmh || item.toLowerCase() !== pmh.toLowerCase())
+    .join("; ");
+  const active = compactList(plan.problemBasedAP.map((item) => shortProblemTitle(item.problemTitle)), 2, 44).map(abbreviateAdmissionSummaryText).join("; ");
+  const pending = admissionSummaryFacts(
     [
       ...plan.todayTasks.map((task) => task.text),
       ...plan.facts.pendingItems,
-      ...compactDispositionFacts(plan.facts.dischargeDisposition, 2, 90),
+      ...compactDispositionFacts(plan.facts.dischargeDisposition, 2, 80),
     ],
-    4,
-    100,
+    2,
+    72,
   ).join("; ");
-  return [
-    diagnosis ? `Admitted/managed for ${diagnosis}.` : "",
-    pmh ? `PMH/context: ${pmh}.` : "",
-    course ? `Key course/data: ${course}.` : "",
-    active || pending ? `Active issues: ${active || "needs review"}; today/pending/dispo: ${pending || "needs review"}.` : "",
-  ].filter(Boolean).join(" ");
+  return formatMixedAdmissionSummarySentences([
+    [diagnosis ? `因 ${diagnosis} 住院` : "", pmh ? `背景 ${pmh}` : ""].filter(Boolean).join("，"),
+    course ? `住院中 ${course}` : "",
+    [active ? `目前重點 ${active}` : "", pending ? `待 ${pending}` : ""].filter(Boolean).join("；"),
+  ]);
 }
 
 function compactSnippet(value: string, maxLength = 140) {
@@ -1400,6 +1402,39 @@ function compactSnippet(value: string, maxLength = 140) {
 
 function compactList(values: string[], maxItems: number, maxLength = 140) {
   return dedupe(values.map((value) => compactSnippet(value, maxLength)).filter(Boolean)).slice(0, maxItems);
+}
+
+function abbreviateAdmissionSummaryText(value: string) {
+  return compactMedicalAbbreviations(value)
+    .replace(/\bcommunity[- ]?acquired pneumonia\b/gi, "CAP")
+    .replace(/\bdisposition\b/gi, "dispo")
+    .replace(/\brehabilitation\b/gi, "rehab")
+    .replace(/\bsuspected\b/gi, "c/f")
+    .replace(/\bsusceptibility\b/gi, "suscept")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function admissionFactFragments(values: string[]) {
+  return values.flatMap((value) =>
+    String(value ?? "")
+      .split(/\r?\n|;\s*|(?<=\.)\s+(?=[A-Z0-9])/)
+      .map((line) => line.replace(/[.;。；\s]+$/g, "").trim())
+      .filter(Boolean),
+  );
+}
+
+function admissionSummaryFacts(values: string[], maxItems: number, maxLength = 90) {
+  return compactList(admissionFactFragments(values), maxItems, maxLength).map(abbreviateAdmissionSummaryText);
+}
+
+function formatMixedAdmissionSummarySentences(values: string[]) {
+  return values
+    .map((value) => abbreviateAdmissionSummaryText(value).replace(/[.;。；\s]+$/g, "").trim())
+    .filter(Boolean)
+    .slice(0, 3)
+    .map((value) => `${value}。`)
+    .join("");
 }
 
 function cleanSnippetTail(value: string) {
@@ -1539,22 +1574,22 @@ export function formatReasoningAdmissionSummary(
 ) {
   if (!hasClinicalReasoning(reasoning)) return "";
   const topProblems = reasoning.activeProblemsRanked.filter((item) => item.status !== "resolved").slice(0, 4);
-  const evidence = compactList(reasoning.whyThisMatters.map((item) => `${item.fact} -> ${item.implication}`), 3, 110);
+  const evidence = admissionSummaryFacts(reasoning.whyThisMatters.map((item) => `${item.fact} -> ${item.implication}`), 2, 90);
   const tasks = compactList(
     [
       ...topProblems.flatMap((item) => item.todayPlan),
       ...reasoning.missingDataNeeded.map((item) => `clarify ${item}`),
       ...(fallbackPlan?.todayTasks.map((task) => task.text) ?? []),
     ],
-    4,
-    110,
-  );
-  return [
-    `${compactSnippet(reasoning.primaryRisk || reasoning.currentClinicalState, 150)}.`,
-    topProblems.length > 0 ? `Active: ${topProblems.map((item) => compactSnippet(item.problem, 45)).join("; ")}.` : "",
-    evidence.length > 0 ? `Basis: ${evidence.join("; ")}.` : "",
-    tasks.length > 0 ? `Today/pending: ${tasks.join("; ")}.` : "",
-  ].filter(Boolean).join(" ");
+    3,
+    80,
+  ).map(abbreviateAdmissionSummaryText);
+  const active = topProblems.map((item) => abbreviateAdmissionSummaryText(compactSnippet(item.problem, 45))).join("; ");
+  return formatMixedAdmissionSummarySentences([
+    `目前重點 ${compactSnippet(reasoning.primaryRisk || reasoning.currentClinicalState, 110)}`,
+    [active ? `問題 ${active}` : "", evidence.length > 0 ? `依據 ${evidence.join("; ")}` : ""].filter(Boolean).join("；"),
+    tasks.length > 0 ? `待 ${tasks.join("; ")}` : "",
+  ]);
 }
 
 export function formatReasoningSbar(reasoning: ClinicalReasoningBundle | undefined, fallbackPlan?: GeneratedClinicalPlan) {

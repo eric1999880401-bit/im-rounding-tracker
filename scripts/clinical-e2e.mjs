@@ -522,8 +522,18 @@ function printPrioritySelectorScenario() {
   const selected = selectPriorityPrintItems(crowdedLines, { fallbackKind: "lab", maxItems: 2, maxChars: 22 }).map((item) => item.text).join("\n");
   assertIncludes(selected, /K 6\.1|Cr 2\.7/i, "priority selector keeps critical lab beyond first-N");
   assertIncludes(selected, /CXR 5\/18/i, "priority selector keeps image finding beyond first-N");
-  assertIncludes(selected, /\+\d+ routine hidden/i, "priority selector shows hidden routine count");
+  assertNotIncludes(selected, /routine hidden/i, "priority selector should not print hidden-routine placeholder");
   assertNotIncludes(selected, /\b(?:w\/|no|after|CT)\s*$/i, "priority selector should not leave dangling tails");
+
+  const crowdedObjectiveLines = [
+    "V/S: stable",
+    "PE: clear",
+    "routine diet tolerated",
+    "Lab: WBC 7.1, Hb 9.1, PLT 122, BUN 24, Cr 0.83, Na 130, K 4.0, ALT 11",
+  ];
+  const objectiveSelected = selectPriorityPrintItems(crowdedObjectiveLines, { fallbackKind: "other", maxItems: 1, maxChars: 42 }).map((item) => item.text).join("\n");
+  assertIncludes(objectiveSelected, /WBC 7\.1|Hb 9\.1|Cr 0\.83|K 4\.0/i, "priority selector keeps explicit SOAP lab line even when O is crowded");
+  assertNotIncludes(objectiveSelected, /routine hidden/i, "crowded objective should not show hidden-routine placeholder");
 }
 
 function runCase(name, fn) {

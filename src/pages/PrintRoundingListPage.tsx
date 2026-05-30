@@ -765,6 +765,14 @@ function PrintRoundingListPage({
     return printListItems(objectiveLines, "other", density === "ultra-compact" ? 2 : limits.pe + 2, limits.detailChars).map((item) => item.raw).join("\n");
   }
 
+  function labSoapText(patient: Patient) {
+    if (!isLayoutSectionVisible(roundingLayout, "objectiveLabs")) return "";
+    const soap = patientToSoapDraft(patient, dailyNotesByPatient[patient.id] ?? [], todayKey());
+    const limits = printLimitsForPatient(patient);
+    const labLines = soap.oLines.filter((line) => isObjectiveSoapLineVisible(line, roundingLayout) && /^Labs?\s*:/i.test(line));
+    return printListItems(labLines, "lab", limits.labItems, limits.detailChars).map((item) => item.raw).join("\n");
+  }
+
   function imageSoapText(patient: Patient) {
     if (!isLayoutSectionVisible(roundingLayout, "objectiveImages")) return "";
     const soap = patientToSoapDraft(patient, dailyNotesByPatient[patient.id] ?? [], todayKey());
@@ -857,7 +865,9 @@ function PrintRoundingListPage({
   }
 
   function objectiveExtra(patient: Patient) {
-    const lab = isLayoutSectionVisible(roundingLayout, "objectiveLabs") ? renderLabMiniTable(patient) : null;
+    const soapLabText = labSoapText(patient);
+    const soapLab = renderPrintItems(soapLabText, `${patient.id}-lab`, "lab");
+    const lab = soapLab || (isLayoutSectionVisible(roundingLayout, "objectiveLabs") ? renderLabMiniTable(patient) : null);
     const image = renderPrintItems(imageSoapText(patient), `${patient.id}-image`, "image");
     if (!lab && !image) return null;
     return (

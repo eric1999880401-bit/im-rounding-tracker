@@ -138,6 +138,24 @@ function sanitizeGeneratedText(value: string, rawText: string, maxLines = 8) {
   ).join("\n");
 }
 
+function sanitizeAdmissionSummaryText(value: string, rawText: string) {
+  const compact = sanitizeGeneratedText(value, rawText, 4)
+    .replace(/\n+/g, " ")
+    .replace(/\b(?:The patient is|This patient is)\s+/gi, "")
+    .replace(/\bcontinue current management\b\.?/gi, "")
+    .replace(/\bmonitor closely\b\.?/gi, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!compact) return "";
+  const sentences = compact
+    .split(/(?<=[。.!?])\s+|(?<=。)/)
+    .map((line) => compactLine(line.replace(/[.;。；\s]+$/g, ""), 140))
+    .filter(Boolean)
+    .slice(0, 3);
+  const joined = sentences.map((line) => (/[。.!?]$/.test(line) ? line : `${line}。`)).join("");
+  return compactLine(joined, 420);
+}
+
 function sanitizeVitals(vitals: Vital[], rawText: string) {
   const latest = latestVitalDate(rawText);
   return dedupeByKey(vitals, (vital) => `${vital.date}|${vital.name}|${vital.value}`)
@@ -495,7 +513,7 @@ export function sanitizeAiSoapDraftForReview(
   const next: AiSoapDraft = {
     ...draft,
     oneLiner: sanitizeGeneratedText(draft.oneLiner, rawText, 2),
-    admissionSummary: sanitizeGeneratedText(draft.admissionSummary, rawText, 5),
+    admissionSummary: sanitizeAdmissionSummaryText(draft.admissionSummary, rawText),
     isbarHandoff: sanitizeGeneratedText(draft.isbarHandoff, rawText, 10),
     subjective: {
       ...draft.subjective,

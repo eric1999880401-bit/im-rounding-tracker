@@ -147,6 +147,7 @@ function splitPrintInput(value: string | string[]) {
 function requiredSignal(line: string, fallbackKind: PrintVisualKind, visual: PrintVisualItem) {
   if (/\[\[(?:red|orange|yellow|blue|green|purple)(?:-(?:highlight|text))?:/i.test(line)) return true;
   if (visual.tone === "critical" || visual.tone === "important") return true;
+  if (visual.kind === "lab" || /^\s*(?:Lab|Labs?)\s*:/i.test(line)) return true;
   if (fallbackKind === "red") return true;
   return /\b(?:positive culture|b\/c|bcx|sputum cx|bile cx|abx|antibiotic|teicoplanin|vancomycin|meropenem|ceftriaxone|levofloxacin|metronidazole|source control|ercp|stent|tap|thoracentesis|paracentesis|procedure|consult|opd|certificate|barrier|discharge tomorrow|restart|hold|apixaban|heparin|warfarin|insulin|pressor|oxygen|crrt|aki|hyperk|hypok|lactate|inr|cr\s*\d|hb\s*\d|plt\s*\d|k\s*\d|wbc\s*\d|ct\b|mri\b|cxr\b|x-?ray|echo\b|sono|ultrasound|egd\b)\b/i.test(line);
 }
@@ -193,7 +194,6 @@ export function selectPriorityPrintItems(value: string | string[], options: Prin
       if (selected.size < maxItems) selected.add(item.index);
     });
 
-  const hiddenRoutine = decorated.filter((item) => !selected.has(item.index)).length;
   const output: PrintLineItem[] = decorated
     .filter((item) => selected.has(item.index))
     .sort((a, b) => a.index - b.index)
@@ -202,14 +202,6 @@ export function selectPriorityPrintItems(value: string | string[], options: Prin
       return { raw: text, text };
     })
     .filter((item) => item.text);
-
-  if (hiddenRoutine > 0) {
-    output.push({
-      raw: `+${hiddenRoutine} routine hidden`,
-      text: `+${hiddenRoutine} routine hidden`,
-      hidden: true,
-    });
-  }
 
   return output;
 }
