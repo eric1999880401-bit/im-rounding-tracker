@@ -47,6 +47,7 @@ const {
   soapTextToPatientPatch,
   soapTextWithDerivedHighlights,
 } = await server.ssrLoadModule("/src/soapDraft.ts");
+const { deriveSoapEvidence } = await server.ssrLoadModule("/src/soapEvidence.ts");
 const { buildConcisePatientClinicalUpdate } = await server.ssrLoadModule("/src/clinicalPatientPolish.ts");
 const { sanitizeAiSoapDraftForReview } = await server.ssrLoadModule("/src/aiDraftSanitizer.ts");
 const { routePatientImportDraft, routePatientClinicalFields } = await server.ssrLoadModule("/src/clinicalFieldRouter.ts");
@@ -1472,6 +1473,47 @@ try {
   if (!/!!- Teicoplanin 5\/13-/i.test(highlighted) || !/\[\[orange:.*OPD oncology/i.test(highlighted)) {
     throw new Error(`Derived SOAP highlight did not mark infection/DC signals:\n${highlighted}`);
   }
+  const completeEvidence = deriveSoapEvidence(reviewedSoapText, { labs: "WBC 12.7, Neu 88.9, Hb 9.4, K 3.0", orders: "Teicoplanin 5/13-" });
+  if (!completeEvidence.sourceRefs.some((ref) => ref.sourceField === "orders" && /Teicoplanin/i.test(ref.line))) {
+    throw new Error(`SOAP evidence did not link preview line to transient order source: ${JSON.stringify(completeEvidence.sourceRefs)}`);
+  }
+  if (completeEvidence.missingData.some((item) => item.id === "antibiotic-culture-source-duration")) {
+    throw new Error(`Complete antibiotic line should not warn when culture/source/duration are present: ${JSON.stringify(completeEvidence.missingData)}`);
+  }
+  const gapSoapText = [
+    "7B-01 TEST 72/F",
+    "Dx: fever",
+    "",
+    "S:",
+    "- weak",
+    "",
+    "O:",
+    "- Lab: Cr 3.1, K 6.2",
+    "",
+    "A/P:",
+    "# Infection",
+    "- Ceftriaxone started",
+    "# AKI / hyperK",
+    "- worsening renal function",
+  ].join("\n");
+  const gapEvidence = deriveSoapEvidence(gapSoapText);
+  for (const expected of ["missing-code-status", "missing-allergy", "antibiotic-culture-source-duration", "aki-hyperk-follow-up"]) {
+    if (!gapEvidence.missingData.some((item) => item.id === expected)) {
+      throw new Error(`SOAP evidence missed ${expected}: ${JSON.stringify(gapEvidence.missingData, null, 2)}`);
+    }
+  }
+  const bleedingEvidence = deriveSoapEvidence([
+    "8C-02 TEST 66/M",
+    "Code: Full | Allergy: NKDA",
+    "Dx: GI bleed",
+    "",
+    "A/P:",
+    "# Melena",
+    "- Hb 6.8 with hypotension",
+  ].join("\n"));
+  if (!bleedingEvidence.missingData.some((item) => item.id === "bleeding-follow-up")) {
+    throw new Error(`SOAP evidence missed bleeding follow-up gap: ${JSON.stringify(bleedingEvidence.missingData, null, 2)}`);
+  }
   console.log("PASS SOAP-first adapter creates one editable note and saves to existing fields");
   supplementalPasses += 1;
 } catch (error) {
@@ -1699,6 +1741,61 @@ try {
   if (transferCandidate.acceptedText !== transferCandidate.candidateText || !transferCandidate.changedSections.some((section) => section.id === "ap")) {
     throw new Error("Transfer/New SOAP guard should allow full candidate draft but still report changed sections.");
   }
+  const overbroadDailyCandidate = [
+    "7A-01 IM-A01 67/F",
+    "Dx: PNA w/ bacteremia",
+    "PMH: CKD3",
+    "Date: 2026-05-20",
+    "",
+    "S:",
+    "- cough better, no fever",
+    "- denies CP, appetite good",
+    "",
+    "O:",
+    "- V/S: BP 112/70, HR 88, SpO2 96% RA",
+    "- PE: lungs clear, no edema",
+    "- Lab: WBC 12.1 from 13.0",
+    "",
+    "A/P:",
+    "# Pneumonia and bloodstream infection",
+    "- WBC improving; continue antibiotics and monitor closely.",
+    "# Diabetes management",
+    "- Review glycemic control.",
+    "",
+    "Tasks:",
+    "- f/u B/C result",
+    "- review VTE/bleed risk",
+    "",
+    "DC:",
+    "- arrange home oxygen",
+  ].join("\n");
+  const overbroadDaily = guardRoundSoapDelta({
+    workflowMode: "dailyUpdate",
+    baselineText: baselineSoap,
+    candidateText: overbroadDailyCandidate,
+    sourceFields: {
+      labs: "WBC 12.1 from 13.0",
+      other: "cough better, no fever. f/u B/C result.",
+    },
+  });
+  if (!/# PNA \/ bacteremia/i.test(overbroadDaily.acceptedText) || /Pneumonia and bloodstream infection|Diabetes management|review glycemic|VTE\/bleed|home oxygen|denies CP/i.test(overbroadDaily.acceptedText)) {
+    throw new Error(`Overbroad daily update was not constrained to reviewed style/source support:\n${overbroadDaily.acceptedText}`);
+  }
+  if (!overbroadDaily.warnings.some((warning) => /without pasted-source support/i.test(warning))) {
+    throw new Error(`Overbroad daily update did not explain held unsupported lines: ${JSON.stringify(overbroadDaily.warnings)}`);
+  }
+  const malformedDaily = guardRoundSoapDelta({
+    workflowMode: "dailyUpdate",
+    baselineText: baselineSoap,
+    candidateText: "Rewrite looks good. Continue current management and discharge when stable.",
+    sourceFields: { vitals: "BP 112/70 HR 88 SpO2 96% RA" },
+  });
+  if (!/Ceftriaxone 5\/19-|AKI on CKD|Pending: afebrile/i.test(malformedDaily.acceptedText) || /Continue current management|discharge when stable/i.test(malformedDaily.acceptedText)) {
+    throw new Error(`Malformed daily update changed reviewed baseline:\n${malformedDaily.acceptedText}`);
+  }
+  if (!malformedDaily.highRiskWarnings.some((warning) => /Malformed daily SOAP draft blocked/i.test(warning))) {
+    throw new Error(`Malformed daily update did not produce readable high-risk warning: ${JSON.stringify(malformedDaily.highRiskWarnings)}`);
+  }
   console.log("PASS AI SOAP delta guardrails preserve reviewed baseline unless source supports changes");
   supplementalPasses += 1;
 } catch (error) {
@@ -1847,7 +1944,12 @@ try {
     { id: "teico", label: "Teico", pattern: "Teicoplanin", matchMode: "containsInsensitive", color: "orange", style: "highlight", enabled: true, priority: 0 },
     { id: "cr", label: "Cr", pattern: "Cr", matchMode: "exact", color: "yellow", style: "text", enabled: true, priority: 1 },
     { id: "disabled", label: "Mero", pattern: "Meropenem", matchMode: "containsInsensitive", color: "purple", style: "highlight", enabled: false, priority: 2 },
+    { id: "blank", label: "", pattern: "   ", matchMode: "containsInsensitive", color: "not-a-color", style: "bad-style", enabled: true, priority: Number.NaN },
   ]);
+  const blankRule = keywordRules.find((rule) => rule.id === "blank");
+  if (!blankRule || blankRule.label !== "New highlight" || blankRule.color !== "yellow" || blankRule.style !== "highlight" || blankRule.priority !== 3) {
+    throw new Error(`Keyword preference normalization should keep empty draft rules safe for settings preview: ${JSON.stringify(blankRule)}`);
+  }
   const highlightedKeywords = applyUserKeywordHighlights("Continue teicoplanin; Cr 6.1; Meropenem", keywordRules);
   if (!highlightedKeywords.includes("[[orange:teicoplanin]]") || !highlightedKeywords.includes("[[yellow-text:Cr]] 6.1") || highlightedKeywords.includes("[[purple:Meropenem]]")) {
     throw new Error(`Keyword highlights were not applied deterministically: ${highlightedKeywords}`);
@@ -1937,6 +2039,34 @@ try {
   }
   if (profile.typicalApProblemCount !== 2 || profile.typicalApLineLimit !== 1 || !profile.styleSummary.some((line) => /A\/P/i.test(line))) {
     throw new Error(`Style profile should keep density as a weak hint and summarize style: ${JSON.stringify(profile)}`);
+  }
+  const verboseStylePatient = { ...emptyPatient(), id: "style-patient-verbose" };
+  const verboseStyleNote = {
+    ...emptyDailyNote("2026-05-20"),
+    soapStatus: "reviewed",
+    soapText: [
+      "7A-02 IM-A02 67/F",
+      "S:",
+      "- Patient reports gradual clinical improvement.",
+      "O:",
+      "- Lab: White blood cell count 12, creatinine 1.2",
+      "A/P:",
+      "# Pneumonia",
+      "- Patient is clinically improving after antibiotic therapy; follow culture data and adjust treatment plan.",
+      "# Acute kidney injury",
+      "- Renal function is improving; repeat metabolic panel and maintain renal-dose medications.",
+      "Tasks:",
+      "- Follow culture results",
+    ].join("\n"),
+  };
+  const verboseProfile = buildUserAiStyleProfile([verboseStylePatient], { [verboseStylePatient.id]: [verboseStyleNote] });
+  if (
+    verboseProfile.preferredTerms.includes("Abx") ||
+    verboseProfile.preferredTerms.includes("f/u") ||
+    verboseProfile.abbreviationStyle === profile.abbreviationStyle ||
+    verboseProfile.apOrganization === profile.apOrganization
+  ) {
+    throw new Error(`Style profile should distinguish actual shorthand voice, not just A/P count/line count: ${JSON.stringify({ profile, verboseProfile })}`);
   }
   const emptyProfile = buildUserAiStyleProfile([], {});
   if (emptyProfile.abbreviationStyle !== "heavy") {

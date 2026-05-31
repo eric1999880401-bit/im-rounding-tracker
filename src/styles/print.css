@@ -2,7 +2,7 @@
   background: white;
   margin-inline: auto;
   max-width: 1120px;
-  overflow: hidden;
+  overflow: visible;
   width: 100%;
 }
 
@@ -606,6 +606,17 @@
   line-height: var(--print-line-height);
 }
 
+.print-complexity-badge {
+  border: 0.5px solid #64748b;
+  border-radius: 2px;
+  color: #334155;
+  font-size: var(--print-chip-font-size);
+  font-weight: 800;
+  line-height: 1;
+  padding: 1px 3px;
+  white-space: nowrap;
+}
+
 .print-patient-context {
   color: #1f2933;
   font-size: var(--print-small-font-size);
@@ -628,8 +639,12 @@
   grid-column: span 2;
 }
 
+.print-patient-expanded .print-summary-grid .print-section-objective {
+  grid-column: span 3;
+}
+
 .print-patient-expanded .print-summary-grid .print-section-taskdc {
-  grid-column: 1 / -1;
+  grid-column: span 2;
 }
 
 .print-section-box {
@@ -703,6 +718,10 @@
   padding: 1px 3px;
 }
 
+.print-section-ap .print-visual-row {
+  grid-template-columns: 34px minmax(0, 1fr);
+}
+
 .print-visual-row-unlabeled {
   grid-template-columns: minmax(0, 1fr);
 }
@@ -722,7 +741,7 @@
   color: #111827;
   font-size: var(--print-chip-font-size);
   font-weight: 900;
-  letter-spacing: -0.02em;
+  letter-spacing: 0;
   line-height: 1;
   padding: 1px;
   text-align: center;

@@ -949,6 +949,7 @@ function PrintRoundingListPage({
                   <span>
                     <strong>{patient.patientCode || "-"}</strong> {patient.age || "-"}/{patient.sex || "-"}
                   </span>
+                  {isExpanded && <span className="print-complexity-badge">Expanded SOAP</span>}
                   {patient.attending && <span>Att: {patient.attending}</span>}
                   {patient.teamOrService && <span>Svc: {patient.teamOrService}</span>}
                 </div>

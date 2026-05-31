@@ -9,6 +9,7 @@ import {
   soapTextToPatientPatch,
   type SoapEditorFormat,
 } from "../soapDraft";
+import type { SoapSourceFields } from "../soapEvidence";
 import { editorDraftToSoapText, emptySoapEditorLine, mergeOrderSourceIntoEditorDraft, parseSoapTextToEditorDraft, splitSoapEditorTaskLines } from "../soapEditorDraft";
 import { emptyDailyNote, nowIso } from "../utils";
 import { SoapVisualPreview } from "./SoapVisualPreview";
@@ -324,10 +325,10 @@ function RoundSoapComposer({
     return composeDailyUpdateText();
   }
 
-  function currentSourceFields() {
-    if (workflowMode === "newSoap") return newSoapFields;
-    if (workflowMode === "transferHandoff") return transferFields;
-    return dailyFields;
+  function currentSourceFields(): SoapSourceFields {
+    if (workflowMode === "newSoap") return { ...newSoapFields };
+    if (workflowMode === "transferHandoff") return { ...transferFields };
+    return { ...dailyFields };
   }
 
   function currentOrderSourceText() {
@@ -964,7 +965,14 @@ function RoundSoapComposer({
           </details>
         </section>
         <section className="round-soap-preview" aria-label="Highlighted SOAP preview">
-          <SoapVisualPreview value={soapText} compact={compact} layoutPreferences={layoutPreferences} keywordRules={keywordRules} labReferenceDisplay={compact ? "none" : "detail"} />
+          <SoapVisualPreview
+            value={soapText}
+            compact={compact}
+            sourceFields={currentSourceFields()}
+            layoutPreferences={layoutPreferences}
+            keywordRules={keywordRules}
+            labReferenceDisplay={compact ? "none" : "detail"}
+          />
         </section>
       </div>
 

@@ -1,5 +1,6 @@
-import type { ReactNode } from "react";
+import { useMemo, type ReactNode } from "react";
 import { parseSoapText, soapTextWithDerivedHighlights } from "../soapDraft";
+import { deriveSoapEvidence, type SoapSourceFields } from "../soapEvidence";
 import { ClinicalInlineText, ClinicalText, type LabReferenceDisplayMode } from "./ClinicalText";
 import { classifyClinicalLine, normalizeClinicalDisplayText, type ClinicalLineKind, type ClinicalLineTone } from "../clinicalLineClassifier";
 import { formatMedicationOrderLinesForDisplay } from "../medicationOrderParser";
@@ -17,6 +18,7 @@ import {
 interface SoapVisualPreviewProps {
   value: string;
   compact?: boolean;
+  sourceFields?: SoapSourceFields;
   layoutPreferences?: RoundingLayoutPreferences;
   keywordRules?: KeywordHighlightRule[];
   labReferenceDisplay?: LabReferenceDisplayMode;
@@ -83,8 +85,9 @@ function EmptyLine({ text = "No entry" }: { text?: string }) {
   return <span className="muted soap-preview-empty">{text}</span>;
 }
 
-export function SoapVisualPreview({ value, compact = false, layoutPreferences, keywordRules = [], labReferenceDisplay = "none" }: SoapVisualPreviewProps) {
+export function SoapVisualPreview({ value, compact = false, sourceFields = {}, layoutPreferences, keywordRules = [], labReferenceDisplay = "none" }: SoapVisualPreviewProps) {
   const draft = parseSoapText(value);
+  const evidence = useMemo(() => deriveSoapEvidence(value, sourceFields), [sourceFields, value]);
   const headerLines = draft.header.filter((line) => isSoapHeaderLineVisible(line, layoutPreferences));
   const sLines = isLayoutSectionVisible(layoutPreferences, "subjective") ? draft.sLines : [];
   const oLines = draft.oLines.filter((line) => isObjectiveSoapLineVisible(line, layoutPreferences));
@@ -219,6 +222,48 @@ export function SoapVisualPreview({ value, compact = false, layoutPreferences, k
           </Section>
         )}
       </div>
+
+      {!compact && (evidence.missingData.length > 0 || evidence.why.length > 0 || evidence.sourceRefs.length > 0) && (
+        <details className="soap-evidence-details">
+          <summary>Why / source / missing data</summary>
+          {evidence.missingData.length > 0 && (
+            <div className="soap-evidence-block">
+              <strong>Missing data</strong>
+              <ul>
+                {evidence.missingData.map((item) => (
+                  <li className={`soap-evidence-${item.severity}`} key={item.id}>
+                    {item.message}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {evidence.why.length > 0 && (
+            <div className="soap-evidence-block">
+              <strong>Why highlighted</strong>
+              <ul>
+                {evidence.why.map((item) => (
+                  <li key={item.id}>
+                    {item.label}: {item.refs.map((ref) => ref.line).join("; ")}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {evidence.sourceRefs.length > 0 && (
+            <div className="soap-evidence-block">
+              <strong>Source links</strong>
+              <ul>
+                {evidence.sourceRefs.map((ref, index) => (
+                  <li key={`${ref.sourceField}-${ref.line}-${index}`}>
+                    {ref.section.toUpperCase()} from {ref.sourceField}: {ref.excerpt}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </details>
+      )}
     </div>
   );
 }

@@ -38,10 +38,12 @@ function aiCallableMessage(error: unknown, feature: string) {
   const details = typeof value?.details === "string" ? value.details.trim() : "";
   const text = message && message.toLowerCase() !== "internal" ? message : details;
 
-  if (text) return text;
+  if (text && !/^internal$/i.test(text)) return text;
   if (code.includes("unauthenticated")) return "Sign in again, then retry.";
   if (code.includes("not-found")) return `${feature} is not available. Check whether Firebase Functions were deployed and OPENAI_MODEL exists.`;
   if (code.includes("failed-precondition")) return `${feature} is not configured. Check OPENAI_API_KEY in Firebase Functions.`;
+  if (code.includes("invalid-argument")) return `${feature} could not run because the request was incomplete or unsafe. Check de-identification and pasted text length.`;
+  if (code.includes("permission-denied")) return `${feature} is blocked by OpenAI or Firebase permissions. Check the API key, model access, and function logs.`;
   if (code.includes("resource-exhausted")) return "AI quota or rate limit reached. Retry later or check OpenAI billing/limits.";
   if (code.includes("unavailable")) return "AI service is temporarily unavailable. Retry later.";
   if (code.includes("data-loss")) return "AI returned malformed output. Retry generation; no patient data was saved.";

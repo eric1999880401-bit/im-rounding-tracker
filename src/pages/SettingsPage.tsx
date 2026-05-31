@@ -24,6 +24,61 @@ import {
   visibleSectionsForPreset,
 } from "../userPreferences";
 
+const appearancePresets = {
+  morning: {
+    label: "Morning rounds",
+    detail: "Small, tight, dense print for carrying the full list.",
+  },
+  readable: {
+    label: "Readable print",
+    detail: "Balanced default for routine team rounds.",
+  },
+  presentation: {
+    label: "Large review",
+    detail: "Larger text and airier spacing for screen review.",
+  },
+} as const;
+
+const printDensityLabels: Record<PrintDensity, string> = {
+  normal: "Priority detail",
+  compact: "Compact",
+  "ultra-compact": "Ultra-compact",
+};
+
+const printDensityHelp: Record<PrintDensity, string> = {
+  normal: "Keeps more labs, imaging, A/P, task, and DC detail.",
+  compact: "Shorter lines while preserving high-yield signals.",
+  "ultra-compact": "Tightest list for high census; review preview before printing.",
+};
+
+const fontSizeLabels: Record<PrintFontSize, string> = {
+  small: "Small",
+  default: "Default",
+  large: "Large",
+};
+
+const lineSpacingLabels: Record<PrintLineSpacing, string> = {
+  tight: "Tight",
+  normal: "Normal",
+  airy: "Airy",
+};
+
+const paddingLabels: Record<PrintPadding, string> = {
+  dense: "Dense",
+  balanced: "Balanced",
+};
+
+const apDisplayModeLabels: Record<"separate" | "merged", string> = {
+  separate: "Separate problem blocks",
+  merged: "Merged A/P",
+};
+
+const orderDisplayModeLabels: Record<OrderDisplayMode, string> = {
+  summary: "High-yield summary",
+  category: "By medication category",
+  collapsed: "Collapse routine orders",
+};
+
 interface SettingsPageProps {
   preferences: UserPreferences;
   userName: string;
@@ -47,15 +102,22 @@ A/P:
 - Trend Cr/K, avoid nephrotoxins, replace K.
 Tasks:
 - f/u B/C and sputum culture.
-Orders:
+藥囑:
 - Abx: ceftriaxone D3.
 DC:
 - Barrier: O2 requirement.`;
+
+function keywordPreviewText(rule: KeywordHighlightRule) {
+  const pattern = rule.pattern.trim();
+  if (!pattern) return "Preview: type a keyword to see how it will mark this fake SOAP text.";
+  return `Preview: f/u ${pattern}; Cr 2.7, K 5.7, culture pending, discharge barrier.`;
+}
 
 function SettingsPage({ preferences, userName, onChange, onRefreshAiStyleProfile, onSwitchUser }: SettingsPageProps) {
   const t = useT();
   const roundingLayout = normalizeRoundingLayoutPreferences(preferences.roundingLayout);
   const keywordRules = normalizeKeywordHighlightRules(preferences.keywordHighlightRules);
+  const hiddenSectionCount = roundingLayoutSections.filter((section) => !roundingLayout.visibleSections[section.id]).length;
 
   const updateLayout = (patch: Partial<typeof roundingLayout>) => {
     onChange({ ...preferences, roundingLayout: normalizeRoundingLayoutPreferences({ ...roundingLayout, ...patch }) });
@@ -82,8 +144,8 @@ function SettingsPage({ preferences, userName, onChange, onRefreshAiStyleProfile
       ...keywordRules,
       {
         id: `kw-${Date.now()}`,
-        label: "New highlight",
-        pattern: "",
+        label: "Creatinine",
+        pattern: "Cr",
         matchMode: "containsInsensitive",
         color: "yellow",
         style: "highlight",
@@ -162,13 +224,16 @@ function SettingsPage({ preferences, userName, onChange, onRefreshAiStyleProfile
           </div>
         </div>
 
-        <div className="settings-preset-row">
-          <button type="button" className="secondary" onClick={() => applyAppearancePreset("morning")}>Morning round dense</button>
-          <button type="button" className="secondary" onClick={() => applyAppearancePreset("readable")}>Readable print</button>
-          <button type="button" className="secondary" onClick={() => applyAppearancePreset("presentation")}>Presentation clean</button>
+        <div className="settings-preset-row" aria-label="Print appearance presets">
+          {(Object.keys(appearancePresets) as Array<keyof typeof appearancePresets>).map((preset) => (
+            <button type="button" className="secondary settings-preset-card" onClick={() => applyAppearancePreset(preset)} key={preset}>
+              <strong>{appearancePresets[preset].label}</strong>
+              <span>{appearancePresets[preset].detail}</span>
+            </button>
+          ))}
         </div>
 
-        <div className="form-grid">
+        <div className="form-grid settings-control-grid">
           <label>
             Layout preset
             <select value={roundingLayout.preset} onChange={(event) => updatePreset(event.target.value as RoundingLayoutPreset)}>
@@ -180,57 +245,64 @@ function SettingsPage({ preferences, userName, onChange, onRefreshAiStyleProfile
           <label>
             Print density
             <select value={roundingLayout.printDensity} onChange={(event) => updateLayout({ printDensity: event.target.value as PrintDensity })}>
-              <option value="normal">重點完整</option>
-              <option value="compact">Compact</option>
-              <option value="ultra-compact">Ultra-compact</option>
+              {(Object.keys(printDensityLabels) as PrintDensity[]).map((value) => (
+                <option value={value} key={value}>{printDensityLabels[value]}</option>
+              ))}
             </select>
+            <span className="field-help">{printDensityHelp[roundingLayout.printDensity]}</span>
           </label>
           <label>
             Font size
             <select value={roundingLayout.printFontSize} onChange={(event) => updateLayout({ printFontSize: event.target.value as PrintFontSize })}>
-              <option value="small">Small</option>
-              <option value="default">Default</option>
-              <option value="large">Large</option>
+              {(Object.keys(fontSizeLabels) as PrintFontSize[]).map((value) => (
+                <option value={value} key={value}>{fontSizeLabels[value]}</option>
+              ))}
             </select>
           </label>
           <label>
             Line spacing
             <select value={roundingLayout.printLineSpacing} onChange={(event) => updateLayout({ printLineSpacing: event.target.value as PrintLineSpacing })}>
-              <option value="tight">Tight</option>
-              <option value="normal">Normal</option>
-              <option value="airy">Airy</option>
+              {(Object.keys(lineSpacingLabels) as PrintLineSpacing[]).map((value) => (
+                <option value={value} key={value}>{lineSpacingLabels[value]}</option>
+              ))}
             </select>
           </label>
           <label>
             Section padding
             <select value={roundingLayout.printPadding} onChange={(event) => updateLayout({ printPadding: event.target.value as PrintPadding })}>
-              <option value="dense">Dense</option>
-              <option value="balanced">Balanced</option>
+              {(Object.keys(paddingLabels) as PrintPadding[]).map((value) => (
+                <option value={value} key={value}>{paddingLabels[value]}</option>
+              ))}
             </select>
           </label>
           <label>
             Board density
             <select value={roundingLayout.boardDensity} onChange={(event) => updateLayout({ boardDensity: event.target.value as PrintDensity })}>
-              <option value="normal">重點完整</option>
-              <option value="compact">Compact</option>
-              <option value="ultra-compact">Ultra-compact</option>
+              {(Object.keys(printDensityLabels) as PrintDensity[]).map((value) => (
+                <option value={value} key={value}>{printDensityLabels[value]}</option>
+              ))}
             </select>
           </label>
           <label>
-            A/P 顯示
+            A/P display
             <select value={roundingLayout.apDisplayMode} onChange={(event) => updateLayout({ apDisplayMode: event.target.value as typeof roundingLayout.apDisplayMode })}>
-              <option value="separate">分開 problem blocks</option>
-              <option value="merged">合併一行 A/P</option>
+              {(Object.keys(apDisplayModeLabels) as Array<typeof roundingLayout.apDisplayMode>).map((value) => (
+                <option value={value} key={value}>{apDisplayModeLabels[value]}</option>
+              ))}
             </select>
           </label>
           <label>
-            藥囑顯示
+            Order display
             <select value={roundingLayout.orderDisplayMode} onChange={(event) => updateLayout({ orderDisplayMode: event.target.value as OrderDisplayMode })}>
-              <option value="summary">重點摘要</option>
-              <option value="category">分類摘要</option>
-              <option value="collapsed">完整收起</option>
+              {(Object.keys(orderDisplayModeLabels) as OrderDisplayMode[]).map((value) => (
+                <option value={value} key={value}>{orderDisplayModeLabels[value]}</option>
+              ))}
             </select>
           </label>
+          <div className="settings-subsection-heading span-2">
+            <strong>Section visibility</strong>
+            <span className="muted">{hiddenSectionCount === 0 ? "All sections visible" : `${hiddenSectionCount} section${hiddenSectionCount === 1 ? "" : "s"} hidden in Board/SOAP preview.`}</span>
+          </div>
           <div className="layout-section-grid span-2">
             {roundingLayoutSections.map((section) => (
               <label className="checkbox-label layout-section-option" key={section.id}>
@@ -246,7 +318,7 @@ function SettingsPage({ preferences, userName, onChange, onRefreshAiStyleProfile
         <div className="section-heading">
           <div>
             <h3>Keyword highlights</h3>
-            <p className="muted">Personal highlight rules for Board, SOAP preview, and Print. These never edit SOAP text.</p>
+            <p className="muted">Personal rules mark matching words in Board, SOAP preview, and Print. They never edit or save SOAP text.</p>
           </div>
           <button type="button" className="secondary" onClick={addKeywordRule}>Add rule</button>
         </div>
@@ -272,9 +344,9 @@ function SettingsPage({ preferences, userName, onChange, onRefreshAiStyleProfile
                 <label>
                   Match
                   <select value={rule.matchMode} onChange={(event) => updateKeywordRule(rule.id, { matchMode: event.target.value as KeywordHighlightMatchMode })}>
-                    <option value="containsInsensitive">contains, ignore case</option>
-                    <option value="contains">contains</option>
-                    <option value="exact">exact word</option>
+                    <option value="containsInsensitive">Contains, ignore case</option>
+                    <option value="contains">Contains, match case</option>
+                    <option value="exact">Exact word, match case</option>
                   </select>
                 </label>
                 <label>
@@ -300,6 +372,10 @@ function SettingsPage({ preferences, userName, onChange, onRefreshAiStyleProfile
                   <input type="number" value={rule.priority} onChange={(event) => updateKeywordRule(rule.id, { priority: Number(event.target.value) || 0 })} />
                 </label>
                 <button type="button" className="secondary" onClick={() => removeKeywordRule(rule.id)}>Remove</button>
+                <div className="keyword-rule-preview">
+                  <span className="muted">Live preview</span>
+                  <ClinicalText value={keywordPreviewText(rule)} keywordRules={[rule]} />
+                </div>
               </article>
             ))}
           </div>

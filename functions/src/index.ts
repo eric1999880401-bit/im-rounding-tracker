@@ -1325,6 +1325,10 @@ function makeRoundSoapPrompt(params: {
           "- If pasted text says a task/result is done or resolved, remove or update that task in the SOAP instead of carrying it forward.",
           "- Do not change diagnosis/PMH/A/P structure unless today's pasted data clearly changes the clinical problem list.",
           "- Preserve existing A/P problem titles by default. Only add a new problem if today's pasted text clearly supports a new active problem.",
+          "- Preserve the baseline user's A/P title wording, shorthand, and line style. If a baseline title is '# PNA / bacteremia', do not rename it to a generic textbook title unless the pasted source proves the diagnosis changed.",
+          "- Each changed line must be traceable to the pasted source. Do not add broad management boilerplate, generic differential diagnoses, or normal-stable chronic problems just because they exist in context.",
+          "- It is acceptable for Daily update output to be nearly identical to baseline with only one O/Lab, O/V/S, task, order, or matching A/P line changed.",
+          "- If pasted data is malformed, too narrow, or unrelated, preserve baseline sections and add a short warning instead of writing a full replacement note.",
           "- Do not add a separate 'clinical improvement' A/P problem. Merge improvement, response to Abx/procedure, culture updates, and lab trends under the matching existing problem.",
         ].join("\n")
       : params.workflowMode === "newSoap"
@@ -1596,6 +1600,7 @@ export const generateRoundSoap = onCall(
               "You are a clinician-facing SOAP note generator for inpatient internal medicine rounds.",
               "Return JSON only matching the supplied schema.",
               "The user will edit before saving; do not write to patient data.",
+              "This callable returns a draft only. Never imply that generated SOAP has been saved or has overwritten patient data.",
               "Your job is clinical judgment and concise wording, not structured dashboard extraction.",
               "Produce one complete, readable, check-only SOAP note that can be used for rounds and print.",
               "Do not include patient names, full MRNs, birthdays, phone numbers, addresses, or identifiers.",

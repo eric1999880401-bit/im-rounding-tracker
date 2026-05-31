@@ -107,6 +107,83 @@ function sameProblems(a: SoapApProblem[], b: SoapApProblem[]) {
   return normalizeLines(a.flatMap((problem) => [problem.title, ...problem.lines])) === normalizeLines(b.flatMap((problem) => [problem.title, ...problem.lines]));
 }
 
+function meaningfulTokens(value: string) {
+  const stopWords = new Set([
+    "the",
+    "and",
+    "with",
+    "without",
+    "from",
+    "for",
+    "this",
+    "that",
+    "today",
+    "patient",
+    "continue",
+    "cont",
+    "follow",
+    "up",
+    "monitor",
+    "closely",
+    "stable",
+    "improving",
+    "improved",
+    "pending",
+  ]);
+  return String(value ?? "")
+    .toLowerCase()
+    .match(/[a-z][a-z0-9/+-]{1,}|\d+(?:\.\d+)?|[\u4e00-\u9fff]{2,}/g)
+    ?.filter((token) => !stopWords.has(token)) ?? [];
+}
+
+function lineHasSourceSupport(line: string, sourceText: string, baselineText: string) {
+  const clean = normalizeLine(line);
+  if (!clean) return true;
+  if (baselineText && baselineText.toLowerCase().includes(clean)) return true;
+  const source = sourceText.toLowerCase();
+  if (source.includes(clean)) return true;
+
+  const tokens = meaningfulTokens(line);
+  if (tokens.length === 0) return true;
+  const sourceTokens = new Set(meaningfulTokens(sourceText));
+  const matching = tokens.filter((token) => sourceTokens.has(token));
+  const hasNumericAnchor = tokens.some((token) => /^\d/.test(token) && sourceTokens.has(token));
+  const hasClinicalAnchor = matching.some((token) =>
+    /^(?:bp|hr|rr|spo2|o2|nc|ra|wbc|hb|plt|cr|bun|na|k|inr|lactate|crp|cx|b\/c|bcx|uc|c\/s|ct|cxr|mri|us|abx|cef|ceftriaxone|vanco|vancomycin|mero|meropenem|teicoplanin|apixaban|heparin|insulin|lasix|aki|pna|uti|sepsis|shock|bleed|dc|opd|rehab)$/i.test(token),
+  );
+  return hasNumericAnchor || hasClinicalAnchor || matching.length >= Math.min(2, tokens.length);
+}
+
+function filterUnsupportedDailyLines(lines: string[], fields: RoundSoapSourceFields, baselineText: string, sectionLabel: string) {
+  const sourceText = sourceFieldsText(fields);
+  const blocked: string[] = [];
+  const accepted = lines.filter((line) => {
+    const supported = lineHasSourceSupport(line, sourceText, baselineText);
+    if (!supported) blocked.push(line);
+    return supported;
+  });
+  return {
+    accepted,
+    warnings: blocked.length > 0 ? [`${sectionLabel} line(s) without pasted-source support were held for review.`] : [],
+  };
+}
+
+function filterUnsupportedDailyAp(problems: SoapApProblem[], fields: RoundSoapSourceFields, baselineText: string) {
+  const warnings: string[] = [];
+  const filtered = problems.map((problem) => {
+    const titleSupported = lineHasSourceSupport(problem.title, sourceFieldsText(fields), baselineText);
+    const lines = filterUnsupportedDailyLines(problem.lines, fields, baselineText, "A/P").accepted;
+    if (problem.lines.length > lines.length || (!titleSupported && !problemBucket(problem))) {
+      warnings.push("A/P line(s) without pasted-source support were held for review.");
+    }
+    return { title: problem.title, lines };
+  });
+  return {
+    problems: filtered,
+    warnings: uniqueLines(warnings, 2),
+  };
+}
+
 function lineKind(line: string): keyof ObjectiveGroups {
   const text = String(line ?? "").replace(/^!+\s*/, "");
   if (/^(?:image|img)\s*:/i.test(text) || /\b(?:CT|MRI|CXR|sono|ultrasound|US\b|echo|ERCP|EGD|colonoscopy|impression)\b/i.test(text)) return "image";
@@ -387,6 +464,10 @@ function totalLineCount(draft: SoapDraft) {
   return draft.header.length + draft.sLines.length + draft.oLines.length + draft.apProblems.flatMap((problem) => [problem.title, ...problem.lines]).length + draft.taskLines.length + draft.dcLines.length;
 }
 
+function hasSoapBody(draft: SoapDraft) {
+  return draft.sLines.length > 0 || draft.oLines.length > 0 || draft.apProblems.length > 0 || draft.taskLines.length > 0 || draft.dcLines.length > 0;
+}
+
 function changedSection(id: SoapDeltaSection, reason: string, risk: "normal" | "high" = "normal", blocked = false): SoapDeltaChangedSection {
   return { id, label: sectionLabels[id], reason, risk, blocked };
 }
@@ -419,6 +500,7 @@ function draftForDailyUpdate(baseline: SoapDraft, candidate: SoapDraft, fields: 
   const warnings: string[] = [];
   const highRiskWarnings: string[] = [];
   const changed: SoapDeltaChangedSection[] = [];
+  const baselineText = formatSoapDraft(baseline);
   const baseObjective = splitObjective(baseline.oLines);
   const candidateObjective = splitObjective(candidate.oLines);
   const nextObjective: ObjectiveGroups = {
@@ -444,7 +526,9 @@ function draftForDailyUpdate(baseline: SoapDraft, candidate: SoapDraft, fields: 
   const candidateTasks = splitTasks(candidate.taskLines);
   const nextOrders = profile.allowed.has("orders") && candidateTasks.orders.length > 0 ? candidateTasks.orders : baselineTasks.orders;
   const taskSourceAllowsUpdate = profile.allowed.has("tasks");
-  const nextTasks = taskSourceAllowsUpdate ? candidateTasks.tasks : baselineTasks.tasks;
+  const filteredTasks = filterUnsupportedDailyLines(candidateTasks.tasks, fields, baselineText, "Task");
+  const nextTasks = taskSourceAllowsUpdate ? filteredTasks.accepted : baselineTasks.tasks;
+  warnings.push(...filteredTasks.warnings);
   if (!sameLines(baselineTasks.orders, candidateTasks.orders)) {
     pushChanged(changed, "orders", profile.allowed.has("orders") ? "Orders updated from pasted order field" : "AI changed orders without matching source field", profile.allowed.has("orders") ? "normal" : "high", !profile.allowed.has("orders"));
   }
@@ -455,7 +539,9 @@ function draftForDailyUpdate(baseline: SoapDraft, candidate: SoapDraft, fields: 
   let nextApProblems = baseline.apProblems;
   if (!sameProblems(baseline.apProblems, candidate.apProblems)) {
     if (profile.allowed.has("ap")) {
-      const merged = mergeApProblemsForDaily(baseline.apProblems, candidate.apProblems, profile.allowed.has("s") || profile.allowed.has("pe"));
+      const filteredAp = filterUnsupportedDailyAp(candidate.apProblems, fields, baselineText);
+      warnings.push(...filteredAp.warnings);
+      const merged = mergeApProblemsForDaily(baseline.apProblems, filteredAp.problems, profile.allowed.has("s") || profile.allowed.has("pe"));
       nextApProblems = merged.apProblems;
       warnings.push(...merged.warnings);
       highRiskWarnings.push(...merged.highRiskWarnings);
@@ -466,7 +552,9 @@ function draftForDailyUpdate(baseline: SoapDraft, candidate: SoapDraft, fields: 
     }
   }
 
-  const nextDc = profile.allowed.has("dc") && candidate.dcLines.length > 0 ? candidate.dcLines : baseline.dcLines;
+  const filteredDc = filterUnsupportedDailyLines(candidate.dcLines, fields, baselineText, "DC");
+  const nextDc = profile.allowed.has("dc") && filteredDc.accepted.length > 0 ? filteredDc.accepted : baseline.dcLines;
+  warnings.push(...filteredDc.warnings);
   if (!sameLines(baseline.dcLines, candidate.dcLines)) {
     pushChanged(changed, "dc", profile.allowed.has("dc") ? "DC updated from pasted source" : "AI changed DC without discharge source", profile.allowed.has("dc") ? "normal" : "high", !profile.allowed.has("dc"));
   }
@@ -475,6 +563,8 @@ function draftForDailyUpdate(baseline: SoapDraft, candidate: SoapDraft, fields: 
     pushChanged(changed, "header", "AI changed header/Dx/PMH in Daily update", "high", true);
     highRiskWarnings.push("Header/Dx/PMH change blocked for Daily update.");
   }
+  const filteredS = filterUnsupportedDailyLines(candidate.sLines, fields, baselineText, "S");
+  warnings.push(...filteredS.warnings);
   if (!sameLines(baseline.sLines, candidate.sLines)) {
     if (profile.allowed.has("s")) pushChanged(changed, "s", "S updated from pasted course/symptom field");
     else {
@@ -503,7 +593,7 @@ function draftForDailyUpdate(baseline: SoapDraft, candidate: SoapDraft, fields: 
 
   const draftBeforeAntibiotics = {
       header: baseline.header,
-      sLines: profile.allowed.has("s") && candidate.sLines.length > 0 ? candidate.sLines : baseline.sLines,
+      sLines: profile.allowed.has("s") && filteredS.accepted.length > 0 ? filteredS.accepted : baseline.sLines,
       oLines: mergeObjective(nextObjective),
       apProblems: nextApProblems,
       taskLines: uniqueLines([...nextOrders, ...nextTasks], 8),
@@ -544,6 +634,7 @@ export function guardRoundSoapDelta({
 }): SoapDeltaReview {
   const baseline = parseSoapText(baselineText);
   const parsedCandidate = parseSoapText(candidateText || baselineText);
+  const malformedDailyCandidate = workflowMode === "dailyUpdate" && candidateText.trim().length > 0 && !hasSoapBody(parsedCandidate);
   const candidateWithAntibiotics = ensureAntibioticApInDraft(
     parsedCandidate,
     [sourceFieldsText(sourceFields), candidateText, baselineText].join("\n"),
@@ -573,8 +664,15 @@ export function guardRoundSoapDelta({
     candidateText: normalizedCandidateText,
     acceptedText,
     changedSections: daily.changed,
-    warnings: uniqueLines([...candidateWarnings, ...daily.warnings], 8),
-    highRiskWarnings: uniqueLines(daily.highRiskWarnings, 8),
+    warnings: uniqueLines([
+      ...candidateWarnings,
+      ...(malformedDailyCandidate ? ["AI returned malformed SOAP text; reviewed baseline was preserved except source-supported local guardrails."] : []),
+      ...daily.warnings,
+    ], 8),
+    highRiskWarnings: uniqueLines([
+      ...(malformedDailyCandidate ? ["Malformed daily SOAP draft blocked; no unsupported rewrite was applied."] : []),
+      ...daily.highRiskWarnings,
+    ], 8),
   };
 }
 

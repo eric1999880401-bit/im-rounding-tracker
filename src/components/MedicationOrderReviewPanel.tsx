@@ -30,7 +30,7 @@ const importanceOptions: Array<{ value: MedicationOrderImportance; label: string
   { value: "critical", label: "Critical" },
   { value: "important", label: "Important" },
   { value: "normal", label: "Normal" },
-  { value: "routine", label: "Routine hidden" },
+  { value: "routine", label: "Routine (hidden from list)" },
 ];
 
 function buildEditableOrders(rawText: string): EditableMedicationOrder[] {
