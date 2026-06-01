@@ -77,6 +77,7 @@ const {
 const { displayPrintLine } = await server.ssrLoadModule("/src/printPriority.ts");
 const { applyClinicalColorMarkup, applyUserKeywordHighlights, clearClinicalColorMarkupAtSelection } = await server.ssrLoadModule("/src/clinicalColorMarkup.ts");
 const { labReferenceText, parseClinicalLabTokens } = await server.ssrLoadModule("/src/labReference.ts");
+const { buildLabVisualSummaryFromText, formatLabVisualSummaryLinesFromText } = await server.ssrLoadModule("/src/labVisualSummary.ts");
 
 function haystack(plan) {
   return [
@@ -97,6 +98,20 @@ function assertMatch(plan, pattern, label) {
 function assertNoMatch(plan, pattern, label) {
   if (pattern.test(plan.redFlags.map((item) => `${item.text} ${item.reason}`).join("\n"))) {
     throw new Error(`Unexpected red flag ${label}: ${pattern}`);
+  }
+}
+
+function admissionSentenceCount(value) {
+  return (value.match(/\u3002/g) ?? []).length;
+}
+
+function assertOneMinuteAdmissionBrief(value, label) {
+  const count = admissionSentenceCount(value);
+  if (count < 3 || count > 5) {
+    throw new Error(`${label} should be a 3-5 sentence 1-min oral brief, got ${count}: ${value}`);
+  }
+  if (!/[\u56e0\u80cc\u666f\u5230\u8f49\u7d93\u5f8c\u76ee\u524d\u91cd\u9ede\u4eca\u65e5\u5f85]/.test(value)) {
+    throw new Error(`${label} did not use mixed Chinese-English oral-brief connectors: ${value}`);
   }
 }
 
@@ -419,12 +434,10 @@ try {
   if (/negative head CT wording|old CVA without new focal deficit/i.test(combined)) {
     throw new Error(`shared document formatter leaked noise-to-ignore content: ${combined}`);
   }
-  if (!/[目前重點問題依據待]/.test(admission) || /The patient is|Admitted\/managed|PMH\/context|Key course|Active issues|Today\/pending/i.test(admission)) {
+  if (!/[\u76ee\u524d\u91cd\u9ede\u554f\u984c\u4f9d\u64da\u5f85]/.test(admission) || /The patient is|Admitted\/managed|PMH\/context|Key course|Active issues|Today\/pending/i.test(admission)) {
     throw new Error(`admission summary did not use mixed Chinese-English brief style: ${admission}`);
   }
-  if ((admission.match(/。/g) ?? []).length > 3) {
-    throw new Error(`admission summary should stay within 2-3 short sentences: ${admission}`);
-  }
+  assertOneMinuteAdmissionBrief(admission, "reasoning admission summary");
   assertDocumentIncludes(admission, /AKI\/hyperK|Plt-limited anticoag|aspiration risk/i, "admission summary should lead with current transfer risks");
   assertDocumentIncludes(weekly, /Problem-Based A\/P[\s\S]*AKI on CKD with hyperK[\s\S]*Pending \/ Disposition/i, "weekly summary should keep A/P and pending structure");
   assertDocumentIncludes(sbar, /^Situation: .*septic shock.*AKI\/hyperK.*O2\/aspiration/im, "SBAR should lead with transfer risk");
@@ -444,16 +457,19 @@ try {
   if (/monitor closely|continue current management|clinical correlation/i.test(admission)) {
     throw new Error(`rule-based new-admission summary retained filler: ${admission}`);
   }
-  if (!/[因背景住院中目前重點待]/.test(admission) || /The patient is|Admitted\/managed|PMH\/context|Key course|Active issues|Today\/pending/i.test(admission)) {
+  if (!/[\u56e0\u80cc\u666f\u4f4f\u9662\u5230\u8f49\u76ee\u524d\u91cd\u9ede\u4eca\u65e5\u5f85]/.test(admission) || /The patient is|Admitted\/managed|PMH\/context|Key course|Active issues|Today\/pending/i.test(admission)) {
     throw new Error(`rule-based admission summary did not use mixed Chinese-English brief style: ${admission}`);
   }
-  if ((admission.match(/。/g) ?? []).length > 3) {
-    throw new Error(`rule-based admission summary should stay within 2-3 short sentences: ${admission}`);
-  }
+  assertOneMinuteAdmissionBrief(admission, "rule-based admission summary");
   if (/pneumonia|oxygen requirement|blood culture|follow up|antibiotics/i.test(admission)) {
     throw new Error(`rule-based admission summary should prefer clinical abbreviations: ${admission}`);
   }
   assertDocumentIncludes(admission, /PNA|sepsis|lactate|culture|O2|renal|anticoag/i, "new admission summary should preserve admission reason, active risks, and pending work");
+  assertDocumentIncludes(admission, /\u56e0[\s\S]*\u4f4f\u9662[\s\S]*\u80cc\u666f[\s\S]*\u5230\u9662\/\u8f49\u5165\u6642[\s\S]*\u76ee\u524d\u91cd\u9ede[\s\S]*\u4eca\u65e5\u5f85/i, "new admission summary should follow oral brief structure");
+  const expanded = formatRuleBasedAdmissionSummary(newAdmissionPlan, { length: "threeMinute" });
+  if (admissionSentenceCount(expanded) < admissionSentenceCount(admission) || admissionSentenceCount(expanded) > 8) {
+    throw new Error(`3-min admission brief support should preserve/expand the oral brief safely: ${expanded}`);
+  }
   console.log("PASS Rule-based new-admission summary is concise and preserves key IM work");
   supplementalPasses += 1;
 } catch (error) {
@@ -495,6 +511,34 @@ try {
 } catch (error) {
   failures.push({ name: "Raw lab fallback extracts broad labs then filters meaningful signals", error: error instanceof Error ? error.message : String(error) });
   console.error(`FAIL Raw lab fallback extracts broad labs then filters meaningful signals: ${failures[failures.length - 1].error}`);
+}
+
+try {
+  const groupedLabText = "Lab: WBC 12.7, Neu 88.9, Hb 9.4, Plt 259, BUN 16, Cr 0.46, Na 139, K 3.0, AST 175, ALT 419, INR 1.8, lactate 3.1, Troponin I 0.011 ng/mL";
+  const groups = buildLabVisualSummaryFromText(groupedLabText, { maxGroups: 8, maxItemsPerGroup: 8 });
+  const lines = formatLabVisualSummaryLinesFromText(groupedLabText, { maxGroups: 8, maxItemsPerGroup: 8 });
+  const joined = lines.join("\n");
+  for (const required of [
+    /CBC:.*WBC 12\.7.*Neu 88\.9.*Hb 9\.4.*Plt 259/i,
+    /Renal\/Lyte:.*Cr 0\.46.*Na 139.*K 3\.0/i,
+    /Liver\/Coag:.*AST 175.*ALT 419.*INR 1\.8/i,
+    /Infx\/Perfusion:.*Lactate 3\.1/i,
+    /Cardiac:.*Troponin I 0\.011/i,
+  ]) {
+    if (!required.test(joined)) throw new Error(`visual lab summary missing grouped line ${required}:\n${joined}`);
+  }
+  if (/ref\s|routine hidden/i.test(joined)) {
+    throw new Error(`visual lab summary should not include reference ranges or hidden-routine placeholders:\n${joined}`);
+  }
+  const toneMap = new Map(groups.map((group) => [group.label, group.tone]));
+  if (toneMap.get("Liver/Coag") !== "critical" || toneMap.get("Renal/Lyte") !== "important") {
+    throw new Error(`visual lab tone should be stable across renderers: ${JSON.stringify([...toneMap.entries()])}`);
+  }
+  console.log("PASS Visual lab summary groups labs consistently for Board/Preview/Print");
+  supplementalPasses += 1;
+} catch (error) {
+  failures.push({ name: "Visual lab summary groups labs consistently for Board/Preview/Print", error: error instanceof Error ? error.message : String(error) });
+  console.error(`FAIL Visual lab summary groups labs consistently for Board/Preview/Print: ${failures[failures.length - 1].error}`);
 }
 
 try {

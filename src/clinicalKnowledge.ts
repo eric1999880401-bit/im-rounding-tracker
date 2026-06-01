@@ -1360,27 +1360,134 @@ function dedupeRuleObjects<T extends Record<string, unknown>>(items: T[], key: k
   });
 }
 
-export function formatRuleBasedAdmissionSummary(plan: GeneratedClinicalPlan) {
-  const diagnosis = admissionSummaryFacts([...plan.facts.diagnoses, ...plan.facts.activeProblems], 1, 82).join("; ");
-  const pmh = admissionSummaryFacts(plan.facts.pmh, 1, 68).join("; ");
-  const course = admissionSummaryFacts([...plan.facts.hospitalCourse, ...plan.facts.antibiotics, ...plan.facts.objectiveFacts], 2, 84)
-    .filter((item) => !pmh || item.toLowerCase() !== pmh.toLowerCase())
+type AdmissionBriefLength = "oneMinute" | "threeMinute";
+
+interface AdmissionBriefOptions {
+  length?: AdmissionBriefLength;
+}
+
+const zhComma = "\uff0c";
+const zhSemicolon = "\uff1b";
+const zhPeriod = "\u3002";
+const admissionBriefZh = {
+  because: "\u56e0",
+  admitted: "\u4f4f\u9662",
+  background: "\u80cc\u666f",
+  arrivalOrTransfer: "\u5230\u9662/\u8f49\u5165\u6642",
+  through: "\u7d93",
+  after: "\u5f8c",
+  inHospital: "\u4f4f\u9662\u4e2d",
+  nowFocus: "\u76ee\u524d\u91cd\u9ede",
+  problems: "\u554f\u984c",
+  evidence: "\u4f9d\u64da",
+  todayPending: "\u4eca\u65e5\u5f85",
+};
+
+function admissionBriefLimits(options: AdmissionBriefOptions = {}) {
+  const expanded = options.length === "threeMinute";
+  return {
+    maxSentences: expanded ? 8 : 5,
+    diagnosisItems: expanded ? 2 : 1,
+    pmhItems: expanded ? 2 : 1,
+    severityItems: expanded ? 3 : 2,
+    courseItems: expanded ? 4 : 2,
+    responseItems: expanded ? 2 : 1,
+    activeItems: expanded ? 5 : 3,
+    pendingItems: expanded ? 5 : 3,
+    factLength: expanded ? 118 : 88,
+  };
+}
+
+function admissionWhoFragment(sourceText: string) {
+  const text = sourceText.replace(/\s+/g, " ");
+  const compact = text.match(/\b(\d{1,3})\s*([MF])\b/i);
+  if (compact) return `${compact[1]}${compact[2].toUpperCase()}`;
+  const verbose = text.match(/\b(\d{1,3})[- ]?(?:year[- ]?old|yo|y\/o)\s*(male|female|man|woman|M|F)\b/i);
+  if (!verbose) return "";
+  const sex = /^(?:f|woman)/i.test(verbose[2]) ? "F" : "M";
+  return `${verbose[1]}${sex}`;
+}
+
+function admissionSummaryFactsByPattern(values: string[], pattern: RegExp, maxItems: number, maxLength = 90) {
+  return compactList(
+    admissionFactFragments(values).filter((value) => pattern.test(value) && !/^\s*new admission\b/i.test(value)),
+    maxItems,
+    maxLength,
+  ).map(abbreviateAdmissionSummaryText);
+}
+
+function admissionReasonBrief(value: string) {
+  return value
+    .split(/,\s*(?=(?:BP|HR|RR|SpO2|O2|NC|RA|lactate|WBC|Hb|Plt|Cr|K|Na)\b)/i)[0]
+    .trim();
+}
+
+export function formatRuleBasedAdmissionSummary(plan: GeneratedClinicalPlan, options: AdmissionBriefOptions = {}) {
+  const limits = admissionBriefLimits(options);
+  const who = admissionWhoFragment(plan.facts.sourceText);
+  const diagnosis = admissionSummaryFacts([...plan.facts.diagnoses, ...plan.facts.activeProblems], limits.diagnosisItems, limits.factLength)
+    .map(admissionReasonBrief)
     .join("; ");
-  const active = compactList(plan.problemBasedAP.map((item) => shortProblemTitle(item.problemTitle)), 2, 44).map(abbreviateAdmissionSummaryText).join("; ");
+  const pmhFacts = admissionSummaryFactsByPattern(
+    plan.facts.pmh,
+    /\b(?:pmh|ckd|esrd|hd|dm|htn|af|cad|hf|hfr?ef|copd|asthma|cva|stroke|cirrhosis|cancer|scc|chemo|apixaban|warfarin|baseline)\b/i,
+    limits.pmhItems,
+    limits.factLength,
+  );
+  const pmh = (pmhFacts.length > 0 ? pmhFacts : admissionSummaryFacts(plan.facts.pmh, limits.pmhItems, limits.factLength)).join("; ");
+  const severity = admissionSummaryFactsByPattern(
+    [...plan.redFlags.map((flag) => flag.text), ...plan.facts.objectiveFacts],
+    /\b(?:bp|hr|rr|spo2|o2|nc|ra|lactate|wbc|hb|plt|cr|k|na|shock|hypotension|sepsis|fever|hypox|icu|pressor|intubat|crrt)\b/i,
+    limits.severityItems,
+    limits.factLength,
+  ).join("; ");
+  const treatment = admissionSummaryFactsByPattern(
+    [...plan.facts.hospitalCourse, ...plan.facts.procedures, ...plan.facts.antibiotics, ...plan.facts.medications],
+    /\b(?:s\/p|started|given|treated|abx|cef|azithro|vanco|mero|pip\/tazo|zosyn|levo|ercp|egd|scope|stent|intubat|extubat|pressor|norepi|ivf|fluid|crrt|hd|transfus|insulin|steroid|bronchodilator|o2|nc|bipap|niv|after\s+b\/c)\b/i,
+    limits.courseItems,
+    limits.factLength,
+  )
+    .filter((item) => !pmh || item.toLowerCase() !== pmh.toLowerCase())
+    .filter((item) => !diagnosis || item.toLowerCase() !== diagnosis.toLowerCase())
+    .join("; ");
+  const response = admissionSummaryFactsByPattern(
+    plan.facts.todayUpdates,
+    /\b(?:now|currently|improv|resolved|off|response|afebrile|stable|extubat|wean|stopped)\b/i,
+    limits.responseItems,
+    limits.factLength,
+  ).join("; ");
+  const active = compactList(
+    plan.problemBasedAP.map((item) => shortProblemTitle(item.problemTitle)),
+    limits.activeItems,
+    limits.factLength,
+  )
+    .map(abbreviateAdmissionSummaryText)
+    .join("; ");
   const pending = admissionSummaryFacts(
     [
-      ...plan.todayTasks.map((task) => task.text),
       ...plan.facts.pendingItems,
+      ...plan.todayTasks.map((task) => task.text),
+      ...plan.problemBasedAP.flatMap((item) => prioritizePlanLines(item.planItems).slice(0, 2)),
       ...compactDispositionFacts(plan.facts.dischargeDisposition, 2, 80),
     ],
-    2,
-    72,
+    limits.pendingItems,
+    limits.factLength,
   ).join("; ");
+
+  const admissionLead = diagnosis ? [who, `${admissionBriefZh.because} ${diagnosis} ${admissionBriefZh.admitted}`].filter(Boolean).join(" ") : "";
+  const courseParts = [
+    severity ? `${admissionBriefZh.arrivalOrTransfer} ${severity}` : "",
+    treatment ? `${admissionBriefZh.through} ${treatment}` : "",
+    response ? `${treatment ? admissionBriefZh.after : admissionBriefZh.inHospital} ${response}` : "",
+  ].filter(Boolean);
+
   return formatMixedAdmissionSummarySentences([
-    [diagnosis ? `因 ${diagnosis} 住院` : "", pmh ? `背景 ${pmh}` : ""].filter(Boolean).join("，"),
-    course ? `住院中 ${course}` : "",
-    [active ? `目前重點 ${active}` : "", pending ? `待 ${pending}` : ""].filter(Boolean).join("；"),
-  ]);
+    admissionLead,
+    pmh ? `${admissionBriefZh.background} ${pmh}` : "",
+    courseParts.join(zhComma),
+    active ? `${admissionBriefZh.nowFocus} ${active}` : "",
+    pending ? `${admissionBriefZh.todayPending} ${pending}` : "",
+  ], options);
 }
 
 function compactSnippet(value: string, maxLength = 140) {
@@ -1407,6 +1514,11 @@ function compactList(values: string[], maxItems: number, maxLength = 140) {
 function abbreviateAdmissionSummaryText(value: string) {
   return compactMedicalAbbreviations(value)
     .replace(/\bcommunity[- ]?acquired pneumonia\b/gi, "CAP")
+    .replace(/\bpneumonia\b/gi, "PNA")
+    .replace(/\boxygen requirement\b/gi, "O2 need")
+    .replace(/\bblood cultures?\b/gi, "B/C")
+    .replace(/\bfollow up\b/gi, "f/u")
+    .replace(/\bantibiotics\b/gi, "Abx")
     .replace(/\bdisposition\b/gi, "dispo")
     .replace(/\brehabilitation\b/gi, "rehab")
     .replace(/\bsuspected\b/gi, "c/f")
@@ -1419,7 +1531,7 @@ function admissionFactFragments(values: string[]) {
   return values.flatMap((value) =>
     String(value ?? "")
       .split(/\r?\n|;\s*|(?<=\.)\s+(?=[A-Z0-9])/)
-      .map((line) => line.replace(/[.;。；\s]+$/g, "").trim())
+      .map((line) => line.replace(/[.;\u3002\uff1b\s]+$/g, "").trim())
       .filter(Boolean),
   );
 }
@@ -1428,12 +1540,13 @@ function admissionSummaryFacts(values: string[], maxItems: number, maxLength = 9
   return compactList(admissionFactFragments(values), maxItems, maxLength).map(abbreviateAdmissionSummaryText);
 }
 
-function formatMixedAdmissionSummarySentences(values: string[]) {
+function formatMixedAdmissionSummarySentences(values: string[], options: AdmissionBriefOptions = {}) {
+  const limits = admissionBriefLimits(options);
   return values
-    .map((value) => abbreviateAdmissionSummaryText(value).replace(/[.;。；\s]+$/g, "").trim())
+    .map((value) => abbreviateAdmissionSummaryText(value).replace(/[.;\u3002\uff1b\s]+$/g, "").trim())
     .filter(Boolean)
-    .slice(0, 3)
-    .map((value) => `${value}。`)
+    .slice(0, limits.maxSentences)
+    .map((value) => `${value}${zhPeriod}`)
     .join("");
 }
 
@@ -1571,25 +1684,44 @@ function formatReasoningOneLiner(reasoning: ClinicalReasoningBundle | undefined)
 export function formatReasoningAdmissionSummary(
   reasoning: ClinicalReasoningBundle | undefined,
   fallbackPlan?: GeneratedClinicalPlan,
+  options: AdmissionBriefOptions = {},
 ) {
   if (!hasClinicalReasoning(reasoning)) return "";
+  const limits = admissionBriefLimits(options);
   const topProblems = reasoning.activeProblemsRanked.filter((item) => item.status !== "resolved").slice(0, 4);
-  const evidence = admissionSummaryFacts(reasoning.whyThisMatters.map((item) => `${item.fact} -> ${item.implication}`), 2, 90);
+  const who = admissionWhoFragment(fallbackPlan?.facts.sourceText ?? "");
+  const diagnosis = admissionSummaryFacts([...(fallbackPlan?.facts.diagnoses ?? []), ...(fallbackPlan?.facts.activeProblems ?? [])], 1, limits.factLength)
+    .map(admissionReasonBrief)
+    .join("; ");
+  const pmh = admissionSummaryFacts(fallbackPlan?.facts.pmh ?? [], limits.pmhItems, limits.factLength).join("; ");
+  const course = admissionSummaryFacts(
+    [...(fallbackPlan?.facts.hospitalCourse ?? []), ...(fallbackPlan?.facts.procedures ?? []), ...(fallbackPlan?.facts.antibiotics ?? [])],
+    limits.courseItems,
+    limits.factLength,
+  ).join("; ");
+  const evidence = admissionSummaryFacts(reasoning.whyThisMatters.map((item) => `${item.fact} -> ${item.implication}`), 2, limits.factLength);
   const tasks = compactList(
     [
       ...topProblems.flatMap((item) => item.todayPlan),
       ...reasoning.missingDataNeeded.map((item) => `clarify ${item}`),
       ...(fallbackPlan?.todayTasks.map((task) => task.text) ?? []),
     ],
-    3,
-    80,
+    limits.pendingItems,
+    limits.factLength,
   ).map(abbreviateAdmissionSummaryText);
-  const active = topProblems.map((item) => abbreviateAdmissionSummaryText(compactSnippet(item.problem, 45))).join("; ");
+  const active = compactList(topProblems.map((item) => item.problem), limits.activeItems, 52).map(abbreviateAdmissionSummaryText).join("; ");
+  const admissionLead = diagnosis
+    ? [who, `${admissionBriefZh.because} ${diagnosis} ${admissionBriefZh.admitted}`].filter(Boolean).join(" ")
+    : "";
+  const currentLead = compactSnippet(reasoning.primaryRisk || reasoning.currentClinicalState, 110);
   return formatMixedAdmissionSummarySentences([
-    `目前重點 ${compactSnippet(reasoning.primaryRisk || reasoning.currentClinicalState, 110)}`,
-    [active ? `問題 ${active}` : "", evidence.length > 0 ? `依據 ${evidence.join("; ")}` : ""].filter(Boolean).join("；"),
-    tasks.length > 0 ? `待 ${tasks.join("; ")}` : "",
-  ]);
+    admissionLead || (currentLead ? `${admissionBriefZh.nowFocus} ${currentLead}` : ""),
+    pmh ? `${admissionBriefZh.background} ${pmh}` : "",
+    course ? `${admissionBriefZh.arrivalOrTransfer} ${course}` : "",
+    admissionLead && currentLead ? `${admissionBriefZh.nowFocus} ${currentLead}` : "",
+    [active ? `${admissionBriefZh.problems} ${active}` : "", evidence.length > 0 ? `${admissionBriefZh.evidence} ${evidence.join("; ")}` : ""].filter(Boolean).join(zhSemicolon),
+    tasks.length > 0 ? `${admissionBriefZh.todayPending} ${tasks.join("; ")}` : "",
+  ], options);
 }
 
 export function formatReasoningSbar(reasoning: ClinicalReasoningBundle | undefined, fallbackPlan?: GeneratedClinicalPlan) {

@@ -18,7 +18,6 @@ import {
   getActiveAttendingNames,
   getActivePatients,
   getAdmissionSummaryText,
-  getLabFocusSummary,
   getPatientDisplaySummary,
   getUnderlyingDiseaseItems,
   groupPatientsByAttending,
@@ -33,6 +32,7 @@ import { useT } from "../i18n";
 import { getRoundingDigest } from "../roundingDigest";
 import { patientToSoapDraft } from "../soapDraft";
 import { formatMedicationOrderLinesForDisplay } from "../medicationOrderParser";
+import { buildPatientLabVisualSummary, formatLabVisualSummaryLinesFromText } from "../labVisualSummary";
 import {
   classifyPrintVisualItem as classifyPriorityPrintVisualItem,
   isComplexPrintDraft,
@@ -612,19 +612,16 @@ function PrintRoundingListPage({
   }
 
   function labFocusGroups(patient: Patient) {
-    const limits = printLimitsForPatient(patient);
-    const labFocus = getLabFocusSummary(patient, dailyNotesByPatient[patient.id] ?? [], {
-      maxCritical: Math.max(3, Math.ceil(limits.labItems / 3)),
-      maxTrend: Math.max(4, limits.labItems),
-      maxAnchors: Math.max(3, Math.ceil(limits.labItems / 3)),
-      separator: " | ",
-    });
-    const stripSeverityLabel = (value: string) => displayPrintLine(value).replace(/^(?:Crit|Abn|Trend|Anchor)\s+/i, "");
-    return [
-      { label: "*", title: "Critical labs", items: labFocus.critical.map(stripSeverityLabel), className: "print-lab-row-critical" },
-      { label: "Abn", title: "Abnormal / trend labs", items: labFocus.trend.map(stripSeverityLabel), className: "print-lab-row-trend" },
-      { label: "Ref", title: "Reference labs", items: labFocus.anchors.map(stripSeverityLabel), className: "print-lab-row-ref" },
-    ].filter((group) => group.items.length > 0);
+    return buildPatientLabVisualSummary(patient, dailyNotesByPatient[patient.id] ?? [], {
+      maxGroups: printLimitsForPatient(patient).labItems,
+      maxItemsPerGroup: density === "ultra-compact" ? 4 : 6,
+      maxCharsPerGroup: printLimitsForPatient(patient).detailChars + 28,
+    }).map((group) => ({
+      label: group.label,
+      title: group.label,
+      items: [group.text.replace(new RegExp(`^${group.label}:\\s*`, "i"), "")],
+      className: group.tone === "critical" ? "print-lab-row-critical" : group.tone === "important" ? "print-lab-row-trend" : "print-lab-row-ref",
+    }));
   }
 
   function renderLabMiniTable(patient: Patient) {
@@ -648,17 +645,11 @@ function PrintRoundingListPage({
   }
 
   function renderPrintLabFocus(patient: Patient) {
-    const labFocus = getLabFocusSummary(patient, dailyNotesByPatient[patient.id] ?? [], {
-      maxCritical: 99,
-      maxTrend: 99,
-      maxAnchors: 99,
-      separator: "\n",
-    });
-    const groups = [
-      { label: "Critical", items: labFocus.critical, important: true },
-      { label: "Abn/Trend", items: labFocus.trend, important: false },
-      { label: "Anchor", items: labFocus.anchors, important: false },
-    ].filter((group) => group.items.length > 0);
+    const groups = buildPatientLabVisualSummary(patient, dailyNotesByPatient[patient.id] ?? [], {
+      maxGroups: 99,
+      maxItemsPerGroup: 8,
+      maxCharsPerGroup: printLimitsForPatient(patient).detailChars + 40,
+    }).filter((group) => group.items.length > 0);
 
     if (groups.length === 0) return null;
 
@@ -668,11 +659,9 @@ function PrintRoundingListPage({
           <div className="print-lab-group" key={group.label}>
             <span className="print-lab-date">{group.label}</span>
             <span className="print-lab-chip-row">
-              {group.items.map((item) => (
-                <span className={`print-lab-chip ${group.important ? "important" : ""}`} key={`${group.label}-${item}`}>
-                  {shortText(item, printLimitsForPatient(patient).chars)}
-                </span>
-              ))}
+              <span className={`print-lab-chip ${group.tone === "critical" || group.tone === "important" ? "important" : ""}`}>
+                {group.items.map((item) => item.text).join(", ")}
+              </span>
             </span>
           </div>
         ))}
@@ -760,7 +749,7 @@ function PrintRoundingListPage({
 
   function objectiveSoapText(patient: Patient) {
     const soap = patientToSoapDraft(patient, dailyNotesByPatient[patient.id] ?? [], todayKey());
-    const objectiveLines = soap.oLines.filter((line) => isObjectiveSoapLineVisible(line, roundingLayout) && !/^(?:lab|image|img)\s*:/i.test(line));
+    const objectiveLines = soap.oLines.filter((line) => isObjectiveSoapLineVisible(line, roundingLayout) && !/^!{0,2}\s*(?:lab|image|img)\s*[:：]/i.test(line));
     const limits = printLimitsForPatient(patient);
     return printListItems(objectiveLines, "other", density === "ultra-compact" ? 2 : limits.pe + 2, limits.detailChars).map((item) => item.raw).join("\n");
   }
@@ -769,16 +758,23 @@ function PrintRoundingListPage({
     if (!isLayoutSectionVisible(roundingLayout, "objectiveLabs")) return "";
     const soap = patientToSoapDraft(patient, dailyNotesByPatient[patient.id] ?? [], todayKey());
     const limits = printLimitsForPatient(patient);
-    const labLines = soap.oLines.filter((line) => isObjectiveSoapLineVisible(line, roundingLayout) && /^Labs?\s*:/i.test(line));
-    return printListItems(labLines, "lab", limits.labItems, limits.detailChars).map((item) => item.raw).join("\n");
+    const labLines = soap.oLines.filter((line) => isObjectiveSoapLineVisible(line, roundingLayout) && /^!{0,2}\s*Labs?\s*[:：]/i.test(line));
+    const visualLines = formatLabVisualSummaryLinesFromText(labLines.join("\n"), {
+      patient,
+      maxGroups: limits.labItems,
+      maxItemsPerGroup: density === "ultra-compact" ? 4 : 6,
+      maxCharsPerGroup: limits.detailChars + 28,
+    });
+    const sourceLines = visualLines.length > 0 ? visualLines.map((line) => `Lab: ${line}`) : labLines;
+    return printListItems(sourceLines, "lab", limits.labItems, limits.detailChars + 28).map((item) => item.raw).join("\n");
   }
 
   function imageSoapText(patient: Patient) {
     if (!isLayoutSectionVisible(roundingLayout, "objectiveImages")) return "";
     const soap = patientToSoapDraft(patient, dailyNotesByPatient[patient.id] ?? [], todayKey());
     const images = soap.oLines
-      .filter((line) => /^(?:image|img)\s*:/i.test(line))
-      .map((line) => line.replace(/^(?:image|img)\s*:\s*/i, ""));
+      .filter((line) => /^!{0,2}\s*(?:image|img)\s*[:：]/i.test(line))
+      .map((line) => line.replace(/^!{0,2}\s*(?:image|img)\s*[:：]\s*/i, ""));
     const limits = printLimitsForPatient(patient);
     return printListItems(images, "image", limits.images, limits.detailChars).map((item) => item.raw).join("\n");
   }

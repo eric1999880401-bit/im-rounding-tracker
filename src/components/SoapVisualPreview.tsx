@@ -3,6 +3,7 @@ import { parseSoapText, soapTextWithDerivedHighlights } from "../soapDraft";
 import { deriveSoapEvidence, type SoapSourceFields } from "../soapEvidence";
 import { ClinicalInlineText, ClinicalText, type LabReferenceDisplayMode } from "./ClinicalText";
 import { classifyClinicalLine, normalizeClinicalDisplayText, type ClinicalLineKind, type ClinicalLineTone } from "../clinicalLineClassifier";
+import { formatLabVisualSummaryLinesFromText } from "../labVisualSummary";
 import { formatMedicationOrderLinesForDisplay } from "../medicationOrderParser";
 import type { KeywordHighlightRule, RoundingLayoutPreferences } from "../types";
 import {
@@ -91,6 +92,15 @@ export function SoapVisualPreview({ value, compact = false, sourceFields = {}, l
   const headerLines = draft.header.filter((line) => isSoapHeaderLineVisible(line, layoutPreferences));
   const sLines = isLayoutSectionVisible(layoutPreferences, "subjective") ? draft.sLines : [];
   const oLines = draft.oLines.filter((line) => isObjectiveSoapLineVisible(line, layoutPreferences));
+  const objectiveLabLinePattern = /^!{0,2}\s*Labs?\s*[:：]/i;
+  const objectiveLabLines = oLines.filter((line) => objectiveLabLinePattern.test(line));
+  const objectiveNonLabLines = oLines.filter((line) => !objectiveLabLinePattern.test(line));
+  const labVisualLines = formatLabVisualSummaryLinesFromText(objectiveLabLines.join("\n"), {
+    maxGroups: 7,
+    maxItemsPerGroup: compact ? 6 : 10,
+    maxCharsPerGroup: compact ? 140 : 180,
+  });
+  const displayObjectiveCount = objectiveNonLabLines.length + labVisualLines.length;
   const apProblems = isLayoutSectionVisible(layoutPreferences, "assessmentPlan") ? draft.apProblems : [];
   const visibleTaskSourceLines = draft.taskLines.filter((line) => isTaskSoapLineVisible(line, layoutPreferences));
   const orderLines = visibleTaskSourceLines.filter(isOrderSoapLine);
@@ -148,9 +158,16 @@ export function SoapVisualPreview({ value, compact = false, sourceFields = {}, l
         )}
 
         {hasObjectiveSections && (
-          <Section title="O" badge={`${oLines.length || 0}`}>
-            {oLines.length > 0 ? (
-              oLines.map((line, index) => <VisualLine key={`${line}-${index}`} text={line} keywordRules={keywordRules} labReferenceDisplay={labReferenceDisplay} />)
+          <Section title="O" badge={`${displayObjectiveCount || 0}`}>
+            {displayObjectiveCount > 0 ? (
+              <>
+                {objectiveNonLabLines.map((line, index) => (
+                  <VisualLine key={`${line}-${index}`} text={line} keywordRules={keywordRules} labReferenceDisplay={labReferenceDisplay} />
+                ))}
+                {labVisualLines.map((line, index) => (
+                  <VisualLine key={`lab-visual-${line}-${index}`} label="LAB" text={line} fallbackKind="lab" keywordRules={keywordRules} labReferenceDisplay={labReferenceDisplay} />
+                ))}
+              </>
             ) : (
               <EmptyLine />
             )}

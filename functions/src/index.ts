@@ -1200,11 +1200,24 @@ function documentTypeLabel(documentType: DocumentType) {
   return labels[documentType];
 }
 
+const admissionSummaryZh = {
+  because: "\u56e0",
+  admitted: "\u4f4f\u9662",
+  background: "\u80cc\u666f",
+  arrivalOrTransfer: "\u5230\u9662/\u8f49\u5165\u6642",
+  through: "\u7d93",
+  after: "\u5f8c",
+  nowFocus: "\u76ee\u524d\u91cd\u9ede",
+  todayPending: "\u4eca\u65e5\u5f85",
+};
+
 const admissionSummaryStyleBullets = [
-  "Admission summary style: write 2-3 short mixed Chinese-English clinical sentences, not an English paragraph.",
+  "Admission summary/oral brief style: default to a 1-min oral brief in 3-5 short mixed Chinese-English clinical sentences, not an English paragraph or full admission note.",
   "Use abbreviation-forward inpatient IM style: s/p, c/f, r/o, f/u, cont, Abx, Cx, B/C, U/C, Sputum Cx, PNA, UTI, AKI/CKD, RF, HF, AF, CAD, DM, HTN, COPD, O2/SpO2, NC/RA, CXR/CT/MRI/U/S, EGD, DC, OPD.",
-  "Keep Dx/PMH, organisms, drug names, procedures, image studies, lab values, devices, and consult services in English; use Chinese only for connective clinical judgment such as 因, 背景, 住院中, 目前, 重點, 待.",
-  "Preferred structure: 因 [reason/Dx] 住院, 背景 [PMH/context]. 住院中 [major course/treatment/objective anchor]. 目前重點 [active issues], 待 [pending/dispo].",
+  `Keep Dx/PMH, organisms, drug names, procedures, image studies, lab values, devices, and consult services in English; use Chinese only for connective clinical judgment such as ${admissionSummaryZh.because}, ${admissionSummaryZh.background}, ${admissionSummaryZh.arrivalOrTransfer}, ${admissionSummaryZh.through}, ${admissionSummaryZh.after}, ${admissionSummaryZh.nowFocus}, ${admissionSummaryZh.todayPending}.`,
+  `Use this default order without headings: 1) who/why admitted, 2) key PMH/context, 3) initial severity + ED/transfer treatment/response, 4) current active problems, 5) pending/plan/dispo.`,
+  `Sentence skeleton: [age/sex if known] ${admissionSummaryZh.because} [reason/Dx] ${admissionSummaryZh.admitted}. ${admissionSummaryZh.background} [PMH/context]. ${admissionSummaryZh.arrivalOrTransfer} [severity], ${admissionSummaryZh.through} [ED/ICU/transfer treatment] ${admissionSummaryZh.after} [response]. ${admissionSummaryZh.nowFocus} [active problems]. ${admissionSummaryZh.todayPending} [pending/plan/dispo].`,
+  "If the user explicitly asks for a 3-min or expanded oral brief, keep the same field and same order but allow 6-8 concise source-grounded sentences with extra severity trajectory, key labs/micro/imaging, treatment response, contingency, and disposition detail.",
   "Do not write 'The patient is', full admission-note prose, copied full lab panels, routine normal data, or generic filler.",
 ];
 
@@ -1239,7 +1252,7 @@ function documentInstructions(documentType: DocumentType) {
       "Use this mental order without headings: admitted for/initial presentation, key PMH/context, major course/objective anchors, current active issues and today/pending/disposition.",
       "Emphasize why admitted, important PMH/context, key positive/negative findings, active problems, major prior course, today's important changes, initial/current treatment, and pending/disposition decisions.",
       "Exclude trivial daily stable updates unless they affect management, safety, discharge, or handoff.",
-      "Keep to 2-3 short sentences; complex patients may use 3 sentences but not more.",
+      "Keep the default 1-min brief to 3-5 short sentences; complex patients should still stay telegraphic and oral-ready.",
       "Use conciseSummary as the best one-paragraph presentation.",
     ],
     dischargeHospitalCourse: [
@@ -1754,7 +1767,7 @@ export const analyzeClinicalText = onCall(
               "If resolved shock is clinically relevant, phrase it only as resolved course, e.g. 'initial fluid-responsive hypotension, now BP stable'.",
               "Always also return admissionSummary and isbarHandoff for pasted admission, mixed, progress, consult, nursing, or daily-update chart text when enough context exists.",
               ...admissionSummaryStyleBullets,
-              "admissionSummary must be attending-ready: why admitted, important PMH/context, major hospital course/treatment, current active problems, today/pending/disposition, in 2-3 short mixed Chinese-English sentences.",
+              "admissionSummary must be attending-ready: who/why admitted, important PMH/context, initial severity plus ED/transfer treatment/response, current active problems, today/pending/disposition, in 3-5 short mixed Chinese-English sentences by default.",
               "isbarHandoff must use headings Situation, Background, Assessment, Recommendation, with contingency plans, pending tasks, red flags, and call parameters when available.",
               "Assume the reviewer slept 3 hours and has seconds per patient: use telegraphic clinical fragments, not polished prose.",
               "Use the allowed patient context only to judge relevance and importance. Do not convert context-only facts into new SOAP draft items unless the pasted text explicitly supports them.",
