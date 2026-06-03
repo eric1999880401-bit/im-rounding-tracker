@@ -7,6 +7,7 @@ import {
 } from "../clinicalKnowledge";
 import { formatClinicalDocumentDraft } from "../clinicalDocumentFormat";
 import { generateClinicalDocument } from "../firebase/aiService";
+import { formatSoapBasedIsbar } from "../soapSbar";
 import type { AiDocumentDraft, AiDocumentType, DailyNote, GeneratedClinicalPlan, Patient } from "../types";
 import { getAdmissionSummaryText, nowIso } from "../utils";
 
@@ -144,6 +145,43 @@ function ClinicalDocumentQuickActions({
     setLoadingType(documentType);
     try {
       const selectedNotes = notesForDocument(notes, documentType, dateFrom, selectedDate);
+      if (documentType === "isbar") {
+        const formatted = formatSoapBasedIsbar(patient, selectedNotes, selectedDate);
+        if (/^insufficient reviewed SOAP\/context/i.test(formatted)) {
+          setError(formatted);
+          return;
+        }
+        setDraft(localClinicalDraft(documentType, formatted, {
+          ruleMatches: [],
+          redFlags: [],
+          todayTasks: [],
+          problemBasedAP: [],
+          needsReview: false,
+          facts: {
+            sourceText: "",
+            diagnoses: [],
+            pmh: [],
+            activeProblems: [],
+            objectiveFacts: [],
+            medications: [],
+            antibiotics: [],
+            procedures: [],
+            consults: [],
+            hospitalCourse: [],
+            todayUpdates: [],
+            pendingItems: [],
+            dischargeDisposition: [],
+            immunocompromisedSignals: [],
+            uncertainty: [],
+          },
+          handoffWarnings: [],
+          printSummary: "",
+          sbarRecommendation: "",
+        }));
+        setEditableText(formatted);
+        setStatusMessage("SBAR drafted from reviewed SOAP. Review, edit, then save.");
+        return;
+      }
       const rulePlan = applyClinicalKnowledgeToText(patientRuleContext(patient, selectedNotes), {
         pmh: [patient.underlyingDiseases, patient.admissionPMH].filter(Boolean),
         activeProblems: [patient.activeProblems, patient.primaryDiagnosis].filter(Boolean),

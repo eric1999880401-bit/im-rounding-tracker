@@ -193,6 +193,7 @@ export interface GenerateRoundSoapInput {
   rawText: string;
   currentSoapBaseline: string;
   deidentifiedConfirmed: boolean;
+  qualityMode?: "fast" | "balanced" | "highAccuracy";
   userStyleProfile?: UserAiStyleProfile;
   patientContext?: {
     age?: string | number;
@@ -208,6 +209,7 @@ export interface GenerateRoundSoapResult {
   warnings: string[];
   highlightHints: string[];
   model: string;
+  qualityMode?: "fast" | "balanced" | "highAccuracy";
 }
 
 export type PatientImportDraftStatus = "new" | "updateCandidate";

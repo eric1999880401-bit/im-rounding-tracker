@@ -5147,6 +5147,61 @@ tbody tr:last-child td {
    Print mode — neutralize colors, let print.css drive layout
    ============================================================ */
 
+.soap-preview-mode-toggle {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+  margin-bottom: 8px;
+}
+
+.soap-print-preview {
+  display: grid;
+  gap: 8px;
+}
+
+.soap-print-preview-topbar,
+.soap-print-preview-header,
+.soap-print-preview-section {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-muted);
+}
+
+.soap-print-preview-topbar {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+  padding: 8px 10px;
+}
+
+.soap-print-preview-header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  padding: 8px 10px;
+}
+
+.soap-print-preview-grid {
+  display: grid;
+  gap: 8px;
+}
+
+.soap-print-preview-section-title {
+  border-bottom: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  padding: 6px 8px;
+  text-transform: uppercase;
+}
+
+.soap-print-preview-rows {
+  display: grid;
+  gap: 3px;
+  padding: 6px;
+}
+
 @media print {
   :root,
   :root[data-theme="dark"],

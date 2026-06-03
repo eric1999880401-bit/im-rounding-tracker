@@ -204,7 +204,7 @@ function splitObjective(lines: string[]): ObjectiveGroups {
   return groups;
 }
 
-function mergeObjective(groups: ObjectiveGroups) {
+function mergeObjective(groups: ObjectiveGroups, maxItems = 18) {
   return uniqueLines(
     [
       ...groups.vs.map((line) => ensureObjectivePrefix(line, "V/S")),
@@ -212,7 +212,7 @@ function mergeObjective(groups: ObjectiveGroups) {
       ...groups.lab.map((line) => ensureObjectivePrefix(line, "Lab")),
       ...groups.image.map((line) => ensureObjectivePrefix(line, "Image")),
     ],
-    14,
+    maxItems,
   );
 }
 
@@ -363,17 +363,20 @@ function findMatchingProblems(problem: SoapApProblem, problems: SoapApProblem[])
 function mergeApProblemsForDaily(baseline: SoapApProblem[], candidate: SoapApProblem[], allowNewProblem: boolean) {
   const warnings: string[] = [];
   const highRiskWarnings: string[] = [];
+  const compactProblemLines = (baselineLines: string[], candidateLines: string[]) => {
+    const primary = uniqueLines(baselineLines, 1)[0] || uniqueLines(candidateLines, 1)[0] || "";
+    const secondaryPool = uniqueLines([...candidateLines, ...baselineLines.slice(1)], 6).filter((line) => normalizeLine(line) !== normalizeLine(primary));
+    if (!primary) return uniqueLines(secondaryPool, 2);
+    if (secondaryPool.length === 0) return [primary];
+    return uniqueLines([primary, safeClinicalLine(secondaryPool.join("; "), 170)], 2);
+  };
   const next = baseline.map((problem) => {
     const matches = findMatchingProblems(problem, candidate);
     if (matches.length === 0 || matches.every((match) => match.lines.length === 0)) return problem;
-    const protectedBaselineLines = problem.lines.filter(isProtectedLine);
     const candidateLines = matches.flatMap((match) => match.lines);
-    const candidateSupersedesProtected = candidateLines.some((line) =>
-      /\b(?:sensitive|susceptib|no growth|negative|final|de-?escal|switch|po |complete \d|stop|narrow|culture-directed)\b/i.test(line),
-    );
     return {
       title: problem.title,
-      lines: uniqueLines(candidateSupersedesProtected ? [...candidateLines, ...protectedBaselineLines] : [...protectedBaselineLines, ...candidateLines], 2),
+      lines: compactProblemLines(problem.lines, candidateLines),
     };
   });
   const baselineTitles = apTitles(baseline);
@@ -400,14 +403,36 @@ function mergeApProblemsForDaily(baseline: SoapApProblem[], candidate: SoapApPro
 
 function protectedLines(draft: SoapDraft) {
   return [
+    ...draft.header,
+    ...draft.sLines,
+    ...draft.oLines,
     ...draft.apProblems.flatMap((problem) => [problem.title, ...problem.lines]),
     ...draft.taskLines,
     ...draft.dcLines,
-  ].filter((line) => /\b(abx|antibiotic|teicoplanin|vancomycin|culture|b\/c|bcx|pending|source|dc|discharge|opd|certificate|meds?)\b/i.test(line));
+  ].filter(isProtectedLine);
 }
 
 function isProtectedLine(line: string) {
-  return /\b(abx|antibiotic|teicoplanin|vancomycin|ceftriaxone|cefepime|meropenem|culture|b\/c|bcx|pending|source|de-escalation|duration|dc|discharge|opd|certificate|meds?)\b/i.test(line);
+  const text = String(line ?? "");
+  if (!text.trim()) return false;
+  if (/\[\[(?:red|orange|yellow|blue|green|purple)(?:-(?:highlight|text))?:/i.test(text)) return true;
+  if (/^!/.test(text.trim())) return true;
+  const classified = classifyClinicalLine(text, { fallbackKind: "other" });
+  if (classified.tone === "critical" || classified.tone === "important") return true;
+  return /\b(abx|antibiotic|teicoplanin|vancomycin|ceftriaxone|cefepime|meropenem|culture|b\/c|bcx|pending|source|de-escalation|duration|dc|discharge|opd|certificate|meds?|aki|ckd|cr\s*\d|bun|hyperk|hypok|k\s*\d|lft|ast|alt|bilirubin|inr|coag|hb\s*\d|plt\s*\d|bleed|o2|oxygen|spo2|rf|effusion|chylothorax|ct\b|mri\b|cxr\b|echo\b|sono|ultrasound|ercp|egd|biopsy|procedure|consult|drain|tube|port-a)\b/i.test(text);
+}
+
+function mergeDailyLines(
+  baseline: string[],
+  candidate: string[],
+  options: { maxItems: number; replacePlainBaseline?: boolean } = { maxItems: 8 },
+) {
+  const candidateLines = uniqueLines(candidate, options.maxItems);
+  if (candidateLines.length === 0) return baseline;
+  const baselineProtected = baseline.filter(isProtectedLine);
+  const baselinePlain = options.replacePlainBaseline ? [] : baseline.filter((line) => !isProtectedLine(line));
+  const maxItems = Math.max(options.maxItems, candidateLines.length + baselineProtected.length + baselinePlain.length);
+  return uniqueLines([...candidateLines, ...baselineProtected, ...baselinePlain], maxItems);
 }
 
 function hasEquivalentLine(lines: string[], target: string) {
@@ -514,7 +539,10 @@ function draftForDailyUpdate(baseline: SoapDraft, candidate: SoapDraft, fields: 
     const differs = !sameLines(baseObjective[section], candidateObjective[section]);
     if (!differs) return;
     if (profile.allowed.has(section)) {
-      nextObjective[section] = candidateObjective[section].length > 0 ? candidateObjective[section] : baseObjective[section];
+      nextObjective[section] = mergeDailyLines(baseObjective[section], candidateObjective[section], {
+        maxItems: section === "lab" ? 12 : section === "image" ? 8 : section === "vs" ? 4 : 5,
+        replacePlainBaseline: section === "vs",
+      });
       pushChanged(changed, section, `${sectionLabels[section]} updated from pasted field`);
     } else {
       pushChanged(changed, section, `AI changed ${sectionLabels[section]} without matching source field`, "high", true);
@@ -524,10 +552,14 @@ function draftForDailyUpdate(baseline: SoapDraft, candidate: SoapDraft, fields: 
 
   const baselineTasks = splitTasks(baseline.taskLines);
   const candidateTasks = splitTasks(candidate.taskLines);
-  const nextOrders = profile.allowed.has("orders") && candidateTasks.orders.length > 0 ? candidateTasks.orders : baselineTasks.orders;
+  const nextOrders = profile.allowed.has("orders")
+    ? mergeDailyLines(baselineTasks.orders, candidateTasks.orders, { maxItems: 10 })
+    : baselineTasks.orders;
   const taskSourceAllowsUpdate = profile.allowed.has("tasks");
   const filteredTasks = filterUnsupportedDailyLines(candidateTasks.tasks, fields, baselineText, "Task");
-  const nextTasks = taskSourceAllowsUpdate ? filteredTasks.accepted : baselineTasks.tasks;
+  const nextTasks = taskSourceAllowsUpdate
+    ? mergeDailyLines(baselineTasks.tasks, filteredTasks.accepted, { maxItems: 10 })
+    : baselineTasks.tasks;
   warnings.push(...filteredTasks.warnings);
   if (!sameLines(baselineTasks.orders, candidateTasks.orders)) {
     pushChanged(changed, "orders", profile.allowed.has("orders") ? "Orders updated from pasted order field" : "AI changed orders without matching source field", profile.allowed.has("orders") ? "normal" : "high", !profile.allowed.has("orders"));
@@ -553,7 +585,9 @@ function draftForDailyUpdate(baseline: SoapDraft, candidate: SoapDraft, fields: 
   }
 
   const filteredDc = filterUnsupportedDailyLines(candidate.dcLines, fields, baselineText, "DC");
-  const nextDc = profile.allowed.has("dc") && filteredDc.accepted.length > 0 ? filteredDc.accepted : baseline.dcLines;
+  const nextDc = profile.allowed.has("dc")
+    ? mergeDailyLines(baseline.dcLines, filteredDc.accepted, { maxItems: 8 })
+    : baseline.dcLines;
   warnings.push(...filteredDc.warnings);
   if (!sameLines(baseline.dcLines, candidate.dcLines)) {
     pushChanged(changed, "dc", profile.allowed.has("dc") ? "DC updated from pasted source" : "AI changed DC without discharge source", profile.allowed.has("dc") ? "normal" : "high", !profile.allowed.has("dc"));
@@ -593,10 +627,12 @@ function draftForDailyUpdate(baseline: SoapDraft, candidate: SoapDraft, fields: 
 
   const draftBeforeAntibiotics = {
       header: baseline.header,
-      sLines: profile.allowed.has("s") && filteredS.accepted.length > 0 ? filteredS.accepted : baseline.sLines,
-      oLines: mergeObjective(nextObjective),
+      sLines: profile.allowed.has("s")
+        ? mergeDailyLines(baseline.sLines, filteredS.accepted, { maxItems: 6 })
+        : baseline.sLines,
+      oLines: mergeObjective(nextObjective, 22),
       apProblems: nextApProblems,
-      taskLines: uniqueLines([...nextOrders, ...nextTasks], 8),
+      taskLines: uniqueLines([...nextOrders, ...nextTasks], Math.max(10, nextOrders.length + nextTasks.length)),
       dcLines: nextDc,
       warnings: uniqueLines([...baseline.warnings, ...candidate.warnings], 5),
     } satisfies SoapDraft;

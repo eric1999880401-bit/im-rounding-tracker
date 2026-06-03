@@ -13,6 +13,7 @@ import type { SoapSourceFields } from "../soapEvidence";
 import { editorDraftToSoapText, emptySoapEditorLine, mergeOrderSourceIntoEditorDraft, parseSoapTextToEditorDraft, splitSoapEditorTaskLines } from "../soapEditorDraft";
 import { emptyDailyNote, nowIso } from "../utils";
 import { SoapVisualPreview } from "./SoapVisualPreview";
+import SoapPrintPreview from "./SoapPrintPreview";
 import StructuredSoapEditor from "./StructuredSoapEditor";
 import MedicationOrderReviewPanel, { type MedicationOrderSummaryLine } from "./MedicationOrderReviewPanel";
 import {
@@ -41,6 +42,7 @@ interface RoundSoapComposerProps {
 }
 
 type WorkflowMode = "dailyUpdate" | "newSoap" | "transferHandoff";
+type RoundSoapQualityMode = "fast" | "balanced" | "highAccuracy";
 
 const workflowModes: Array<{ value: WorkflowMode; label: string; helper: string; sourceType: AiClinicalSourceType }> = [
   {
@@ -192,6 +194,8 @@ function RoundSoapComposer({
   const [transferFields, setTransferFields] = useState<TransferSoapFields>(emptyTransferFields);
   const [confirmed, setConfirmed] = useState(false);
   const [soapFormat, setSoapFormat] = useState<SoapEditorFormat>("standard");
+  const [previewMode, setPreviewMode] = useState<"soap" | "print">("soap");
+  const [qualityMode, setQualityMode] = useState<RoundSoapQualityMode>("fast");
   const [editorDraft, setEditorDraft] = useState(() => parseSoapTextToEditorDraft(canonical.text));
   const [rawSoapText, setRawSoapText] = useState(canonical.text);
   const [dirty, setDirty] = useState(false);
@@ -240,6 +244,10 @@ function RoundSoapComposer({
     setDeltaReview(null);
     setStatus(externalSoapStatus || "External SOAP draft loaded. Review, then Save reviewed SOAP.");
   }, [externalSoapRevision, externalSoapStatus, externalSoapText]);
+
+  useEffect(() => {
+    setQualityMode(workflowMode === "dailyUpdate" ? "fast" : "balanced");
+  }, [workflowMode]);
 
   function updateEditorDraft(nextDraft: typeof editorDraft) {
     setEditorDraftState(nextDraft);
@@ -362,7 +370,7 @@ function RoundSoapComposer({
     clearPendingOrderSources();
   }
 
-  async function handleGenerate() {
+  async function handleGenerate(requestedQualityMode: RoundSoapQualityMode = qualityMode) {
     const rawText = composeRawText();
     const currentSoapText = editorDraftToSoapText(editorDraftRef.current);
     setError("");
@@ -398,6 +406,7 @@ function RoundSoapComposer({
             rawText,
             currentSoapBaseline: currentSoapText || canonical.text,
             deidentifiedConfirmed: true,
+            qualityMode: requestedQualityMode,
             patientContext: patientContext(patient),
             userStyleProfile: aiStyleProfile,
           });
@@ -419,8 +428,8 @@ function RoundSoapComposer({
       setDeltaReview(guarded);
       setStatus(
         guarded.highRiskWarnings.length > 0
-          ? `SOAP preview generated (${result.model}); high-risk unrelated AI changes were held.`
-          : `SOAP preview generated (${result.model}). Edit, then Save reviewed SOAP.`,
+          ? `SOAP preview generated (${result.model}, ${result.qualityMode ?? requestedQualityMode}); high-risk unrelated AI changes were held.`
+          : `SOAP preview generated (${result.model}, ${result.qualityMode ?? requestedQualityMode}). Edit, then Save reviewed SOAP.`,
       );
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : "SOAP generation failed. No data was saved.");
@@ -527,6 +536,8 @@ function RoundSoapComposer({
     loadDeltaSoapText(nextText, `${deltaSectionLabels[section]} restored from baseline locally.`);
   }
 
+  const estimatedTokens = Math.ceil((composeRawText().length + soapText.length) / 4);
+
   return (
     <section className={compact ? "round-soap-composer compact-round-soap-composer" : "round-soap-composer"}>
       <div className="round-soap-toolbar">
@@ -554,6 +565,11 @@ function RoundSoapComposer({
               </option>
             ))}
           </select>
+          <select value={qualityMode} onChange={(event) => setQualityMode(event.target.value as RoundSoapQualityMode)} title="AI quality / cost">
+            <option value="fast">Fast / cheap</option>
+            <option value="balanced">Balanced</option>
+            <option value="highAccuracy">High accuracy</option>
+          </select>
           <button type="button" className="secondary" onClick={() => {
             pendingSavedSoapRef.current = null;
             const nextDraft = parseSoapTextToEditorDraft(canonical.text);
@@ -575,6 +591,9 @@ function RoundSoapComposer({
         </div>
       </div>
       <p className="muted round-soap-mode-helper">{workflow.helper}</p>
+      <p className="muted round-soap-mode-helper">
+        AI mode: {qualityMode === "fast" ? "fast/cheap delta" : qualityMode === "balanced" ? "balanced draft" : "high-accuracy draft"}; approx. {estimatedTokens.toLocaleString()} input+baseline tokens. Save is still manual.
+      </p>
 
       {workflowMode === "dailyUpdate" ? (
         <div className="round-soap-daily-grid round-soap-guided-grid">
@@ -871,6 +890,19 @@ function RoundSoapComposer({
         <button type="button" disabled={loading || !composeRawText()} onClick={() => void handleGenerate()}>
           {loading ? "Working..." : "Generate SOAP"}
         </button>
+        {qualityMode !== "highAccuracy" && (
+          <button
+            type="button"
+            className="secondary"
+            disabled={loading || !composeRawText()}
+            onClick={() => {
+              setQualityMode("highAccuracy");
+              void handleGenerate("highAccuracy");
+            }}
+          >
+            Upgrade this draft
+          </button>
+        )}
       </div>
 
       {error && <p className="error-message">{error}</p>}
@@ -965,14 +997,34 @@ function RoundSoapComposer({
           </details>
         </section>
         <section className="round-soap-preview" aria-label="Highlighted SOAP preview">
-          <SoapVisualPreview
-            value={soapText}
-            compact={compact}
-            sourceFields={currentSourceFields()}
-            layoutPreferences={layoutPreferences}
-            keywordRules={keywordRules}
-            labReferenceDisplay={compact ? "none" : "detail"}
-          />
+          <div className="soap-preview-mode-toggle" aria-label="Preview mode">
+            <button
+              type="button"
+              className={previewMode === "soap" ? "compact-button" : "secondary compact-button"}
+              onClick={() => setPreviewMode("soap")}
+            >
+              SOAP preview
+            </button>
+            <button
+              type="button"
+              className={previewMode === "print" ? "compact-button" : "secondary compact-button"}
+              onClick={() => setPreviewMode("print")}
+            >
+              Print preview
+            </button>
+          </div>
+          {previewMode === "print" ? (
+            <SoapPrintPreview value={soapText} layoutPreferences={layoutPreferences} keywordRules={keywordRules} />
+          ) : (
+            <SoapVisualPreview
+              value={soapText}
+              compact={compact}
+              sourceFields={currentSourceFields()}
+              layoutPreferences={layoutPreferences}
+              keywordRules={keywordRules}
+              labReferenceDisplay={compact ? "none" : "detail"}
+            />
+          )}
         </section>
       </div>
 

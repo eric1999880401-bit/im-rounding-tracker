@@ -326,12 +326,9 @@ export function summarizeMedicationOrders(
   if (maxLines === 0) return [];
   const source = options.includeHidden ? orders : orders.filter((order) => !order.hiddenReason);
   if (source.length === 0) {
-    const hiddenCount = orders.filter((order) => order.hiddenReason).length;
-    if (hiddenCount === 0 || mode === "collapsed") return [];
-    const routineSummary = summarizeHiddenRoutineOrders(orders, mode, maxLines);
-    return routineSummary.length > 0 ? routineSummary : [`常規藥囑已收起 (${hiddenCount})`];
+    return [];
   }
-  if (mode === "collapsed") return [`藥囑 hidden (${source.length})`];
+  if (mode === "collapsed") return [];
 
   const lines = groupOrders(source).map((group) => {
     const items =
@@ -343,10 +340,6 @@ export function summarizeMedicationOrders(
   });
 
   const visible = lines.slice(0, maxLines);
-  const hiddenCount = orders.filter((order) => order.hiddenReason).length;
-  if (mode === "category" && hiddenCount > 0 && visible.length < maxLines) {
-    visible.push(`另有常規藥囑 ${hiddenCount} 筆`);
-  }
   if (lines.length > visible.length) {
     visible[visible.length - 1] = `${visible[visible.length - 1]} +${lines.length - visible.length} categories`;
   }
@@ -358,7 +351,7 @@ export function formatMedicationOrderLinesForDisplay(lines: string[], mode: Orde
   if (cleanLines.length === 0) return [];
   const parsed = parseMedicationOrders(cleanLines.join("\n"));
   if (parsed.length === 0) {
-    if (mode === "collapsed") return [`藥囑 hidden (${cleanLines.length})`];
+    if (mode === "collapsed") return [];
     return cleanLines.slice(0, maxLines).map((line) => safeClinicalLine(line, 110)).filter(Boolean);
   }
   return summarizeMedicationOrders(parsed, { mode, maxLines });

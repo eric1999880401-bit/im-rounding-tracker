@@ -74,10 +74,11 @@ const {
   guardRoundSoapDelta,
   restoreSoapDeltaSection,
 } = await server.ssrLoadModule("/src/soapDeltaGuardrails.ts");
-const { displayPrintLine } = await server.ssrLoadModule("/src/printPriority.ts");
+const { displayPrintLine, selectPriorityPrintItems } = await server.ssrLoadModule("/src/printPriority.ts");
 const { applyClinicalColorMarkup, applyUserKeywordHighlights, clearClinicalColorMarkupAtSelection } = await server.ssrLoadModule("/src/clinicalColorMarkup.ts");
 const { labReferenceText, parseClinicalLabTokens } = await server.ssrLoadModule("/src/labReference.ts");
 const { buildLabVisualSummaryFromText, formatLabVisualSummaryLinesFromText } = await server.ssrLoadModule("/src/labVisualSummary.ts");
+const { formatSoapBasedIsbar } = await server.ssrLoadModule("/src/soapSbar.ts");
 
 function haystack(plan) {
   return [
@@ -1840,6 +1841,65 @@ try {
   if (!malformedDaily.highRiskWarnings.some((warning) => /Malformed daily SOAP draft blocked/i.test(warning))) {
     throw new Error(`Malformed daily update did not produce readable high-risk warning: ${JSON.stringify(malformedDaily.highRiskWarnings)}`);
   }
+  const highYieldBaseline = [
+    "H9-001 SYN-HY 70/M",
+    "Dx: cholangitis sepsis w/ AKI/LFT injury",
+    "PMH: CKD3, AF on apixaban",
+    "",
+    "S:",
+    "- RUQ pain improved after ERCP.",
+    "",
+    "O:",
+    "- V/S: BP 108/66, HR 92, SpO2 95% NC2L",
+    "- Lab: WBC 18.2, Cr 2.7, K 5.6, AST 175, ALT 419, INR 1.8",
+    "- Image: CT A/P 5/20 biliary dilatation, no abscess.",
+    "",
+    "A/P:",
+    "# Cholangitis/sepsis s/p ERCP stent",
+    "- Meropenem 5/20-, f/u B/C/bile Cx and source control.",
+    "# AKI/hyperK",
+    "- Cr 2.7, K 5.6; renal-dose meds, f/u UO/K.",
+    "# LFT/coagulopathy",
+    "- AST/ALT 175/419, INR 1.8; trend LFT/PT-INR after drainage.",
+    "",
+    "Tasks:",
+    "- f/u B/C and bile Cx final",
+    "- clarify Abx duration with ID/GI",
+    "",
+    "DC:",
+    "- Pending: afebrile, Cx plan, renal/LFT trend.",
+  ].join("\n");
+  const sparseCandidate = [
+    "H9-001 SYN-HY 70/M",
+    "Dx: cholangitis",
+    "",
+    "S:",
+    "- RUQ pain better.",
+    "",
+    "O:",
+    "- Lab: WBC 12.1, Cr 2.1, K 4.8",
+    "",
+    "A/P:",
+    "# Cholangitis/sepsis s/p ERCP stent",
+    "- WBC improving.",
+    "",
+    "Tasks:",
+    "- f/u Cx",
+  ].join("\n");
+  const highYieldDaily = guardRoundSoapDelta({
+    workflowMode: "dailyUpdate",
+    baselineText: highYieldBaseline,
+    candidateText: sparseCandidate,
+    sourceFields: { labs: "WBC 12.1, Cr 2.1, K 4.8" },
+  });
+  if (!/WBC 12\.1, Cr 2\.1, K 4\.8/i.test(highYieldDaily.acceptedText)) {
+    throw new Error(`Sparse lab update did not apply new lab:\n${highYieldDaily.acceptedText}`);
+  }
+  for (const required of [/Meropenem 5\/20-/i, /AST\/ALT 175\/419, INR 1\.8/i, /CT A\/P 5\/20/i, /f\/u B\/C and bile Cx final/i, /Pending: afebrile, Cx plan/i]) {
+    if (!required.test(highYieldDaily.acceptedText)) {
+      throw new Error(`Daily patch dropped reviewed high-yield line ${required}:\n${highYieldDaily.acceptedText}`);
+    }
+  }
   console.log("PASS AI SOAP delta guardrails preserve reviewed baseline unless source supports changes");
   supplementalPasses += 1;
 } catch (error) {
@@ -2330,6 +2390,53 @@ try {
 }
 
 try {
+  const sbarPatient = {
+    ...emptyPatient(),
+    id: "soap-sbar",
+    bed: "S5-001",
+    patientCode: "SYN-SBAR",
+    age: 72,
+    sex: "F",
+    primaryDiagnosis: "PNA/sepsis w/ AKI",
+    underlyingDiseases: "CKD3; AF on apixaban",
+  };
+  const reviewedSoap = [
+    "S5-001 SYN-SBAR 72/F",
+    "Dx: PNA/sepsis w/ AKI",
+    "PMH: CKD3; AF on apixaban",
+    "S:",
+    "- dyspnea improved, still weak.",
+    "O:",
+    "- V/S: BP 104/62, HR 96, SpO2 95% NC2L",
+    "- Lab: WBC 15.2, Cr 2.3, K 5.2",
+    "- Image: CXR 6/1 RLL PNA improving.",
+    "A/P:",
+    "# PNA/sepsis, improving",
+    "- Ceftriaxone 6/1-, f/u B/C final and O2 wean.",
+    "# AKI on CKD",
+    "- Cr 2.3, K 5.2; renal-dose meds, f/u UO/K.",
+    "Tasks:",
+    "- f/u B/C final",
+    "- wean O2 as tolerated",
+    "DC:",
+    "- Pending: O2, Abx plan, renal trend.",
+  ].join("\n");
+  const sbar = formatSoapBasedIsbar(sbarPatient, [{ ...emptyDailyNote("2026-06-01"), soapText: reviewedSoap, soapStatus: "reviewed" }], "2026-06-01");
+  if (!/^I: .*SYN-SBAR.*Dx: PNA\/sepsis/im.test(sbar) || !/^S: .*dyspnea improved/im.test(sbar) || !/Ceftriaxone 6\/1-|f\/u B\/C final|Cr 2\.3|O2/i.test(sbar)) {
+    throw new Error(`SOAP-based SBAR did not preserve reviewed SOAP facts:\n${sbar}`);
+  }
+  const insufficient = formatSoapBasedIsbar(sbarPatient, [{ ...emptyDailyNote("2026-06-01"), soapText: reviewedSoap, soapStatus: "draft" }], "2026-06-01");
+  if (!/^insufficient reviewed SOAP\/context/i.test(insufficient)) {
+    throw new Error(`SOAP-based SBAR should refuse unreviewed SOAP:\n${insufficient}`);
+  }
+  console.log("PASS SOAP-based iSBAR uses reviewed SOAP and refuses unsupported fallback");
+  supplementalPasses += 1;
+} catch (error) {
+  failures.push({ name: "SOAP-based iSBAR uses reviewed SOAP and refuses unsupported fallback", error: error instanceof Error ? error.message : String(error) });
+  console.error(`FAIL SOAP-based iSBAR uses reviewed SOAP and refuses unsupported fallback: ${failures[failures.length - 1].error}`);
+}
+
+try {
   const noisyOrders = [
     "2026/05/13 Teicoplanin 400 mg IV qd 5/13-",
     "Levofloxacin 500 mg PO qd x5 days",
@@ -2405,13 +2512,8 @@ try {
     "summary",
     6,
   );
-  if (
-    routineOnlyDisplayLines.length !== 1 ||
-    !/Amlodipine.*PO.*qd.*Atorvastatin.*PO.*qn/i.test(routineOnlyDisplayLines[0]) ||
-    routineOnlyDisplayLines.some((line) => routineEnglishLabelPattern.test(line)) ||
-    routineOnlyDisplayLines[0].length > 110
-  ) {
-    throw new Error(`All-routine order display should abbreviate meds instead of hiding all content:\n${routineOnlyDisplayLines.join("\n")}`);
+  if (routineOnlyDisplayLines.length !== 0) {
+    throw new Error(`All-routine order display should stay off Board/Print:\n${routineOnlyDisplayLines.join("\n")}`);
   }
   const mixedCategoryDisplayLines = formatMedicationOrderLinesForDisplay(
     ["Order: Teicoplanin 400 mg IV qd 5/13-", "Order: Pantoprazole 40 mg IV qd"],
@@ -2421,16 +2523,16 @@ try {
   if (
     mixedCategoryDisplayLines.some((line) => routineEnglishLabelPattern.test(line)) ||
     mixedCategoryDisplayLines.some((line) => /Pantoprazole/i.test(line)) ||
-    !mixedCategoryDisplayLines.some((line) => /另有常規藥囑\s*1\s*筆/.test(line))
+    mixedCategoryDisplayLines.some((line) => /常規|routine|hidden/i.test(line))
   ) {
-    throw new Error(`Category order display should hide routine meds without English Routine labels:\n${mixedCategoryDisplayLines.join("\n")}`);
+    throw new Error(`Category order display should hide routine meds without placeholder labels:\n${mixedCategoryDisplayLines.join("\n")}`);
   }
   const collapsedRoutineLines = formatMedicationOrderLinesForDisplay(
     ["Order: Amlodipine 5 mg PO qd", "Order: Atorvastatin 20 mg PO qn"],
     "collapsed",
     6,
   );
-  if (collapsedRoutineLines.some((line) => /Amlodipine|Atorvastatin/i.test(line))) {
+  if (collapsedRoutineLines.length !== 0) {
     throw new Error(`Collapsed order display should remain intentionally hidden:\n${collapsedRoutineLines.join("\n")}`);
   }
   console.log("PASS Medication order cleaner summarizes noisy HIS orders without saving raw text");

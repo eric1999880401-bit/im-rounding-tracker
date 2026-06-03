@@ -136,6 +136,7 @@ function splitPrintInput(value: string | string[]) {
   return lines
     .map((line) => cleanPrintLine(line))
     .filter(Boolean)
+    .filter((line) => !isRoutineHiddenPlaceholder(line))
     .filter((line) => {
       const key = displayPrintLine(line).toLowerCase();
       if (!key || seen.has(key)) return false;
@@ -144,10 +145,19 @@ function splitPrintInput(value: string | string[]) {
     });
 }
 
+function isRoutineHiddenPlaceholder(line: string) {
+  return /\b(?:routine hidden|hidden routine|low-value routine)\b/i.test(line) ||
+    /(?:常規藥囑已收起|另有常規藥囑|藥囑 hidden|藥囑已收起)/i.test(line);
+}
+
 function requiredSignal(line: string, fallbackKind: PrintVisualKind, visual: PrintVisualItem) {
   if (/\[\[(?:red|orange|yellow|blue|green|purple)(?:-(?:highlight|text))?:/i.test(line)) return true;
   if (visual.tone === "critical" || visual.tone === "important") return true;
   if (visual.kind === "lab" || /^\s*(?:Lab|Labs?)\s*:/i.test(line)) return true;
+  if (fallbackKind === "ap") return true;
+  if (fallbackKind === "image" && /\b(?:ct|mri|cxr|x-?ray|echo|sono|ultrasound|ercp|egd|scope)\b/i.test(line)) return true;
+  if (fallbackKind === "task" && /\b(?:pending|f\/u|follow|call|consult|opd|certificate|barrier|dc|discharge|culture|cx|abx|antibiotic|hold|resume|restart|stop)\b/i.test(line)) return true;
+  if (fallbackKind === "dc") return true;
   if (fallbackKind === "red") return true;
   return /\b(?:positive culture|b\/c|bcx|sputum cx|bile cx|abx|antibiotic|teicoplanin|vancomycin|meropenem|ceftriaxone|levofloxacin|metronidazole|source control|ercp|stent|tap|thoracentesis|paracentesis|procedure|consult|opd|certificate|barrier|discharge tomorrow|restart|hold|apixaban|heparin|warfarin|insulin|pressor|oxygen|crrt|aki|hyperk|hypok|lactate|inr|cr\s*\d|hb\s*\d|plt\s*\d|k\s*\d|wbc\s*\d|ct\b|mri\b|cxr\b|x-?ray|echo\b|sono|ultrasound|egd\b)\b/i.test(line);
 }

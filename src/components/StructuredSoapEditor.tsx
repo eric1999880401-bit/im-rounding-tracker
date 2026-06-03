@@ -202,6 +202,7 @@ function LineEditor({
           controlRef={textareaRef}
         />
         <div className="structured-soap-line-actions">
+          <button type="button" className="secondary compact-button" onClick={() => onChange({ ...line, tone: "important" })} title="Keep in Print">Keep</button>
           <button type="button" className="secondary compact-button" onClick={onMoveUp} title="Move up">Up</button>
           <button type="button" className="secondary compact-button" onClick={onMoveDown} title="Move down">Down</button>
           <button type="button" className="secondary compact-button" onClick={onRemove} title="Remove">Remove</button>
@@ -317,6 +318,7 @@ function ProblemEditor({
             </select>
           </div>
           <div className="structured-soap-line-actions">
+            <button type="button" className="secondary compact-button" onClick={() => onChange({ ...problem, tone: "important" })} title="Keep in Print">Keep</button>
             <button type="button" className="secondary compact-button" onClick={onMoveUp} title="Move problem up">Up</button>
             <button type="button" className="secondary compact-button" onClick={onMoveDown} title="Move problem down">Down</button>
             <button type="button" className="secondary compact-button" onClick={onRemove} title="Remove problem">Remove</button>

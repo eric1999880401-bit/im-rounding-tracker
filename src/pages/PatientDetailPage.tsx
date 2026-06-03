@@ -913,6 +913,9 @@ function PatientDetailPage({
       <details className="panel detail-more-section">
         <summary>Advanced / legacy fields</summary>
         <div className="detail-more-stack">
+          <p className="muted">
+            Board and Print read the reviewed SOAP above. Changes in these legacy fields are preserved for compatibility, but they will not change the main rounding output until imported into SOAP and saved as reviewed SOAP.
+          </p>
           <details className="detail-more-section" open={currentPatient.isNewAdmission || currentPatient.showAdmissionBriefOnPrint}>
             <summary>Admission Brief</summary>
             <AdmissionBriefForm

@@ -85,11 +85,11 @@ function makeTaskLine(value: string): SoapEditorLine {
 }
 
 function makeProblem(problem: SoapApProblem): SoapEditorProblem {
-  const classified = classifyClinicalLine(`${problem.title} ${problem.lines.join(" ")}`, { fallbackKind: "ap", explicitTone: bangTone(problem.title) });
+  const explicitTitleTone = bangTone(problem.title);
   return {
     id: createId("soap-ap"),
     title: withoutTonePrefix(problem.title || "Problem"),
-    tone: classified.tone === "info" ? "plain" : classified.tone,
+    tone: explicitTitleTone ?? "plain",
     lines: problem.lines.map((line) => makeLine(line, "ap")),
   };
 }
@@ -209,9 +209,10 @@ function serializeTaskLine(line: SoapEditorLine) {
 
 function serializeProblem(problem: SoapEditorProblem) {
   const title = safeClinicalLine(problem.title, 110) || "Problem";
+  const titlePrefix = problem.tone === "critical" ? "!! " : problem.tone === "important" ? "! " : "";
   const lines = problem.lines.map((line) => serializeLine(line, "ap")).filter(Boolean).slice(0, 2);
   return {
-    title,
+    title: `${titlePrefix}${title}`.trim(),
     lines,
   };
 }

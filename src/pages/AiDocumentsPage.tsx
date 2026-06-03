@@ -4,6 +4,7 @@ import type { AiDocumentDraft, AiDocumentType, DailyNote, DailyNotesByPatient, G
 import { getAdmissionSummaryText, nowIso, todayKey } from "../utils";
 import { formatClinicalDocumentDraft, getClinicalDocumentSection } from "../clinicalDocumentFormat";
 import { applyClinicalKnowledgeToText, formatRuleBasedAdmissionSummary, formatRuleBasedSbar, formatRuleBasedWeeklySummary } from "../clinicalKnowledge";
+import { formatSoapBasedIsbar } from "../soapSbar";
 
 const OTHER_PATIENT_ID = "__other_patient__";
 
@@ -201,6 +202,17 @@ function formatRuleReviewedDocument(documentType: AiDocumentType, plan: Generate
   return "";
 }
 
+function localIsbarDraft(text: string): AiDocumentDraft {
+  return {
+    documentType: "isbar",
+    title: "SOAP-based SBAR",
+    conciseSummary: text.split(/\r?\n/).find((line) => line.trim())?.trim() ?? "",
+    sections: [{ heading: "SBAR", content: text }],
+    followUpItems: [],
+    uncertainty: [],
+  };
+}
+
 function AiDocumentsPage({ patients, dailyNotesByPatient = {}, onSavePatient }: AiDocumentsPageProps) {
   const activePatients = patients.filter((patient) => patient.status === "active");
   const [patientId, setPatientId] = useState("");
@@ -237,6 +249,19 @@ function AiDocumentsPage({ patients, dailyNotesByPatient = {}, onSavePatient }: 
     setStatusMessage("");
     setLoading(true);
     try {
+      if (documentType === "isbar" && selectedPatient) {
+        const formatted = formatSoapBasedIsbar(selectedPatient, patientNotes, dateTo || todayKey(), rawText);
+        if (/^insufficient reviewed SOAP\/context/i.test(formatted)) {
+          setError(formatted);
+          return;
+        }
+        setDraft(localIsbarDraft(formatted));
+        setDraftId("local-soap-sbar");
+        setModel("reviewed-soap");
+        setEditableText(formatted);
+        setStatusMessage("SBAR drafted from reviewed SOAP and optional pasted context. Review before saving.");
+        return;
+      }
       const result = await generateClinicalDocument({
         patientId: selectedPatient?.id ?? "",
         documentType,

@@ -444,6 +444,7 @@ interface RoundSoapCallableInput {
   rawText?: unknown;
   currentSoapBaseline?: unknown;
   deidentifiedConfirmed?: unknown;
+  qualityMode?: unknown;
   userStyleProfile?: unknown;
   patientContext?: CallableInput["patientContext"];
 }
@@ -495,6 +496,23 @@ function getOpenAiApiKey() {
 
 function getModel() {
   return process.env.OPENAI_MODEL || DEFAULT_MODEL;
+}
+
+function sanitizeQualityMode(value: unknown) {
+  const mode = String(value ?? "").trim();
+  if (mode === "highAccuracy") return "highAccuracy";
+  if (mode === "balanced") return "balanced";
+  return "fast";
+}
+
+function getModelForQuality(qualityMode: "fast" | "balanced" | "highAccuracy") {
+  if (qualityMode === "highAccuracy") {
+    return process.env.OPENAI_MODEL_HIGH_ACCURACY || process.env.OPENAI_MODEL_BALANCED || getModel();
+  }
+  if (qualityMode === "balanced") {
+    return process.env.OPENAI_MODEL_BALANCED || getModel();
+  }
+  return process.env.OPENAI_MODEL_FAST || getModel();
 }
 
 function asStringArray(value: unknown) {
@@ -1556,6 +1574,7 @@ export const generateRoundSoap = onCall(
     const rawText = String(data.rawText ?? "").trim();
     const currentSoapBaseline = truncateString(data.currentSoapBaseline, 12000);
     const deidentifiedConfirmed = data.deidentifiedConfirmed === true;
+    const qualityMode = sanitizeQualityMode(data.qualityMode);
 
     if (!patientId) {
       throw new HttpsError("invalid-argument", "patientId is required.");
@@ -1597,7 +1616,7 @@ export const generateRoundSoap = onCall(
       ...(sanitizePatientContext(data.patientContext) ?? {}),
     };
     const userStyleProfile = sanitizeUserStyleProfile(data.userStyleProfile);
-    const model = getModel();
+    const model = getModelForQuality(qualityMode);
     const openAiResponse = await fetch("https://api.openai.com/v1/responses", {
       method: "POST",
       headers: {
@@ -1680,6 +1699,7 @@ export const generateRoundSoap = onCall(
       warnings: Array.isArray(parsed.warnings) ? parsed.warnings.map((item) => truncateString(item, 240)).slice(0, 8) : [],
       highlightHints: Array.isArray(parsed.highlightHints) ? parsed.highlightHints.map((item) => truncateString(item, 180)).slice(0, 12) : [],
       model,
+      qualityMode,
     };
   },
 );

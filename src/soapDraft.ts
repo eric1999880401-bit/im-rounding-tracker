@@ -55,12 +55,12 @@ function cleanSoapLine(value: unknown, maxChars = SOAP_LINE_LIMIT) {
     .trim();
 }
 
-function uniqueSoapLines(values: unknown[], maxItems = 20, maxChars = SOAP_LINE_LIMIT) {
+function uniqueSoapLines(values: unknown[], maxItems = 20, maxChars = SOAP_LINE_LIMIT, splitSemicolon = true) {
   const seen = new Set<string>();
   const lines: string[] = [];
 
   values
-    .flatMap((value) => String(value ?? "").split(/\r?\n|;\s+/))
+    .flatMap((value) => String(value ?? "").split(splitSemicolon ? /\r?\n|;\s+/ : /\r?\n/))
     .map((line) => cleanSoapLine(line, maxChars))
     .filter(Boolean)
     .forEach((line) => {
@@ -201,7 +201,7 @@ function dedupeApProblems(problems: SoapApProblem[]) {
   return problems
     .map((problem) => ({
       title: cleanSoapLine(problem.title, 80),
-      lines: uniqueSoapLines(problem.lines, 5, 140),
+      lines: uniqueSoapLines(problem.lines, 5, 140, false),
     }))
     .filter((problem) => {
       if (!problem.title && problem.lines.length === 0) return false;
@@ -654,6 +654,17 @@ export function aiSoapDraftToSoapDraft(draft: AiSoapDraft, patient?: Patient, se
   return ensureAntibioticApInDraft(soapDraft, aiDraftAntibioticSourceText(draft), selectedDate);
 }
 
+function formatApHeading(title: string) {
+  const raw = String(title || "Problem").trim();
+  const tonePrefix = raw.match(/^!+\s*/)?.[0] ?? "";
+  const clean = cleanSoapLine(raw.replace(/^!+\s*/, ""), 90) || "Problem";
+  return `${tonePrefix}# ${clean}`.trim();
+}
+
+function plainApTitle(title: string) {
+  return cleanSoapLine(String(title || "Problem").replace(/^!+\s*/, ""), 90) || "Problem";
+}
+
 export function formatSoapDraft(draft: SoapDraft) {
   const sections: string[] = [];
   if (draft.header.length > 0) sections.push(draft.header.join("\n"));
@@ -663,7 +674,7 @@ export function formatSoapDraft(draft: SoapDraft) {
     `A/P:\n${
       draft.apProblems.length > 0
         ? draft.apProblems
-            .map((problem) => [`# ${problem.title || "Problem"}`, ...problem.lines.map((line) => `- ${line}`)].join("\n"))
+            .map((problem) => [formatApHeading(problem.title), ...problem.lines.map((line) => `- ${line}`)].join("\n"))
             .join("\n")
         : "# No active A/P\n- -"
     }`,
@@ -739,7 +750,7 @@ export function formatSoapDraftForStyle(draft: SoapDraft, style: SoapEditorForma
         ? next.apProblems
             .map((problem, index) => {
               const body = problem.lines.join("; ");
-              return `${index + 1}. ${problem.title || "Problem"}${body ? `: ${body}` : ""}`;
+              return `${index + 1}. ${plainApTitle(problem.title)}${body ? `: ${body}` : ""}`;
             })
             .join("\n")
         : "1. No active A/P"
@@ -820,7 +831,7 @@ function sectionFromLine(line: string): { section: SoapSection; label: string; r
 
 function problemHeadingText(line: string) {
   const raw = normalizeSoapSymbols(line).trim().replace(/^!+\s*/, "");
-  const stripped = stripSoapBullet(line).trim().replace(/^!\s*/, "");
+  const stripped = stripSoapBullet(line).trim().replace(/^!+\s*/, "");
   const hash = stripped.match(/^#+\s*(.+)$/);
   if (hash) return cleanSoapLine(hash[1], 90);
   const numbered = raw.match(/^\(?\d{1,2}[\.)]\s+([^:]{3,90})$/) ?? raw.match(/^\d{1,2}\s*[\u3001]\s*([^:]{3,90})$/);
