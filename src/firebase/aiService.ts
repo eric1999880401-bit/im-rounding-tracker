@@ -62,8 +62,12 @@ export async function analyzePatientBatchText(input: AnalyzePatientBatchTextInpu
 }
 
 export async function generateClinicalDocument(input: GenerateClinicalDocumentInput) {
-  const result = await generateClinicalDocumentCallable(input);
-  return result.data;
+  try {
+    const result = await generateClinicalDocumentCallable(input);
+    return result.data;
+  } catch (error) {
+    throw new Error(aiCallableMessage(error, "AI document generation"));
+  }
 }
 
 export async function generateRoundSoap(input: GenerateRoundSoapInput) {

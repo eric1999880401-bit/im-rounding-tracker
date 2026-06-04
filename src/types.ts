@@ -359,12 +359,14 @@ export interface GenerateClinicalDocumentInput {
   dateTo?: string;
   deidentifiedConfirmed: boolean;
   storeRawText?: boolean;
+  qualityMode?: "fast" | "balanced" | "highAccuracy";
 }
 
 export interface GenerateClinicalDocumentResult {
   draftId: string;
   draft: AiDocumentDraft;
   model: string;
+  qualityMode?: "fast" | "balanced" | "highAccuracy";
   rawTextPreview: string;
 }
 

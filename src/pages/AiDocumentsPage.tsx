@@ -63,6 +63,13 @@ function ensureWeeklyOpening(value: string) {
 }
 
 const isbarHeadings = ["Situation", "Background", "Assessment", "Recommendation"] as const;
+type AiQualityMode = "fast" | "balanced" | "highAccuracy";
+
+const qualityModeOptions: Array<{ value: AiQualityMode; label: string; helper: string }> = [
+  { value: "fast", label: "Fast / cheap", helper: "Best for simple formatting or low-risk drafts." },
+  { value: "balanced", label: "Balanced", helper: "Default for admission, discharge, weekly, and SBAR drafts." },
+  { value: "highAccuracy", label: "High accuracy", helper: "Use for complex ICU/oncology handoff or when cheap draft fails." },
+];
 
 function compactIsbarContent(value: string) {
   return value
@@ -217,6 +224,7 @@ function AiDocumentsPage({ patients, dailyNotesByPatient = {}, onSavePatient }: 
   const activePatients = patients.filter((patient) => patient.status === "active");
   const [patientId, setPatientId] = useState("");
   const [documentType, setDocumentType] = useState<AiDocumentType>("isbar");
+  const [qualityMode, setQualityMode] = useState<AiQualityMode>("balanced");
   const [rawText, setRawText] = useState("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState(todayKey());
@@ -270,6 +278,7 @@ function AiDocumentsPage({ patients, dailyNotesByPatient = {}, onSavePatient }: 
         dateTo,
         deidentifiedConfirmed,
         storeRawText,
+        qualityMode,
       });
       const rulePlan = applyClinicalKnowledgeToText(
         [rawText, patientRuleContext(selectedPatient, notesInRange)].filter(Boolean).join("\n"),
@@ -282,7 +291,7 @@ function AiDocumentsPage({ patients, dailyNotesByPatient = {}, onSavePatient }: 
       const formatted = ruleFormatted || formatClinicalDocumentDraft(result.draft);
       setDraft(result.draft);
       setDraftId(result.draftId);
-      setModel(result.model);
+      setModel(`${result.model} / ${result.qualityMode ?? qualityMode}`);
       setEditableText(formatted);
       const ruleNote = hasClinicalRuleSignal(rulePlan)
         ? ` Clinical Knowledge review applied: ${rulePlan.ruleMatches.map((match) => match.title).join(", ") || "needs clinical review"}.`
@@ -405,6 +414,16 @@ function AiDocumentsPage({ patients, dailyNotesByPatient = {}, onSavePatient }: 
               ))}
             </select>
           </label>
+          <label>
+            Model quality
+            <select value={qualityMode} onChange={(event) => setQualityMode(event.target.value as AiQualityMode)}>
+              {qualityModeOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
           {documentType === "weeklySummary" && (
             <>
               <label>
@@ -421,6 +440,8 @@ function AiDocumentsPage({ patients, dailyNotesByPatient = {}, onSavePatient }: 
             {selectedOption.helper}
             {isOtherPatient && " This draft will not be saved into any patient record."}
             {documentType === "weeklySummary" && !isOtherPatient && ` ${notesInRange.length} SOAP note(s) selected.`}
+            {" "}
+            {qualityModeOptions.find((option) => option.value === qualityMode)?.helper}
           </p>
           <label className="span-2">
             Additional de-identified source text

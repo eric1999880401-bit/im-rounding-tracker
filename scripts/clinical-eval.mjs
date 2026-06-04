@@ -209,7 +209,7 @@ const cases = [
     text: "H11-032 Ramsay Hunt, suspected neutropenic fever now afebrile after antibiotics. WBC 1.6k still low, SLE on dexamethasone, INF take over, f/u ANC and cultures.",
     expect(plan) {
       assertDocumentIncludes(formatRuleBasedSbar(plan), /^Situation: .*neutropenic fever.*WBC 1\.6k/im, "SBAR situation should lead with neutropenic fever and WBC");
-      assertDocumentIncludes(formatRuleBasedWeeklySummary(plan), /Current focus: .*neutropenic fever.*WBC 1\.6k/i, "weekly focus should lead with neutropenic fever and WBC");
+      assertDocumentIncludes(formatRuleBasedWeeklySummary(plan), /^During this week, .*neutropenic fever.*WBC 1\.6k/i, "weekly focus should lead with neutropenic fever and WBC");
     },
   },
   {
@@ -440,9 +440,22 @@ try {
   }
   assertOneMinuteAdmissionBrief(admission, "reasoning admission summary");
   assertDocumentIncludes(admission, /AKI\/hyperK|Plt-limited anticoag|aspiration risk/i, "admission summary should lead with current transfer risks");
-  assertDocumentIncludes(weekly, /Problem-Based A\/P[\s\S]*AKI on CKD with hyperK[\s\S]*Pending \/ Disposition/i, "weekly summary should keep A/P and pending structure");
+  if (/Problem-Based A\/P|Pending \/ Disposition|\n\s*-/i.test(weekly)) {
+    throw new Error(`weekly summary should be paragraph format without headings/bullets: ${weekly}`);
+  }
+  assertDocumentIncludes(weekly, /During this week[\s\S]*AKI on CKD with hyperK[\s\S]*Pending\/dispo/i, "weekly summary should keep active problems and pending/dispo in paragraph form");
   assertDocumentIncludes(sbar, /^Situation: .*septic shock.*AKI\/hyperK.*O2\/aspiration/im, "SBAR should lead with transfer risk");
   assertDocumentIncludes(sbar, /Recommendation:[\s\S]*f\/u Cx\/Abx de-escalation[\s\S]*restart anticoag only after Hb\/Plt\/bleed review/i, "SBAR should keep concrete actions");
+  const dischargeCourse = formatClinicalDocumentDraft({
+    ...baseDraft,
+    documentType: "dischargeHospitalCourse",
+    sections: [
+      { heading: "Hospital Course", content: "treated for CAP/sepsis w/ ceftriaxone after B/C; lactate 3.1 -> 1.4, O2 NC3L -> RA, CXR RLL PNA improved." },
+      { heading: "Disposition", content: "OPD chest clinic f/u and oral Abx completion" },
+    ],
+    followUpItems: ["OPD chest clinic f/u and oral Abx completion"],
+  });
+  assertDocumentIncludes(dischargeCourse, /^After admission, .*lactate 3\.1.*O2 NC3L -> RA.*under relative stable condition, the patient was discharged w\/ OPD chest clinic f\/u/i, "discharge course should enforce opener, specific values, and closing");
   console.log("PASS Shared document formatter projects reasoning into concise admission/weekly/SBAR drafts");
   supplementalPasses += 1;
 } catch (error) {
@@ -1700,6 +1713,9 @@ try {
   if (!/V\/S: BP 108\/66, HR 92, SpO2 97% RA/i.test(vitalsOnly.acceptedText)) {
     throw new Error(`Vitals-only update did not apply V/S:\n${vitalsOnly.acceptedText}`);
   }
+  if (/V\/S: BP 112\/70, HR 88, SpO2 96% RA/i.test(vitalsOnly.acceptedText)) {
+    throw new Error(`Vitals-only update kept stale V/S line:\n${vitalsOnly.acceptedText}`);
+  }
   if (!/cough improving/i.test(vitalsOnly.acceptedText) || !/Ceftriaxone 5\/19-/i.test(vitalsOnly.acceptedText) || !/Pending: afebrile/i.test(vitalsOnly.acceptedText)) {
     throw new Error(`Vitals-only update rewrote protected baseline sections:\n${vitalsOnly.acceptedText}`);
   }
@@ -1752,6 +1768,13 @@ try {
   if (!/Lab: WBC 10\.2 from 13\.0, Hb 9\.4 stable, Cr 2\.0 from 1\.6/i.test(labOnly.acceptedText)) {
     throw new Error(`Lab-only update did not apply lab trend:\n${labOnly.acceptedText}`);
   }
+  if (/Lab: WBC 13\.0, Hb 9\.4, Cr 1\.6/i.test(labOnly.acceptedText)) {
+    throw new Error(`Lab-only update kept stale raw lab line:\n${labOnly.acceptedText}`);
+  }
+  const labOnlyVisual = formatLabVisualSummaryLinesFromText(labOnly.acceptedText, { maxGroups: 8, maxItemsPerGroup: 8 }).join("\n");
+  if (!/WBC 10\.2.*\(13\)|Cr 2\.0.*\(1\.6\)/i.test(labOnlyVisual)) {
+    throw new Error(`Lab visual summary did not display current(previous) trend:\n${labOnlyVisual}`);
+  }
   if (!/# PNA \/ bacteremia[\s\S]*Ceftriaxone 5\/19-[\s\S]*WBC improving[\s\S]*# AKI on CKD[\s\S]*Cr 2\.0 from 1\.6/i.test(labOnly.acceptedText)) {
     throw new Error(`Lab-only update did not merge facts under existing A/P titles:\n${labOnly.acceptedText}`);
   }
@@ -1766,8 +1789,11 @@ try {
     candidateText: ordersCandidate,
     sourceFields: { orders: "Ceftriaxone 5/19-, VS q4h, KCl replacement" },
   });
-  if (!/Order: Ceftriaxone 5\/19-, VS q4h, KCl replacement/i.test(ordersOnly.acceptedText) || !/Ceftriaxone 5\/19-, f\/u B\/C clearance/i.test(ordersOnly.acceptedText)) {
+  if (!/Ceftriaxone 5\/19-, VS q4h, KCl replacement/i.test(ordersOnly.acceptedText) || !/Ceftriaxone 5\/19-, f\/u B\/C clearance/i.test(ordersOnly.acceptedText)) {
     throw new Error(`Orders-only update did not isolate order changes from A/P:\n${ordersOnly.acceptedText}`);
+  }
+  if (/Broad new A\/P rewrite/i.test(ordersOnly.acceptedText)) {
+    throw new Error(`Orders-only update accepted unrelated A/P rewrite:\n${ordersOnly.acceptedText}`);
   }
   const acceptedAp = acceptSoapDeltaSection(vitalsOnly.acceptedText, unsafeVitalsCandidate, "ap");
   if (!/Stop Ceftriaxone/i.test(acceptedAp)) {
@@ -1892,7 +1918,7 @@ try {
     candidateText: sparseCandidate,
     sourceFields: { labs: "WBC 12.1, Cr 2.1, K 4.8" },
   });
-  if (!/WBC 12\.1, Cr 2\.1, K 4\.8/i.test(highYieldDaily.acceptedText)) {
+  if (!/WBC 12\.1 \(18\.2\), Cr 2\.1 \(2\.7\), K 4\.8 \(5\.6\)/i.test(highYieldDaily.acceptedText)) {
     throw new Error(`Sparse lab update did not apply new lab:\n${highYieldDaily.acceptedText}`);
   }
   for (const required of [/Meropenem 5\/20-/i, /AST\/ALT 175\/419, INR 1\.8/i, /CT A\/P 5\/20/i, /f\/u B\/C and bile Cx final/i, /Pending: afebrile, Cx plan/i]) {
@@ -2113,6 +2139,10 @@ try {
   }
   if (!isOrderSoapLine("Complete Levofloxacin PO x5 days") || !isOrderSoapLine("Abx: Teicoplanin 5/13-") || isOrderSoapLine("f/u CBC tomorrow")) {
     throw new Error("Order detection did not catch medication orders without promoting routine tasks");
+  }
+  const parsedOrdersSoap = parseSoapText("Orders:\n- Teicoplanin 5/13-\n藥囑:\n- VS q4h");
+  if (parsedOrdersSoap.taskLines.length < 2 || !parsedOrdersSoap.taskLines.some((line) => /Teicoplanin/i.test(line)) || !parsedOrdersSoap.taskLines.some((line) => /VS q4h/i.test(line))) {
+    throw new Error(`SOAP parser did not accept Orders/藥囑 section as task/order content: ${JSON.stringify(parsedOrdersSoap.taskLines)}`);
   }
   if (isDcSoapLineVisible("Barrier: oxygen requirement", layout) || !isDcSoapLineVisible("Pending: meds/OPD/certificate", layout)) {
     throw new Error("DC barrier/prep layout filtering was incorrect");

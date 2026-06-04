@@ -27,6 +27,7 @@ const { classifyClinicalLine } = await server.ssrLoadModule("/src/clinicalLineCl
 const {
   buildUserAiStyleProfile,
   isDcSoapLineVisible,
+  isLayoutSectionVisible,
   isObjectiveSoapLineVisible,
   isOrderSoapLine,
   isTaskSoapLineVisible,
@@ -115,16 +116,20 @@ function surfaceSnapshot(patient, notes, date, layout = makeDefaultLayout()) {
   const boardDraft = patientToSoapDraft(patient, notes, date);
   const boardText = formatSoapDraft(boardDraft);
   const visibleObjective = draft.oLines.filter((line) => isObjectiveSoapLineVisible(line, layout));
-  const visibleTaskLines = draft.taskLines.filter((line) => isTaskSoapLineVisible(line, layout));
+  const visibleOrderLines = isLayoutSectionVisible(layout, "orders")
+    ? draft.taskLines.filter(isOrderSoapLine)
+    : [];
+  const visibleTaskLines = isLayoutSectionVisible(layout, "tasks")
+    ? draft.taskLines.filter((line) => !isOrderSoapLine(line) && isTaskSoapLineVisible(line, layout))
+    : [];
   const visibleDcLines = draft.dcLines.filter((line) => isDcSoapLineVisible(line, layout));
-  const visibleOrderLines = visibleTaskLines.filter(isOrderSoapLine);
   const orderDisplay = formatMedicationOrderLinesForDisplay(visibleOrderLines, layout.orderDisplayMode, 6);
   const printApLabels = draft.apProblems.flatMap((problem) => [problem.title, ...problem.lines]).map((line) =>
     classifyClinicalLine(line, { fallbackKind: "ap", lockKind: true }).label,
   );
   const imageLines = draft.oLines.filter((line) => /^Image:/i.test(line)).map((line) => line.replace(/^Image:\s*/i, ""));
   const apPrintLines = draft.apProblems.map((problem) => [problem.title, ...problem.lines].filter(Boolean).join(": "));
-  const taskPrintLines = [...orderDisplay, ...visibleTaskLines.filter((line) => !isOrderSoapLine(line)), ...visibleDcLines.map((line) => (/^Prep:/i.test(line) ? line : `DC: ${line}`))];
+  const taskPrintLines = [...orderDisplay, ...visibleTaskLines, ...visibleDcLines.map((line) => (/^Prep:/i.test(line) ? line : `DC: ${line}`))];
   const printPriorityText = [
     ...selectPriorityPrintItems(visibleObjective, { fallbackKind: "other", maxItems: 5, maxChars: 112 }),
     ...selectPriorityPrintItems(imageLines, { fallbackKind: "image", maxItems: 3, maxChars: 112 }),
@@ -336,7 +341,7 @@ function wardScenario() {
   });
   assertIncludes(mixedDelta.acceptedText, /Lab: WBC 12\.8 from 18\.4, Cr 1\.7 from 2\.1, K 3\.4/i, "ward lab trend");
   assertIncludes(mixedDelta.acceptedText, /Image: CXR 5\/2 RLL opacity improving/i, "ward image study/date");
-  assertIncludes(mixedDelta.acceptedText, /Order: Abx: Ceftriaxone.*Azithromycin/i, "ward order summary in SOAP");
+  assertIncludes(mixedDelta.acceptedText, /Abx: Ceftriaxone.*Azithromycin/i, "ward order summary in SOAP");
   assertIncludes(mixedDelta.acceptedText, /LFT\/coag abnormal/i, "ward LFT A/P preserved");
   assertNotIncludes(mixedDelta.acceptedText, /Pantoprazole|Senna|Vitamin B/i, "ward routine orders hidden");
 

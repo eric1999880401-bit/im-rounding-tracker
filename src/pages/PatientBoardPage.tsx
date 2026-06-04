@@ -1491,14 +1491,17 @@ function PatientBoardPage({
               .map((problem) => [problem.title, ...problem.lines].filter(Boolean).join(": "))
               .filter(Boolean)
               .join("； ");
-            const visibleTaskSourceLines = soap.taskLines.filter((line) => isTaskSoapLineVisible(line, roundingLayout));
-            const visibleOrderLines = visibleTaskSourceLines.filter(isOrderSoapLine);
+            const visibleOrderLines = isLayoutSectionVisible(roundingLayout, "orders")
+              ? soap.taskLines.filter(isOrderSoapLine)
+              : [];
             const displayOrderLines = formatMedicationOrderLinesForDisplay(
               visibleOrderLines,
               roundingLayout.orderDisplayMode,
               roundingLayout.boardDensity === "normal" ? 6 : 4,
             );
-            const visibleTaskLines = visibleTaskSourceLines.filter((line) => !isOrderSoapLine(line));
+            const visibleTaskLines = isLayoutSectionVisible(roundingLayout, "tasks")
+              ? soap.taskLines.filter((line) => !isOrderSoapLine(line) && isTaskSoapLineVisible(line, roundingLayout))
+              : [];
             const visibleDcLines = (soap.dcLines.length > 0 ? soap.dcLines : [])
               .filter((line) => isDcSoapLineVisible(line, roundingLayout))
               .filter((line) => !/^Target\s*:?/i.test(line))

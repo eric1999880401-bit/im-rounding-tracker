@@ -102,10 +102,13 @@ export function SoapVisualPreview({ value, compact = false, sourceFields = {}, l
   });
   const displayObjectiveCount = objectiveNonLabLines.length + labVisualLines.length;
   const apProblems = isLayoutSectionVisible(layoutPreferences, "assessmentPlan") ? draft.apProblems : [];
-  const visibleTaskSourceLines = draft.taskLines.filter((line) => isTaskSoapLineVisible(line, layoutPreferences));
-  const orderLines = visibleTaskSourceLines.filter(isOrderSoapLine);
+  const orderLines = isLayoutSectionVisible(layoutPreferences, "orders")
+    ? draft.taskLines.filter(isOrderSoapLine)
+    : [];
   const displayOrderLines = formatMedicationOrderLinesForDisplay(orderLines, layoutPreferences?.orderDisplayMode ?? "summary", compact ? 4 : 6);
-  const taskLines = visibleTaskSourceLines.filter((line) => !isOrderSoapLine(line));
+  const taskLines = isLayoutSectionVisible(layoutPreferences, "tasks")
+    ? draft.taskLines.filter((line) => !isOrderSoapLine(line) && isTaskSoapLineVisible(line, layoutPreferences))
+    : [];
   const dcLines = draft.dcLines.filter((line) => isDcSoapLineVisible(line, layoutPreferences));
   const hasObjectiveSections =
     isLayoutSectionVisible(layoutPreferences, "objectiveVitals") ||

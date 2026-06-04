@@ -1601,6 +1601,23 @@ function prioritizePlanLines(values: string[]) {
   return [...values].sort((left, right) => planLinePriority(right) - planLinePriority(left));
 }
 
+function looksLikeMedicationOrderLine(value: string) {
+  return /\b(?:order|orders?|meds?|藥囑)\s*:/i.test(value) ||
+    (/\b(?:iv|po|sc|im|mg|mcg|g|unit|units|qd|bid|tid|qid|q\d+h|prn|stat)\b/i.test(value) &&
+      /\b(?:cef|vanco|teico|mero|tazo|zosyn|levo|cipro|heparin|apixaban|warfarin|insulin|lasix|furosemide|morphine|fentanyl|ppi|pantoprazole|steroid|methylpred|prednisolone)\b/i.test(value));
+}
+
+function sbarRecommendationLine(value: string) {
+  const clean = compactSnippet(value.replace(/^!+\s*/, ""), 150);
+  if (!clean) return "";
+  if (!looksLikeMedicationOrderLine(clean)) return clean;
+  if (/\b(?:abx|antibiotic|cef|vanco|teico|mero|tazo|zosyn|levo|cipro)\b/i.test(clean)) return "Clarify Abx duration, culture follow-up, and source control.";
+  if (/\b(?:heparin|apixaban|warfarin|anticoag|antiplatelet|aspirin|clopidogrel)\b/i.test(clean)) return "Clarify anticoag/AP hold-resume plan and bleeding/procedure threshold.";
+  if (/\b(?:insulin|glucose|sugar)\b/i.test(clean)) return "Clarify glucose monitoring and insulin adjustment parameters.";
+  if (/\b(?:lasix|furosemide|diuretic|ivf|fluid)\b/i.test(clean)) return "Clarify volume plan, I/O target, and renal/electrolyte follow-up.";
+  return "";
+}
+
 function shortProblemTitle(value: string) {
   return value
     .replace(/^Infection\s*\/\s*sepsis$/i, "Infx/sepsis")
@@ -1753,7 +1770,7 @@ export function formatReasoningSbar(reasoning: ClinicalReasoningBundle | undefin
     ],
     8,
     150,
-  );
+  ).map(sbarRecommendationLine).filter(Boolean);
   return [
     `Situation: ${compactSnippet(reasoning.primaryRisk || reasoning.currentClinicalState, 180)}`,
     `Background: ${background || "Background not fully extracted."}`,
@@ -1777,14 +1794,10 @@ export function formatReasoningWeeklySummary(reasoning: ClinicalReasoningBundle 
     4,
     120,
   );
-  const apLines = activeProblems.map((item) => {
+  const apPhrases = activeProblems.map((item) => {
     const evidence = compactList(item.evidence, 1, 70);
     const plans = compactList(prioritizePlanLines(item.todayPlan), 2, 80);
-    return [
-      `- ${compactSnippet(item.problem, 60)} (${item.status}): ${compactSnippet(item.whyImportant, 105)}`,
-      evidence.length > 0 ? `  Data: ${evidence.join("; ")}` : "",
-      plans.length > 0 ? `  Plan: ${plans.join("; ")}` : "",
-    ].filter(Boolean).join("\n");
+    return `${compactSnippet(item.problem, 60)} (${item.status}): ${compactSnippet(item.whyImportant, 105)}${evidence.length > 0 ? `; data ${evidence.join("; ")}` : ""}${plans.length > 0 ? `; plan ${plans.join("; ")}` : ""}`;
   });
   const pending = compactList(
     [
@@ -1796,22 +1809,14 @@ export function formatReasoningWeeklySummary(reasoning: ClinicalReasoningBundle 
     6,
     110,
   );
+  const resolved = reasoning.resolvedOrLessImportant.slice(0, 3).map((line) => compactSnippet(line, 120)).filter(Boolean);
   return [
-    "Weekly Summary",
-    `Current focus: ${compactSnippet(reasoning.primaryRisk || reasoning.currentClinicalState, 180)}.`,
-    "",
-    "Timeline / Key Course",
-    ...(course.length > 0 ? course.map((line) => `- ${line}`) : ["- Course not fully extracted; review source notes."]),
-    "",
-    "Problem-Based A/P",
-    ...(apLines.length > 0 ? apLines : ["- No confident problem-based reasoning output; review source notes."]),
-    "",
-    "Pending / Disposition",
-    ...(pending.length > 0 ? pending.map((line) => `- ${line}`) : ["- Clarify pending studies, tasks, call thresholds, and disposition."]),
-    reasoning.resolvedOrLessImportant.length > 0 ? "" : "",
-    reasoning.resolvedOrLessImportant.length > 0 ? "Resolved / Lower Priority" : "",
-    ...reasoning.resolvedOrLessImportant.slice(0, 5).map((line) => `- ${compactSnippet(line, 140)}`),
-  ].filter((line, index, array) => line.trim() || array[index - 1]?.trim()).join("\n");
+    `During this week, ${compactSnippet(reasoning.primaryRisk || reasoning.currentClinicalState || "current focus needs clinician review", 180)}.`,
+    course.length > 0 ? `Key course: ${course.join("; ")}.` : "Key course not fully extracted; review source notes.",
+    apPhrases.length > 0 ? `Active A/P: ${apPhrases.join(" ")}.` : "Active A/P needs clinician review.",
+    pending.length > 0 ? `Pending/dispo: ${pending.join("; ")}.` : "Pending/dispo: clarify studies, tasks, call thresholds, and disposition.",
+    resolved.length > 0 ? `Lower priority/resolved: ${resolved.join("; ")}.` : "",
+  ].filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
 }
 
 function handoffLead(plan: GeneratedClinicalPlan) {
@@ -1842,8 +1847,9 @@ function formatProblemAssessment(plan: GeneratedClinicalPlan) {
 function formatProblemRecommendations(plan: GeneratedClinicalPlan) {
   const taskLines = plan.todayTasks.slice(0, 5).map((task) => {
     const prefix = task.priority === "urgent" ? "Urgent" : "Today";
-    return `- ${prefix}: ${compactSnippet(task.text, 150)}`;
-  });
+    const line = sbarRecommendationLine(task.text);
+    return line ? `- ${prefix}: ${line}` : "";
+  }).filter(Boolean);
   const flagLines = plan.redFlags.slice(0, 2).map((flag) => `- Call/verify: ${compactSnippet(flag.text, 120)}`);
   const dispoLines = compactDispositionFacts(
     plan.facts.dischargeDisposition.filter((line) => /\b(dispo|discharge|rehab|snf|home)\b/i.test(line)),
@@ -1881,12 +1887,9 @@ export function formatRuleBasedSbar(plan: GeneratedClinicalPlan) {
 export function formatRuleBasedWeeklySummary(plan: GeneratedClinicalPlan) {
   const diagnosis = compactList([handoffLead(plan), ...plan.problemBasedAP.map((item) => shortProblemTitle(item.problemTitle))], 4, 90).join("; ");
   const course = compactDocFacts([...plan.facts.hospitalCourse, ...plan.facts.todayUpdates, ...plan.facts.antibiotics], 5, 120);
-  const apLines = plan.problemBasedAP.slice(0, 6).map((item) => {
+  const apPhrases = plan.problemBasedAP.slice(0, 6).map((item) => {
     const plans = compactList(prioritizePlanLines(item.planItems), 2, 80);
-    return [
-      `- ${shortProblemTitle(item.problemTitle)}: ${compactAssessmentPhrase(item)}`,
-      plans.length > 0 ? `  Plan: ${plans.join("; ")}` : "",
-    ].filter(Boolean).join("\n");
+    return `${shortProblemTitle(item.problemTitle)}: ${compactAssessmentPhrase(item)}${plans.length > 0 ? `; plan ${plans.join("; ")}` : ""}`;
   });
   const pending = compactList(
     [
@@ -1900,16 +1903,9 @@ export function formatRuleBasedWeeklySummary(plan: GeneratedClinicalPlan) {
   );
 
   return [
-    "Weekly Summary",
-    diagnosis ? `Current focus: ${diagnosis}.` : "Current focus: needs clinician review.",
-    "",
-    "Timeline / Key Course",
-    ...(course.length > 0 ? course.map((line) => `- ${line}`) : ["- Course not fully extracted; review source notes."]),
-    "",
-    "Problem-Based A/P",
-    ...(apLines.length > 0 ? apLines : ["- No confident problem-based rule output; review source notes."]),
-    "",
-    "Pending / Disposition",
-    ...(pending.length > 0 ? pending.map((line) => `- ${line}`) : ["- Clarify pending studies, tasks, call thresholds, and disposition."]),
-  ].join("\n").trim();
+    diagnosis ? `During this week, current focus was ${diagnosis}.` : "During this week, current focus needs clinician review.",
+    course.length > 0 ? `Key course: ${course.join("; ")}.` : "Key course not fully extracted; review source notes.",
+    apPhrases.length > 0 ? `Active A/P: ${apPhrases.join(" ")}.` : "Active A/P needs clinician review.",
+    pending.length > 0 ? `Pending/dispo: ${pending.join("; ")}.` : "Pending/dispo: clarify studies, tasks, call thresholds, and disposition.",
+  ].join(" ").replace(/\s+/g, " ").trim();
 }

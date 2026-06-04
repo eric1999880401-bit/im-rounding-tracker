@@ -803,9 +803,12 @@ function PrintRoundingListPage({
     const limits = printLimitsForPatient(patient);
     const taskLimit = limits.tasks;
     const dcLimit = density === "normal" ? 2 : 1;
-    const visibleTaskSourceLines = soap.taskLines.filter((line) => isTaskSoapLineVisible(line, roundingLayout));
-    const orderLines = visibleTaskSourceLines.filter(isOrderSoapLine);
-    const taskLines = visibleTaskSourceLines.filter((line) => !isOrderSoapLine(line));
+    const orderLines = isLayoutSectionVisible(roundingLayout, "orders")
+      ? soap.taskLines.filter(isOrderSoapLine)
+      : [];
+    const taskLines = isLayoutSectionVisible(roundingLayout, "tasks")
+      ? soap.taskLines.filter((line) => !isOrderSoapLine(line) && isTaskSoapLineVisible(line, roundingLayout))
+      : [];
     const displayOrderLines = formatMedicationOrderLinesForDisplay(orderLines, roundingLayout.orderDisplayMode, Math.min(taskLimit, density === "normal" ? 8 : 4));
     const taskDcLines = [
       ...displayOrderLines,

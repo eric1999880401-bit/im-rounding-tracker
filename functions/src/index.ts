@@ -457,6 +457,7 @@ interface DocumentCallableInput {
   dateTo?: unknown;
   deidentifiedConfirmed?: unknown;
   storeRawText?: unknown;
+  qualityMode?: unknown;
 }
 
 interface PatientBatchCallableInput {
@@ -1276,18 +1277,20 @@ function documentInstructions(documentType: DocumentType) {
     dischargeHospitalCourse: [
       "Return exactly one section with heading Hospital Course.",
       "Write one hospital-course paragraph only, not bullet points and not problem-by-problem headings.",
-      "Include important treatments, major tests, complications, response, current status, and unresolved key issues within that paragraph.",
-      "Do not write discharge medications, follow-up appointments, or separate assessment/plan sections unless they are essential to the course paragraph.",
+      "Start the paragraph exactly with: After admission,",
+      "Be specific: preserve source-grounded dates, key lab values/trends, culture results, oxygen status, image/procedure names, antibiotics, consultations, complications, and treatment response when available.",
+      "End the paragraph with: under relative stable condition, the patient was discharged w/ [disposition/follow-up/DC meds/OPD plan if available].",
+      "Do not write separate discharge medication, follow-up appointment, assessment/plan, or problem headings unless the detail is essential inside the course paragraph.",
       "Keep followUpItems empty unless an item is critical to mention separately.",
     ],
     weeklySummary: [
-      "Return exactly three sections in this order: Weekly Summary, Problem-Based A/P, Pending / Disposition.",
-      "Weekly Summary content must start with the current clinical focus and primary risk, not a generic date phrase.",
-      "Weekly Summary is one compact paragraph summarizing the selected SOAP notes by clinical trajectory: active issue, response to treatment, unresolved risk, and why still admitted.",
-      "Problem-Based A/P should follow progress-note/SOAP logic: active problems only, short assessment plus concrete plan; omit stable inactive problems.",
-      "Pending / Disposition should include pending labs/images/consults, discharge barriers, target disposition, and follow-up needs.",
+      "Return one section with heading Weekly Summary.",
+      "Write paragraph format only. Do not use bullet lists, numbered lists, problem headings, or a separate A/P section.",
+      "The paragraph should summarize the selected SOAP notes by clinical trajectory: active issue, response to treatment, unresolved risk, key objective changes, pending work, and why still admitted.",
+      "Include active problems only; omit stable inactive problems and copied normal daily updates.",
+      "Weave pending labs/images/consults, discharge barriers, target disposition, and follow-up needs into the paragraph.",
       "Exclude trivial normal daily updates and copied full lab panels unless they changed management.",
-      "Use followUpItems only for critical pending items not already captured in Pending / Disposition.",
+      "Use followUpItems only for critical pending items not already captured in the paragraph.",
     ],
     isbar: [
       "Return exactly four sections in this exact order: Situation, Background, Assessment, Recommendation.",
@@ -1297,6 +1300,7 @@ function documentInstructions(documentType: DocumentType) {
       "Background: include only high-yield PMH, important prior hospital events, key procedures, antibiotics, consults, and major image/lab findings that matter for handoff.",
       "Assessment: use ranked active problems from clinicalReasoning with evidence and severity; avoid vague labels without source facts.",
       "Recommendation: include today/overnight actions, pending labs/images/consults, contingency plans, call thresholds, discharge/disposition plan, and missing data from clinicalReasoning.",
+      "Recommendation must not paste a medication order list. Convert order information into actions such as clarify Abx duration/Cx, hold/resume anticoagulation plan, glucose parameters, I/O or renal follow-up.",
       "Do not include routine normal data, duplicated diagnosis paragraphs, generic legal disclaimers, empty sections, long admission-note prose, copied full lab panels, or low-signal stable daily updates.",
       "Do not use generic filler such as monitor closely unless paired with a specific trigger, call threshold, or action.",
       "Put pending tasks and uncertainty inside Recommendation when possible; use followUpItems or uncertainty only if a critical item does not fit in the four sections.",
@@ -1905,6 +1909,7 @@ export const generateClinicalDocument = onCall(
     const dateTo = String(data.dateTo ?? "").trim();
     const deidentifiedConfirmed = data.deidentifiedConfirmed === true;
     const storeRawText = data.storeRawText === true;
+    const qualityMode = sanitizeQualityMode(data.qualityMode);
 
     if (!documentTypes.has(documentType)) {
       throw new HttpsError("invalid-argument", "Invalid AI document type.");
@@ -1955,7 +1960,7 @@ export const generateClinicalDocument = onCall(
       throw new HttpsError("invalid-argument", "Paste de-identified source text before generating a standalone draft.");
     }
 
-    const model = getModel();
+    const model = getModelForQuality(qualityMode);
     const openAiResponse = await fetch("https://api.openai.com/v1/responses", {
       method: "POST",
       headers: {
@@ -2035,12 +2040,14 @@ export const generateClinicalDocument = onCall(
       status: "draft",
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
       model,
+      qualityMode,
     });
 
     return {
       draftId: draftRef.id,
       draft,
       model,
+      qualityMode,
       rawTextPreview,
     };
   },

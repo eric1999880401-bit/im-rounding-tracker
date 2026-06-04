@@ -17,6 +17,15 @@ function normalizeParagraph(value: string) {
     .join(" ");
 }
 
+function sentenceJoin(values: string[]) {
+  return values
+    .map(normalizeParagraph)
+    .filter(Boolean)
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function normalizeBlock(value: string) {
   return value
     .split(/\r?\n/)
@@ -46,11 +55,22 @@ function compactSbarContent(value: string) {
     .trim();
 }
 
+function looksLikeMedicationOrder(value: string) {
+  return /\b(?:order|orders?|meds?|藥囑)\s*:/i.test(value) ||
+    (/\b(?:iv|po|sc|im|mg|mcg|g|unit|units|qd|bid|tid|qid|q\d+h|prn|stat)\b/i.test(value) &&
+      /\b(?:cef|vanco|teico|mero|tazo|zosyn|levo|cipro|heparin|apixaban|warfarin|insulin|lasix|furosemide|morphine|fentanyl|ppi|pantoprazole|steroid|methylpred|prednisolone)\b/i.test(value));
+}
+
+function recommendationReady(value: string) {
+  if (!value.trim() || looksLikeMedicationOrder(value)) return "";
+  return compactSbarContent(value);
+}
+
 function formatSbarDraft(draft: AiDocumentDraft) {
   if (hasClinicalReasoning(draft.clinicalReasoning)) {
     return formatReasoningSbar(draft.clinicalReasoning);
   }
-  const pending = draft.followUpItems.map(compactSbarContent).filter(Boolean).join("; ");
+  const pending = draft.followUpItems.map(recommendationReady).filter(Boolean).join("; ");
   const verify = draft.uncertainty.map(compactSbarContent).filter(Boolean).join("; ");
   const identify = compactSbarContent(sectionContent(draft, ["Identify"]));
 
@@ -75,32 +95,35 @@ function formatWeeklyDraft(draft: AiDocumentDraft) {
     return formatReasoningWeeklySummary(draft.clinicalReasoning);
   }
   const summary = ensureWeeklyOpening(sectionContent(draft, ["weekly summary", "summary"]) || draft.conciseSummary);
-  const problemPlan = normalizeBlock(
+  const problemPlan = normalizeParagraph(
     sectionContent(draft, ["problem-based", "assessment", "a/p", "plan"]) ||
       draft.sections
         .filter((section) => !/weekly summary|pending|disposition/i.test(section.heading))
         .map((section) => `${section.heading}: ${section.content}`)
-        .join("\n"),
+        .join(" "),
   );
-  const pending = normalizeBlock(
+  const pending = normalizeParagraph(
     sectionContent(draft, ["pending", "disposition", "follow-up"]) ||
-      draft.followUpItems.map((item) => `- ${item}`).join("\n"),
+      draft.followUpItems.join("; "),
   );
-  const verify = normalizeBlock(draft.uncertainty.map((item) => `- Verify: ${item}`).join("\n"));
+  const verify = normalizeParagraph(draft.uncertainty.map((item) => `Verify: ${item}`).join("; "));
 
-  return [
-    "Weekly Summary",
-    summary,
-    problemPlan ? "" : "",
-    problemPlan ? "Problem-Based A/P" : "",
-    problemPlan,
-    pending || verify ? "" : "",
-    pending || verify ? "Pending / Disposition" : "",
-    [pending, verify].filter(Boolean).join("\n"),
-  ]
-    .filter((line, index, array) => line.trim() || array[index - 1]?.trim())
-    .join("\n")
-    .trim();
+  return sentenceJoin([summary, problemPlan ? `A/P focus: ${problemPlan}` : "", pending || verify ? `Pending/dispo: ${[pending, verify].filter(Boolean).join("; ")}` : ""]);
+}
+
+function formatDischargeHospitalCourseDraft(draft: AiDocumentDraft) {
+  const course = normalizeParagraph(sectionContent(draft, ["hospital course", "course"]) || draft.conciseSummary);
+  if (!course) return "";
+  const withoutDuplicateOpening = course.replace(/^after admission,\s*/i, "");
+  const followUp = normalizeParagraph(
+    sectionContent(draft, ["follow-up", "follow up", "disposition", "discharge"]) ||
+      draft.followUpItems.join("; "),
+  );
+  const alreadyHasClosing = /under relative stable condition|discharged\s+w\//i.test(withoutDuplicateOpening);
+  const closing = alreadyHasClosing
+    ? ""
+    : ` Under relative stable condition, the patient was discharged w/ ${followUp || "clinician-reviewed discharge plan"}.`;
+  return `After admission, ${withoutDuplicateOpening}${closing}`.replace(/\s+/g, " ").trim();
 }
 
 export function formatClinicalDocumentDraft(draft: AiDocumentDraft) {
@@ -117,7 +140,7 @@ export function formatClinicalDocumentDraft(draft: AiDocumentDraft) {
   }
 
   if (draft.documentType === "dischargeHospitalCourse") {
-    return normalizeParagraph(sectionContent(draft, ["hospital course", "course"]) || draft.conciseSummary);
+    return formatDischargeHospitalCourseDraft(draft);
   }
 
   if (draft.documentType === "weeklySummary") {

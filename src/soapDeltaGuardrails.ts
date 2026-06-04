@@ -1,7 +1,7 @@
 import { classifyClinicalLine } from "./clinicalLineClassifier";
 import { ensureAntibioticApInDraft } from "./antibioticPlan";
 import { formatSoapDraft, parseSoapText, type SoapApProblem, type SoapDraft } from "./soapDraft";
-import { safeClinicalLine } from "./utils";
+import { parseLabReports, safeClinicalLine } from "./utils";
 
 export type RoundSoapWorkflowMode = "dailyUpdate" | "newSoap" | "transferHandoff";
 
@@ -435,6 +435,56 @@ function mergeDailyLines(
   return uniqueLines([...candidateLines, ...baselineProtected, ...baselinePlain], maxItems);
 }
 
+function labItemKey(label: string) {
+  return String(label ?? "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "");
+}
+
+function labValueKey(value: string) {
+  return String(value ?? "").trim().replace(/,/g, "");
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function previousLabValues(lines: string[]) {
+  const values = new Map<string, string>();
+  parseLabReports(lines.join("\n")).forEach((report) => {
+    report.items.forEach((item) => {
+      const key = labItemKey(item.name || item.label);
+      const value = labValueKey(String(item.value ?? ""));
+      if (!key || !value || values.has(key)) return;
+      values.set(key, value);
+    });
+  });
+  return values;
+}
+
+function enrichLabLineWithPreviousValues(line: string, previousValues: Map<string, string>) {
+  let next = line;
+  const candidateItems = parseLabReports(line).flatMap((report) => report.items);
+  candidateItems.forEach((item) => {
+    const key = labItemKey(item.name || item.label);
+    const current = labValueKey(String(item.value ?? ""));
+    const previous = labValueKey(String(item.previousValue ?? "")) || previousValues.get(key) || "";
+    if (!key || !current || !previous || previous === current) return;
+
+    const labelAlternates = [item.label, item.name].filter(Boolean).map((value) => escapeRegExp(String(value))).join("|");
+    if (!labelAlternates) return;
+    const currentPattern = escapeRegExp(String(item.value ?? ""));
+    const pattern = new RegExp(`\\b(${labelAlternates})\\.?\\s*(${currentPattern})(?!\\s*(?:\\(|from\\b))`, "i");
+    next = next.replace(pattern, (_match, label, value) => `${label} ${value} (${previous})`);
+  });
+  return next;
+}
+
+function mergeLabLinesForDaily(baseline: string[], candidate: string[], maxItems = 12) {
+  const candidateLines = uniqueLines(candidate, maxItems);
+  if (candidateLines.length === 0) return baseline;
+  const previousValues = previousLabValues(baseline);
+  return uniqueLines(candidateLines.map((line) => enrichLabLineWithPreviousValues(line, previousValues)), maxItems);
+}
+
 function hasEquivalentLine(lines: string[], target: string) {
   const key = normalizeLine(target);
   return Boolean(key && lines.some((line) => {
@@ -539,10 +589,15 @@ function draftForDailyUpdate(baseline: SoapDraft, candidate: SoapDraft, fields: 
     const differs = !sameLines(baseObjective[section], candidateObjective[section]);
     if (!differs) return;
     if (profile.allowed.has(section)) {
-      nextObjective[section] = mergeDailyLines(baseObjective[section], candidateObjective[section], {
-        maxItems: section === "lab" ? 12 : section === "image" ? 8 : section === "vs" ? 4 : 5,
-        replacePlainBaseline: section === "vs",
-      });
+      if (section === "vs") {
+        nextObjective[section] = uniqueLines(candidateObjective[section], 4);
+      } else if (section === "lab") {
+        nextObjective[section] = mergeLabLinesForDaily(baseObjective[section], candidateObjective[section], 12);
+      } else {
+        nextObjective[section] = mergeDailyLines(baseObjective[section], candidateObjective[section], {
+          maxItems: section === "image" ? 8 : 5,
+        });
+      }
       pushChanged(changed, section, `${sectionLabels[section]} updated from pasted field`);
     } else {
       pushChanged(changed, section, `AI changed ${sectionLabels[section]} without matching source field`, "high", true);

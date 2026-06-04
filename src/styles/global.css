@@ -5184,6 +5184,13 @@ tbody tr:last-child td {
 .soap-print-preview-grid {
   display: grid;
   gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr));
+  min-width: 0;
+}
+
+.soap-print-preview-section {
+  min-width: 0;
+  overflow: hidden;
 }
 
 .soap-print-preview-section-title {
@@ -5200,6 +5207,17 @@ tbody tr:last-child td {
   display: grid;
   gap: 3px;
   padding: 6px;
+  min-width: 0;
+}
+
+.soap-print-preview .print-visual-row {
+  min-width: 0;
+}
+
+.soap-print-preview .print-visual-text {
+  min-width: 0;
+  overflow-wrap: break-word;
+  word-break: normal;
 }
 
 @media print {

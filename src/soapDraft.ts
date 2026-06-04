@@ -550,14 +550,31 @@ function patientToFallbackSoapDraft(patient: Patient, dailyNotes: DailyNote[] = 
   return ensureAntibioticApInDraft(draft, fallbackAntibioticSourceText(patient, dailyNotes, selectedDate), selectedDate);
 }
 
+function legacyOrderLinesForSoap(patient: Patient, note?: DailyNote) {
+  return uniqueSoapLines([note?.vsOrder, patient.vsOrder], 4, 130)
+    .flatMap((block) => block.split(/\r?\n|;\s+/))
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => (/^(?:order|orders?|meds?|藥囑)\s*:/i.test(line) ? line : `Order: ${line}`));
+}
+
+function addLegacyOrdersToDraft(draft: SoapDraft, patient: Patient, note?: DailyNote): SoapDraft {
+  const legacyOrders = legacyOrderLinesForSoap(patient, note);
+  if (legacyOrders.length === 0) return draft;
+  return {
+    ...draft,
+    taskLines: uniqueSoapLines([...draft.taskLines, ...legacyOrders], Math.max(8, draft.taskLines.length + legacyOrders.length), 130),
+  };
+}
+
 export function patientToSoapDraft(patient: Patient, dailyNotes: DailyNote[] = [], selectedDate = ""): SoapDraft {
   const selectedNote = dailyNotes.find((note) => note.date === selectedDate);
   const selectedSoap = noteSoapText(selectedNote);
-  if (selectedSoap) return parseSoapText(selectedSoap);
+  if (selectedSoap) return addLegacyOrdersToDraft(parseSoapText(selectedSoap), patient, selectedNote);
 
   const latestSoapNote = sortedNotes(dailyNotes).find((note) => noteSoapText(note));
   const latestSoap = noteSoapText(latestSoapNote);
-  if (latestSoap) return parseSoapText(latestSoap);
+  if (latestSoap) return addLegacyOrdersToDraft(parseSoapText(latestSoap), patient, latestSoapNote);
 
   return patientToFallbackSoapDraft(patient, dailyNotes, selectedDate);
 }
@@ -817,14 +834,14 @@ type SoapSection = "header" | "s" | "o" | "ap" | "tasks" | "dc" | "warnings";
 
 function sectionFromLine(line: string): { section: SoapSection; label: string; rest: string } | null {
   const normalized = stripSoapBullet(line).replace(/^!\s*/, "");
-  const match = normalized.match(/^(S|Subjective|O|Objective|A\/P|AP|Assessment\/Plan|Tasks?|TODO|To do|DC|Discharge|Warnings?)\s*(?::\s*(.*)|$)/i);
+  const match = normalized.match(/^(S|Subjective|O|Objective|A\/P|AP|Assessment\/Plan|Tasks?|TODO|To do|Orders?|Meds?|藥囑|DC|Discharge|Warnings?)\s*(?::\s*(.*)|$)/i);
   if (!match) return null;
   const label = match[1].toLowerCase();
   const rest = (match[2] ?? "").trim();
   if (label === "s" || label === "subjective") return { section: "s", label: "S", rest };
   if (label === "o" || label === "objective") return { section: "o", label: "O", rest };
   if (label === "a/p" || label === "ap" || label === "assessment/plan") return { section: "ap", label: "A/P", rest };
-  if (label === "task" || label === "tasks" || label === "todo" || label === "to do") return { section: "tasks", label: "Tasks", rest };
+  if (label === "task" || label === "tasks" || label === "todo" || label === "to do" || label === "order" || label === "orders" || label === "med" || label === "meds" || label === "藥囑") return { section: "tasks", label: "Tasks", rest };
   if (label === "dc" || label === "discharge") return { section: "dc", label: "DC", rest };
   return { section: "warnings", label: "Warnings", rest };
 }
@@ -980,7 +997,7 @@ export function parseSoapText(text: string): SoapDraft {
       if (apRest) addLine(apRest);
       return;
     }
-    const taskRest = sectionRest(line, "Tasks?|TODO|To do");
+    const taskRest = sectionRest(line, "Tasks?|TODO|To do|Orders?|Meds?|藥囑");
     if (taskRest !== null) {
       section = "tasks";
       if (taskRest) addLine(taskRest);

@@ -629,6 +629,7 @@
   display: grid;
   gap: 2px;
   grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.15fr) minmax(0, 1.25fr) minmax(0, 1fr);
+  min-width: 0;
 }
 
 .print-patient-expanded .print-summary-grid {
@@ -656,6 +657,7 @@
   font-size: var(--print-font-size);
   line-height: var(--print-line-height);
   min-width: 0;
+  max-width: 100%;
   overflow-wrap: break-word;
   padding: var(--print-card-padding);
   page-break-inside: auto;
@@ -697,6 +699,7 @@
 .print-visual-list {
   display: grid;
   gap: 1px;
+  min-width: 0;
 }
 
 .print-visual-row {
@@ -710,6 +713,7 @@
   grid-template-columns: 24px minmax(0, 1fr);
   line-height: var(--print-line-height);
   min-width: 0;
+  max-width: 100%;
   padding: 1px 2px;
 }
 
@@ -753,8 +757,15 @@
   font-weight: 650;
   line-height: var(--print-line-height);
   min-width: 0;
-  overflow-wrap: break-word;
+  max-width: 100%;
+  overflow-wrap: anywhere;
   word-break: normal;
+}
+
+.print-section-ap .print-visual-text,
+.print-section-objective .print-visual-text,
+.print-section-taskdc .print-visual-text {
+  overflow-wrap: anywhere;
 }
 
 .print-visual-text .clinical-mark {

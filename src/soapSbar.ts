@@ -1,6 +1,7 @@
 import { parseSoapText } from "./soapDraft";
 import type { DailyNote, Patient } from "./types";
 import { getAdmissionSummaryText, safeClinicalLine } from "./utils";
+import { isOrderSoapLine, stripOrderLinePrefix } from "./userPreferences";
 
 interface SoapSbarSource {
   text: string;
@@ -53,7 +54,20 @@ function apSummary(draft: ReturnType<typeof parseSoapText>) {
 }
 
 function recommendationLines(draft: ReturnType<typeof parseSoapText>) {
-  return compactLines([...draft.taskLines, ...draft.dcLines.map((line) => `DC: ${line}`)], 5, 160);
+  const converted = draft.taskLines.map((line) => {
+    const clean = stripOrderLinePrefix(line).replace(/^!+\s*/, "").trim();
+    if (!isOrderSoapLine(line)) return clean;
+    if (/\b(?:abx|antibiotic|cef|vanco|teico|mero|tazo|zosyn|levo|cipro)\b/i.test(clean)) {
+      return "Clarify Abx indication/duration and f/u culture/source control.";
+    }
+    if (/\b(?:heparin|apixaban|warfarin|anticoag|antiplatelet|aspirin|clopidogrel)\b/i.test(clean)) {
+      return "Clarify anticoag/AP hold-resume plan and bleeding/procedure threshold.";
+    }
+    if (/\b(?:insulin|glucose|sugar)\b/i.test(clean)) return "Clarify glucose monitoring/insulin adjustment parameters.";
+    if (/\b(?:lasix|furosemide|diuretic|ivf|fluid)\b/i.test(clean)) return "Clarify volume plan, I/O target, and renal/electrolyte follow-up.";
+    return "";
+  });
+  return compactLines([...converted, ...draft.dcLines.map((line) => `DC: ${line}`)], 5, 160);
 }
 
 export function formatSoapBasedIsbar(patient: Patient, notes: DailyNote[] = [], selectedDate = "", extraContext = "") {
@@ -87,11 +101,21 @@ export function formatSoapBasedIsbar(patient: Patient, notes: DailyNote[] = [], 
   const assessment = apSummary(draft);
   const recommendations = recommendationLines(draft);
   const extra = compactLines(extraContext.split(/\r?\n|;\s+/), 2, 140);
+  const background = compactLines(
+    [
+      pmh ? `PMH: ${pmh}` : "",
+      getAdmissionSummaryText(patient, { allowFallback: false }),
+      ...objective,
+      ...extra,
+    ],
+    5,
+    170,
+  );
 
   return [
     `I: ${[identity, dx ? `Dx: ${dx}` : ""].filter(Boolean).join(" | ")}`,
     `S: ${situation || "current situation needs clinician review."}`,
-    `B: ${[pmh ? `PMH: ${pmh}` : "", getAdmissionSummaryText(patient, { allowFallback: false }), ...extra].filter(Boolean).map((line) => safeClinicalLine(line, 170)).slice(0, 3).join("; ") || "No concise background in reviewed SOAP."}`,
+    `B: ${background.join("; ") || "No concise background in reviewed SOAP."}`,
     "A:",
     ...(assessment.length > 0 ? assessment.map((line) => `- ${line}`) : objective.map((line) => `- ${line}`)),
     "R:",

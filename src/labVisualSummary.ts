@@ -244,7 +244,7 @@ function visualItemFromParsed(item: ParsedLabItem, sourceIndex = 0): LabVisualIt
 
   const previousValue = String(item.previousValue ?? "").trim();
   const direction = previousValue ? trendDirection(label, value, previousValue) : noteDirection(item) || referenceDirection(label, value);
-  const previous = previousValue ? ` from ${displayLabValue(label, previousValue)}` : "";
+  const previous = previousValue ? `(${displayLabValue(label, previousValue)})` : "";
   const text = `${label} ${displayLabValue(label, value)}${direction}${previous}`;
   const groupId = groupIdForItem(item);
   const tone = toneForText(label, value, item);
