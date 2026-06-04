@@ -42,6 +42,46 @@ function ensureWeeklyOpening(value: string) {
     : `During this week, ${paragraph.charAt(0).toLowerCase()}${paragraph.slice(1)}`;
 }
 
+function stripClinicalHeading(value: string) {
+  return value
+    .replace(/^\s*(?:weekly summary|summary|hospital course|course|assessment|a\/p|plan|problem-based|pending|disposition|follow-up|follow up|verify)\s*[:：-]\s*/i, "")
+    .trim();
+}
+
+function weeklyDraftSentence(value: string) {
+  const clean = stripClinicalHeading(normalizeParagraph(value))
+    .replace(/\bdisposition\b/gi, "dispo")
+    .replace(/\bfollow up\b/gi, "f/u")
+    .replace(/\s+/g, " ")
+    .replace(/[.;\s]+$/g, "")
+    .trim();
+  if (!clean) return "";
+  return `${clean}${/[。！？!?]$/.test(clean) ? "" : "."}`;
+}
+
+function weeklyDraftFragments(value: string) {
+  return normalizeParagraph(value)
+    .split(/(?<=[.!?。！？])\s+|;\s*(?=(?:\d{1,2}\/\d{1,2}|\d{4}-\d{1,2}-\d{1,2}|HD|POD|Cr|K|Na|Hb|WBC|Plt|O2|SpO2|BP|HR|pending|dispo|f\/u|follow|plan|active|[A-Z][a-z]))/i)
+    .map(stripClinicalHeading)
+    .map((line) => line.replace(/[.;\s]+$/g, "").trim())
+    .filter(Boolean);
+}
+
+function weeklyDraftParagraph(values: string[]) {
+  const seen = new Set<string>();
+  return values
+    .map(weeklyDraftSentence)
+    .filter(Boolean)
+    .filter((line) => {
+      const key = line.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, 8)
+    .join(" ");
+}
+
 const sbarHeadings = ["Situation", "Background", "Assessment", "Recommendation"] as const;
 
 function compactSbarContent(value: string) {
@@ -94,21 +134,26 @@ function formatWeeklyDraft(draft: AiDocumentDraft) {
   if (hasClinicalReasoning(draft.clinicalReasoning)) {
     return formatReasoningWeeklySummary(draft.clinicalReasoning);
   }
-  const summary = ensureWeeklyOpening(sectionContent(draft, ["weekly summary", "summary"]) || draft.conciseSummary);
-  const problemPlan = normalizeParagraph(
+  const anchor = ensureWeeklyOpening(sectionContent(draft, ["weekly summary", "summary", "hospital course", "course"]) || draft.conciseSummary);
+  const course = weeklyDraftFragments(
+    sectionContent(draft, ["hospital course", "course"]) ||
+      sectionContent(draft, ["weekly summary", "summary"]) ||
+      draft.conciseSummary,
+  ).slice(0, 3);
+  const problemPlan = weeklyDraftFragments(
     sectionContent(draft, ["problem-based", "assessment", "a/p", "plan"]) ||
       draft.sections
         .filter((section) => !/weekly summary|pending|disposition/i.test(section.heading))
-        .map((section) => `${section.heading}: ${section.content}`)
+        .map((section) => section.content)
         .join(" "),
-  );
-  const pending = normalizeParagraph(
+  ).slice(0, 3);
+  const pending = weeklyDraftFragments(
     sectionContent(draft, ["pending", "disposition", "follow-up"]) ||
       draft.followUpItems.join("; "),
-  );
-  const verify = normalizeParagraph(draft.uncertainty.map((item) => `Verify: ${item}`).join("; "));
+  ).slice(0, 2);
+  const verify = draft.uncertainty.map((item) => `Confirm ${stripClinicalHeading(item)}`).slice(0, 1);
 
-  return sentenceJoin([summary, problemPlan ? `A/P focus: ${problemPlan}` : "", pending || verify ? `Pending/dispo: ${[pending, verify].filter(Boolean).join("; ")}` : ""]);
+  return weeklyDraftParagraph([anchor, ...course, ...problemPlan, ...pending, ...verify]);
 }
 
 function formatDischargeHospitalCourseDraft(draft: AiDocumentDraft) {

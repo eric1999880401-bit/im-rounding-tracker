@@ -1252,7 +1252,7 @@ function documentInstructions(documentType: DocumentType) {
     "Do not invent missing data; mark absent or unclear details in uncertainty.",
     "Preserve dates, lab values, units, medication names, image findings, and pending items exactly when available.",
     "Use de-identified content only; do not repeat names, full MRNs, IDs, birthday, phone, address, or identifiable image details.",
-    "Do not use bullet lists unless the requested document type is SBAR or weekly summary A/P.",
+    "Do not use bullet lists unless the requested document type is SBAR.",
   ];
 
   const byType: Record<DocumentType, string[]> = {
@@ -1285,11 +1285,14 @@ function documentInstructions(documentType: DocumentType) {
     ],
     weeklySummary: [
       "Return one section with heading Weekly Summary.",
-      "Write paragraph format only. Do not use bullet lists, numbered lists, problem headings, or a separate A/P section.",
-      "The paragraph should summarize the selected SOAP notes by clinical trajectory: active issue, response to treatment, unresolved risk, key objective changes, pending work, and why still admitted.",
-      "Include active problems only; omit stable inactive problems and copied normal daily updates.",
-      "Weave pending labs/images/consults, discharge barriers, target disposition, and follow-up needs into the paragraph.",
-      "Exclude trivial normal daily updates and copied full lab panels unless they changed management.",
+      "Write a usable weekly hospital-course/interim summary for the next covering physician, not a generic paragraph.",
+      "Paragraph format only: no bullet lists, numbered lists, problem headings, or separate A/P section.",
+      "Use 5-8 short source-grounded clinical sentences in this order: 1) why admitted/why still here, 2) this week's trajectory with dated milestones and exact values, 3) current active problems/status, 4) pending work, contingencies, and disposition barrier.",
+      "Preserve concrete anchors when available: dates, VS/O2 trend, WBC/Hb/Cr/K/LFT/INR/CRP/lactate trend, culture results, Abx name/day, procedure/date/result, image study/date/key finding, consult recommendation, and DC barrier.",
+      "Problem content should be synthesized by active issue and trajectory; do not copy the daily A/P forward or list every task.",
+      "Use concise inpatient IM style with common abbreviations. Avoid generic phrases such as current focus, monitor closely, continue management, and needs clinical review unless paired with a specific action or missing data.",
+      "Exclude stable inactive problems, routine normals, copied full lab panels, and completed tasks unless they explain current decisions.",
+      "Weave pending labs/images/consults, discharge barriers, target disposition, follow-up needs, and if/then contingencies into the paragraph.",
       "Use followUpItems only for critical pending items not already captured in the paragraph.",
     ],
     isbar: [

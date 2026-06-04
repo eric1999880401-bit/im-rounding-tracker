@@ -3,7 +3,7 @@ import { generateClinicalDocument } from "../firebase/aiService";
 import type { AiDocumentDraft, AiDocumentType, DailyNote, DailyNotesByPatient, GeneratedClinicalPlan, Patient } from "../types";
 import { getAdmissionSummaryText, nowIso, todayKey } from "../utils";
 import { formatClinicalDocumentDraft, getClinicalDocumentSection } from "../clinicalDocumentFormat";
-import { applyClinicalKnowledgeToText, formatRuleBasedAdmissionSummary, formatRuleBasedSbar, formatRuleBasedWeeklySummary } from "../clinicalKnowledge";
+import { applyClinicalKnowledgeToText, formatRuleBasedAdmissionSummary, formatRuleBasedSbar, formatRuleBasedWeeklySummary, hasClinicalReasoning } from "../clinicalKnowledge";
 import { formatSoapBasedIsbar } from "../soapSbar";
 
 const OTHER_PATIENT_ID = "__other_patient__";
@@ -287,8 +287,11 @@ function AiDocumentsPage({ patients, dailyNotesByPatient = {}, onSavePatient }: 
           activeProblems: selectedPatient ? [selectedPatient.activeProblems, selectedPatient.primaryDiagnosis].filter(Boolean) : [],
         },
       );
+      const sharedFormatted = formatClinicalDocumentDraft(result.draft);
       const ruleFormatted = formatRuleReviewedDocument(documentType, rulePlan);
-      const formatted = ruleFormatted || formatClinicalDocumentDraft(result.draft);
+      const formatted = hasClinicalReasoning(result.draft.clinicalReasoning)
+        ? sharedFormatted
+        : ruleFormatted || sharedFormatted;
       setDraft(result.draft);
       setDraftId(result.draftId);
       setModel(`${result.model} / ${result.qualityMode ?? qualityMode}`);

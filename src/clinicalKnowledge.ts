@@ -1618,6 +1618,54 @@ function sbarRecommendationLine(value: string) {
   return "";
 }
 
+function weeklySentence(value: string) {
+  const clean = value
+    .replace(/\bdisposition\b/gi, "dispo")
+    .replace(/\bfollow up\b/gi, "f/u")
+    .replace(/\s+/g, " ")
+    .replace(/[.;\s]+$/g, "")
+    .trim();
+  if (!clean) return "";
+  return `${clean}${/[。！？!?]$/.test(clean) ? "" : "."}`;
+}
+
+function weeklySentences(values: string[], maxSentences = 8) {
+  return dedupe(values.map(weeklySentence).filter(Boolean)).slice(0, maxSentences).join(" ");
+}
+
+function weeklyAnchorSentence(anchor: string) {
+  const clean = compactSnippet(anchor, 155);
+  if (!clean) return "This weekly update needs clinician review for the admission/course anchor.";
+  if (/^(?:admitted|transferred|presented|initially|this admission|during admission|s\/p|treated|started|found)/i.test(clean)) {
+    return weeklySentence(clean);
+  }
+  return weeklySentence(`During this week, the hospital course centered on ${clean}`);
+}
+
+function weeklyTrajectorySentences(values: string[], maxItems: number) {
+  return compactDocFacts(values, maxItems, 125).map((item) => weeklySentence(item));
+}
+
+function weeklyActiveProblemSentence(problem: string, status: string, assessment: string, evidence: string[], planItems: string[]) {
+  const label = compactSnippet(problem, 58);
+  const statusText = status && !/active/i.test(status) ? `${status}; ` : "";
+  const assessmentText = compactSnippet(assessment, 92);
+  const evidenceText = compactList(evidence, 1, 70).join("; ");
+  const planText = compactList(prioritizePlanLines(planItems), 1, 78).join("; ");
+  const detail = [
+    statusText ? `${statusText}${assessmentText}` : assessmentText,
+    evidenceText ? `data ${evidenceText}` : "",
+    planText ? `plan ${planText}` : "",
+  ].filter(Boolean).join("; ");
+  return weeklySentence(detail ? `${label}: ${detail}` : label);
+}
+
+function weeklyPendingSentence(values: string[]) {
+  const pending = compactList(values, 4, 105);
+  if (pending.length === 0) return "The next clinician should confirm remaining tasks, monitoring thresholds, and dispo.";
+  return weeklySentence(`Pending/dispo remains ${pending.join("; ")}`);
+}
+
 function shortProblemTitle(value: string) {
   return value
     .replace(/^Infection\s*\/\s*sepsis$/i, "Infx/sepsis")
@@ -1784,39 +1832,35 @@ export function formatReasoningSbar(reasoning: ClinicalReasoningBundle | undefin
 export function formatReasoningWeeklySummary(reasoning: ClinicalReasoningBundle | undefined, fallbackPlan?: GeneratedClinicalPlan) {
   if (!hasClinicalReasoning(reasoning)) return "";
   const activeProblems = reasoning.activeProblemsRanked.filter((item) => item.status !== "resolved").slice(0, 5);
-  const course = compactList(
+  const anchor = reasoning.primaryRisk || reasoning.currentClinicalState || compactList(fallbackPlan?.facts.diagnoses ?? [], 1, 120)[0] || "";
+  const trajectory = weeklyTrajectorySentences(
     [
-      reasoning.currentClinicalState,
       ...reasoning.whyThisMatters.map((item) => `${item.fact} -> ${item.implication}`),
       ...(fallbackPlan?.facts.hospitalCourse ?? []),
       ...(fallbackPlan?.facts.todayUpdates ?? []),
+      ...(fallbackPlan?.facts.antibiotics ?? []),
     ],
-    4,
-    120,
+    2,
   );
-  const apPhrases = activeProblems.map((item) => {
-    const evidence = compactList(item.evidence, 1, 70);
-    const plans = compactList(prioritizePlanLines(item.todayPlan), 2, 80);
-    return `${compactSnippet(item.problem, 60)} (${item.status}): ${compactSnippet(item.whyImportant, 105)}${evidence.length > 0 ? `; data ${evidence.join("; ")}` : ""}${plans.length > 0 ? `; plan ${plans.join("; ")}` : ""}`;
-  });
-  const pending = compactList(
+  const active = activeProblems.slice(0, 3).map((item) =>
+    weeklyActiveProblemSentence(item.problem, item.status, item.whyImportant, item.evidence, item.todayPlan),
+  );
+  const pending = weeklyPendingSentence(
     [
       ...activeProblems.flatMap((item) => item.todayPlan),
       ...activeProblems.flatMap((item) => item.callThresholds.map((threshold) => `Call/threshold: ${threshold}`)),
       ...reasoning.missingDataNeeded.map((item) => `Clarify: ${item}`),
       ...compactDispositionFacts(fallbackPlan?.facts.dischargeDisposition ?? [], 2, 100),
     ],
-    6,
-    110,
   );
-  const resolved = reasoning.resolvedOrLessImportant.slice(0, 3).map((line) => compactSnippet(line, 120)).filter(Boolean);
-  return [
-    `During this week, ${compactSnippet(reasoning.primaryRisk || reasoning.currentClinicalState || "current focus needs clinician review", 180)}.`,
-    course.length > 0 ? `Key course: ${course.join("; ")}.` : "Key course not fully extracted; review source notes.",
-    apPhrases.length > 0 ? `Active A/P: ${apPhrases.join(" ")}.` : "Active A/P needs clinician review.",
-    pending.length > 0 ? `Pending/dispo: ${pending.join("; ")}.` : "Pending/dispo: clarify studies, tasks, call thresholds, and disposition.",
-    resolved.length > 0 ? `Lower priority/resolved: ${resolved.join("; ")}.` : "",
-  ].filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
+  const resolved = compactList(reasoning.resolvedOrLessImportant, 1, 115).map((line) => weeklySentence(`Less active this week was ${line}`));
+  return weeklySentences([
+    weeklyAnchorSentence(anchor),
+    ...trajectory,
+    ...active,
+    ...resolved,
+    pending,
+  ]);
 }
 
 function handoffLead(plan: GeneratedClinicalPlan) {
@@ -1886,26 +1930,29 @@ export function formatRuleBasedSbar(plan: GeneratedClinicalPlan) {
 
 export function formatRuleBasedWeeklySummary(plan: GeneratedClinicalPlan) {
   const diagnosis = compactList([handoffLead(plan), ...plan.problemBasedAP.map((item) => shortProblemTitle(item.problemTitle))], 4, 90).join("; ");
-  const course = compactDocFacts([...plan.facts.hospitalCourse, ...plan.facts.todayUpdates, ...plan.facts.antibiotics], 5, 120);
-  const apPhrases = plan.problemBasedAP.slice(0, 6).map((item) => {
-    const plans = compactList(prioritizePlanLines(item.planItems), 2, 80);
-    return `${shortProblemTitle(item.problemTitle)}: ${compactAssessmentPhrase(item)}${plans.length > 0 ? `; plan ${plans.join("; ")}` : ""}`;
-  });
-  const pending = compactList(
+  const trajectory = weeklyTrajectorySentences([...plan.facts.hospitalCourse, ...plan.facts.todayUpdates, ...plan.facts.antibiotics], 2);
+  const active = plan.problemBasedAP.slice(0, 3).map((item) =>
+    weeklyActiveProblemSentence(
+      shortProblemTitle(item.problemTitle),
+      "active",
+      compactAssessmentPhrase(item),
+      item.evidenceOrCourseItems,
+      item.planItems,
+    ),
+  );
+  const pending = weeklyPendingSentence(
     [
       ...plan.todayTasks.map((task) => `${task.priority === "urgent" ? "Urgent: " : ""}${task.text}`),
       ...plan.facts.pendingItems,
       ...compactDispositionFacts(plan.facts.dischargeDisposition, 2, 100),
       ...plan.redFlags.map((flag) => `Call/verify: ${flag.text}`),
     ],
-    6,
-    120,
   );
 
-  return [
-    diagnosis ? `During this week, current focus was ${diagnosis}.` : "During this week, current focus needs clinician review.",
-    course.length > 0 ? `Key course: ${course.join("; ")}.` : "Key course not fully extracted; review source notes.",
-    apPhrases.length > 0 ? `Active A/P: ${apPhrases.join(" ")}.` : "Active A/P needs clinician review.",
-    pending.length > 0 ? `Pending/dispo: ${pending.join("; ")}.` : "Pending/dispo: clarify studies, tasks, call thresholds, and disposition.",
-  ].join(" ").replace(/\s+/g, " ").trim();
+  return weeklySentences([
+    weeklyAnchorSentence(diagnosis),
+    ...trajectory,
+    ...active,
+    pending,
+  ]);
 }

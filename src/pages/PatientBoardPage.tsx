@@ -297,7 +297,7 @@ function importDraftToPatient(sourceDraft: PatientImportDraft, existingPatient?:
     admissionChiefConcern: draft.chiefComplaint || base.admissionChiefConcern,
     admissionBriefFreeText: isExistingInpatientImport ? base.admissionBriefFreeText : admissionSummary || base.admissionBriefFreeText,
     generatedAdmissionSummary: isExistingInpatientImport ? base.generatedAdmissionSummary : admissionSummary || base.generatedAdmissionSummary,
-    generatedWeeklySummary: isExistingInpatientImport && admissionSummary ? uniqueLines(base.generatedWeeklySummary, admissionSummary) : base.generatedWeeklySummary,
+    generatedWeeklySummary: base.generatedWeeklySummary,
     underlyingDiseases,
     underlyingDiseaseItems: textToItems(underlyingDiseases),
     activeProblems,

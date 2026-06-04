@@ -427,6 +427,32 @@ try {
   };
   const admission = formatClinicalDocumentDraft({ ...baseDraft, documentType: "admissionSummary" });
   const weekly = formatClinicalDocumentDraft({ ...baseDraft, documentType: "weeklySummary" });
+  const legacyWeekly = formatClinicalDocumentDraft({
+    ...baseDraft,
+    documentType: "weeklySummary",
+    clinicalReasoning: undefined,
+    conciseSummary: "Current focus: ward transfer after cholangitis septic shock; AKI off CRRT.",
+    sections: [
+      {
+        heading: "Weekly Summary",
+        content: "Current focus: ward transfer after cholangitis septic shock; AKI off CRRT; aspiration PNA/COPD.",
+      },
+      {
+        heading: "Timeline / Key Course",
+        content: "- 5/06 ERCP + biliary stent for source control.\n- 5/07-5/14 CRRT for AKI/hyperK; Cr 2.7, K 5.3.",
+      },
+      {
+        heading: "Problem-Based A/P",
+        content: "- Cholangitis/sepsis: afebrile/off pressor; f/u Cx and Abx duration.\n- Aspiration/COPD: NC O2, swallow eval.",
+      },
+      {
+        heading: "Pending / Dispo",
+        content: "- CBC diff, Cr/K/UO, sputum Cx, Abx plan, rehab/SNF.",
+      },
+    ],
+    followUpItems: ["rehab/SNF"],
+    uncertainty: [],
+  });
   const sbar = formatClinicalDocumentDraft({ ...baseDraft, documentType: "isbar" });
   const combined = `${admission}\n${weekly}\n${sbar}`;
   if (/continue current management|monitor closely/i.test(combined)) {
@@ -444,6 +470,10 @@ try {
     throw new Error(`weekly summary should be paragraph format without headings/bullets: ${weekly}`);
   }
   assertDocumentIncludes(weekly, /During this week[\s\S]*AKI on CKD with hyperK[\s\S]*Pending\/dispo/i, "weekly summary should keep active problems and pending/dispo in paragraph form");
+  if (/Weekly Summary|Timeline|Problem-Based A\/P|Pending \/ Dispo|\n\s*-/i.test(legacyWeekly)) {
+    throw new Error(`legacy weekly draft headings/bullets leaked into paragraph: ${legacyWeekly}`);
+  }
+  assertDocumentIncludes(legacyWeekly, /During this week[\s\S]*ERCP[\s\S]*Cr 2\.7[\s\S]*K 5\.3[\s\S]*Abx[\s\S]*rehab\/SNF/i, "legacy weekly formatter should preserve course values, treatment, and dispo");
   assertDocumentIncludes(sbar, /^Situation: .*septic shock.*AKI\/hyperK.*O2\/aspiration/im, "SBAR should lead with transfer risk");
   assertDocumentIncludes(sbar, /Recommendation:[\s\S]*f\/u Cx\/Abx de-escalation[\s\S]*restart anticoag only after Hb\/Plt\/bleed review/i, "SBAR should keep concrete actions");
   const dischargeCourse = formatClinicalDocumentDraft({
@@ -694,7 +724,7 @@ try {
       newLabs: reviewed.labText,
       parsedLabItems: parsedLabs,
       newImaging: reviewed.imageText,
-      generatedWeeklySummary: reviewed.admissionSummary,
+      generatedWeeklySummary: existing.generatedWeeklySummary,
       underlyingDiseases: [existing.underlyingDiseases, reviewed.underlyingDiseases].filter(Boolean).join("\n"),
       underlyingDiseaseItems: textToItems([existing.underlyingDiseases, reviewed.underlyingDiseases].filter(Boolean).join("\n")),
       activeProblems: [existing.activeProblems, reviewed.activeProblems].filter(Boolean).join("\n"),
@@ -739,6 +769,9 @@ try {
   }
   if (patient.isNewAdmission || patient.showAdmissionBriefOnPrint || patient.generatedAdmissionSummary) {
     throw new Error("existing inpatient transfer was treated as a new admission");
+  }
+  if (patient.generatedWeeklySummary !== existing.generatedWeeklySummary) {
+    throw new Error(`existing inpatient import polluted generatedWeeklySummary: ${patient.generatedWeeklySummary}`);
   }
   if (!/Vancomycin|Troponin I|Blood culture|Sputum culture/i.test(labels)) {
     throw new Error(`broad lab/culture extraction failed: ${labels}`);
