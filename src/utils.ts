@@ -267,7 +267,7 @@ export function getAdmissionSummaryText(patient: Patient, options: { allowFallba
     patient.presentIllnessOrHPI,
     patient.hpiOrAdmissionStory,
   ].filter(Boolean);
-  const candidates = [patient.generatedAdmissionSummary, patient.admissionBriefFreeText]
+  const candidates = [patient.admissionBriefFreeText, patient.generatedAdmissionSummary]
     .map((value) => String(value ?? "").trim())
     .filter(Boolean);
 

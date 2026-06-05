@@ -21,6 +21,7 @@ const { formatClinicalDocumentDraft } = await server.ssrLoadModule("/src/clinica
 const {
   emptyDailyNote,
   emptyPatient,
+  getAdmissionSummaryText,
   getLabFocusSummary,
   getPatientDisplaySummary,
   interpretLabItem,
@@ -461,10 +462,11 @@ try {
   if (/negative head CT wording|old CVA without new focal deficit/i.test(combined)) {
     throw new Error(`shared document formatter leaked noise-to-ignore content: ${combined}`);
   }
-  if (!/[\u76ee\u524d\u91cd\u9ede\u554f\u984c\u4f9d\u64da\u5f85]/.test(admission) || /The patient is|Admitted\/managed|PMH\/context|Key course|Active issues|Today\/pending/i.test(admission)) {
+  if (!/[\u76ee\u524d\u91cd\u9ede\u554f\u984c\u4f9d\u64da\u5f85\u95dc\u9375]/.test(admission) || /The patient is|Admitted\/managed|PMH\/context|Key course|Active issues|Today\/pending/i.test(admission)) {
     throw new Error(`admission summary did not use mixed Chinese-English brief style: ${admission}`);
   }
   assertOneMinuteAdmissionBrief(admission, "reasoning admission summary");
+  assertDocumentIncludes(admission, /\u95dc\u9375O[\s\S]*(Cr|K|SpO2|O2|Plt|Hb|Cx|CXR|CT|ERCP)/i, "reasoning admission summary should include key objective anchors");
   assertDocumentIncludes(admission, /AKI\/hyperK|Plt-limited anticoag|aspiration risk/i, "admission summary should lead with current transfer risks");
   if (/Problem-Based A\/P|Pending \/ Disposition|\n\s*-/i.test(weekly)) {
     throw new Error(`weekly summary should be paragraph format without headings/bullets: ${weekly}`);
@@ -509,10 +511,22 @@ try {
     throw new Error(`rule-based admission summary should prefer clinical abbreviations: ${admission}`);
   }
   assertDocumentIncludes(admission, /PNA|sepsis|lactate|culture|O2|renal|anticoag/i, "new admission summary should preserve admission reason, active risks, and pending work");
-  assertDocumentIncludes(admission, /\u56e0[\s\S]*\u4f4f\u9662[\s\S]*\u80cc\u666f[\s\S]*\u5230\u9662\/\u8f49\u5165\u6642[\s\S]*\u76ee\u524d\u91cd\u9ede[\s\S]*\u4eca\u65e5\u5f85/i, "new admission summary should follow oral brief structure");
+  assertDocumentIncludes(admission, /\u56e0[\s\S]*\u4f4f\u9662[\s\S]*\u80cc\u666f[\s\S]*\u5230\u9662\/\u8f49\u5165\u6642[\s\S]*\u95dc\u9375O[\s\S]*\u76ee\u524d\u91cd\u9ede[\s\S]*\u4eca\u65e5\u5f85/i, "new admission summary should follow oral brief structure");
   const expanded = formatRuleBasedAdmissionSummary(newAdmissionPlan, { length: "threeMinute" });
   if (admissionSentenceCount(expanded) < admissionSentenceCount(admission) || admissionSentenceCount(expanded) > 8) {
     throw new Error(`3-min admission brief support should preserve/expand the oral brief safely: ${expanded}`);
+  }
+  assertDocumentIncludes(expanded, /\u95dc\u9375O[\s\S]*(WBC|lactate|CXR|B\/C|SpO2|O2)/i, "3-min admission brief should preserve objective anchors");
+  const reviewedPreferred = getAdmissionSummaryText(
+    {
+      ...emptyPatient(),
+      admissionBriefFreeText: "reviewed free text summary",
+      generatedAdmissionSummary: "stale generated summary",
+    },
+    { allowFallback: false },
+  );
+  if (reviewedPreferred !== "reviewed free text summary") {
+    throw new Error(`reviewed admission brief should display before stale generated summary: ${reviewedPreferred}`);
   }
   console.log("PASS Rule-based new-admission summary is concise and preserves key IM work");
   supplementalPasses += 1;

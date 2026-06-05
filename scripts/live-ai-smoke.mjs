@@ -115,6 +115,7 @@ const auth = getAuth(app);
 const db = getFirestore(app);
 const functions = getFunctions(app);
 const generateRoundSoap = httpsCallable(functions, "generateRoundSoap");
+const generateClinicalDocument = httpsCallable(functions, "generateClinicalDocument");
 
 let patientRef;
 try {
@@ -209,7 +210,32 @@ try {
   const transferSoap = assertSoap(transfer.data, "Transfer");
   assert(/shock resolved|off pressor|ERCP|Cr 2\.4|AC|rehab/i.test(transferSoap), `Transfer SOAP lost active/resolved distinction\n${transferSoap}`);
 
-  console.log("PASS live generateRoundSoap smoke: Daily update, New SOAP, Transfer");
+  const admissionDocument = await generateClinicalDocument({
+    patientId,
+    documentType: "admissionSummary",
+    rawText: [
+      "Admission: 60/M CKD3 DM, fever cough dyspnea x3d.",
+      "ED V/S 2026/05/21 T 38.1 BP 94/58 HR 112 RR22 SpO2 92% NC3L.",
+      "Lab WBC 18.0, lactate 3.0, Cr 2.2 from 1.3, K 3.2.",
+      "CXR 5/21 RLL PNA. B/C drawn then Ceftriaxone/Azithro started.",
+      "Current: BP improved after IVF, still O2 NC3L. Pending B/C, sputum Cx, O2 wean, renal-dose meds.",
+    ].join("\n"),
+    dateFrom: "2026-05-21",
+    dateTo: "2026-05-21",
+    deidentifiedConfirmed: true,
+    storeRawText: false,
+    qualityMode: "balanced",
+  });
+  const documentDraft = admissionDocument.data?.draft ?? {};
+  const admissionText = [
+    documentDraft.conciseSummary,
+    ...(Array.isArray(documentDraft.sections) ? documentDraft.sections.map((section) => `${section?.heading ?? ""} ${section?.content ?? ""}`) : []),
+    JSON.stringify(documentDraft.clinicalReasoning ?? {}),
+  ].join("\n");
+  assert(/PNA|sepsis|lactate|WBC|CXR|Ceftriaxone|Azithro|B\/C|O2|Cr/i.test(admissionText), `Admission summary callable lost core facts\n${admissionText}`);
+  assert(!/\b(?:monitor closely|continue current management|clinical correlation|full admission note)\b/i.test(admissionText), `Admission summary callable returned generic filler\n${admissionText}`);
+
+  console.log("PASS live AI smoke: generateRoundSoap Daily/New/Transfer and generateClinicalDocument admissionSummary");
 } catch (error) {
   const text = readableCallableError(error);
   console.error(`FAIL live generateRoundSoap smoke: ${text}`);

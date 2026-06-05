@@ -1380,6 +1380,7 @@ const admissionBriefZh = {
   nowFocus: "\u76ee\u524d\u91cd\u9ede",
   problems: "\u554f\u984c",
   evidence: "\u4f9d\u64da",
+  keyObjective: "\u95dc\u9375O",
   todayPending: "\u4eca\u65e5\u5f85",
 };
 
@@ -1392,6 +1393,7 @@ function admissionBriefLimits(options: AdmissionBriefOptions = {}) {
     severityItems: expanded ? 3 : 2,
     courseItems: expanded ? 4 : 2,
     responseItems: expanded ? 2 : 1,
+    objectiveItems: expanded ? 4 : 3,
     activeItems: expanded ? 5 : 3,
     pendingItems: expanded ? 5 : 3,
     factLength: expanded ? 118 : 88,
@@ -1420,6 +1422,27 @@ function admissionReasonBrief(value: string) {
   return value
     .split(/,\s*(?=(?:BP|HR|RR|SpO2|O2|NC|RA|lactate|WBC|Hb|Plt|Cr|K|Na)\b)/i)[0]
     .trim();
+}
+
+function admissionProblemBrief(item: GeneratedClinicalPlan["problemBasedAP"][number], expanded: boolean) {
+  const title = shortProblemTitle(item.problemTitle);
+  if (!expanded) return title;
+  return `${title}: ${compactAssessmentPhrase(item)}`;
+}
+
+function admissionObjectiveAnchors(plan: GeneratedClinicalPlan, maxItems: number, maxLength: number) {
+  return admissionSummaryFactsByPattern(
+    [
+      ...plan.facts.objectiveFacts,
+      ...plan.facts.antibiotics,
+      ...plan.facts.procedures,
+      ...plan.facts.consults,
+      ...plan.facts.pendingItems,
+    ],
+    /\b(?:v\/s|bp|hr|rr|spo2|o2|nc|ra|fio2|wbc|anc|hb|hgb|plt|cr|bun|egfr|na|k\b|mg|ca|phos|lactate|crp|pct|inr|pt|ast|alt|t-?bil|alp|ggt|alb|troponin|bnp|culture|b\/c|bcx|u\/c|ucx|sputum|cxr|ct|mri|echo|ecg|ercp|egd|scope)\b/i,
+    maxItems,
+    maxLength,
+  );
 }
 
 export function formatRuleBasedAdmissionSummary(plan: GeneratedClinicalPlan, options: AdmissionBriefOptions = {}) {
@@ -1456,8 +1479,9 @@ export function formatRuleBasedAdmissionSummary(plan: GeneratedClinicalPlan, opt
     limits.responseItems,
     limits.factLength,
   ).join("; ");
+  const objective = admissionObjectiveAnchors(plan, limits.objectiveItems, limits.factLength).join("; ");
   const active = compactList(
-    plan.problemBasedAP.map((item) => shortProblemTitle(item.problemTitle)),
+    plan.problemBasedAP.map((item) => admissionProblemBrief(item, options.length === "threeMinute")),
     limits.activeItems,
     limits.factLength,
   )
@@ -1480,13 +1504,18 @@ export function formatRuleBasedAdmissionSummary(plan: GeneratedClinicalPlan, opt
     treatment ? `${admissionBriefZh.through} ${treatment}` : "",
     response ? `${treatment ? admissionBriefZh.after : admissionBriefZh.inHospital} ${response}` : "",
   ].filter(Boolean);
+  const activeLine = active ? `${admissionBriefZh.nowFocus} ${active}` : "";
+  const pendingLine = pending ? `${admissionBriefZh.todayPending} ${pending}` : "";
+  const activeAndPending = options.length === "threeMinute"
+    ? [activeLine, pendingLine]
+    : [[activeLine, pendingLine].filter(Boolean).join(zhSemicolon)];
 
   return formatMixedAdmissionSummarySentences([
     admissionLead,
     pmh ? `${admissionBriefZh.background} ${pmh}` : "",
     courseParts.join(zhComma),
-    active ? `${admissionBriefZh.nowFocus} ${active}` : "",
-    pending ? `${admissionBriefZh.todayPending} ${pending}` : "",
+    objective ? `${admissionBriefZh.keyObjective} ${objective}` : "",
+    ...activeAndPending,
   ], options);
 }
 
@@ -1764,6 +1793,9 @@ export function formatReasoningAdmissionSummary(
     limits.courseItems,
     limits.factLength,
   ).join("; ");
+  const objective = fallbackPlan
+    ? admissionObjectiveAnchors(fallbackPlan, limits.objectiveItems, limits.factLength).join("; ")
+    : admissionSummaryFacts(reasoning.whyThisMatters.map((item) => item.fact), limits.objectiveItems, limits.factLength).join("; ");
   const evidence = admissionSummaryFacts(reasoning.whyThisMatters.map((item) => `${item.fact} -> ${item.implication}`), 2, limits.factLength);
   const tasks = compactList(
     [
@@ -1779,13 +1811,19 @@ export function formatReasoningAdmissionSummary(
     ? [who, `${admissionBriefZh.because} ${diagnosis} ${admissionBriefZh.admitted}`].filter(Boolean).join(" ")
     : "";
   const currentLead = compactSnippet(reasoning.primaryRisk || reasoning.currentClinicalState, 110);
+  const activeLine = active ? `${admissionBriefZh.problems} ${active}` : "";
+  const evidenceLine = evidence.length > 0 ? `${admissionBriefZh.evidence} ${evidence.join("; ")}` : "";
+  const focusLine = [admissionLead && currentLead ? `${admissionBriefZh.nowFocus} ${currentLead}` : "", activeLine, evidenceLine].filter(Boolean).join(zhSemicolon);
+  const pendingLine = tasks.length > 0 ? `${admissionBriefZh.todayPending} ${tasks.join("; ")}` : "";
+  const focusAndPending = options.length === "threeMinute"
+    ? [focusLine, pendingLine]
+    : [[focusLine, pendingLine].filter(Boolean).join(zhSemicolon)];
   return formatMixedAdmissionSummarySentences([
     admissionLead || (currentLead ? `${admissionBriefZh.nowFocus} ${currentLead}` : ""),
     pmh ? `${admissionBriefZh.background} ${pmh}` : "",
     course ? `${admissionBriefZh.arrivalOrTransfer} ${course}` : "",
-    admissionLead && currentLead ? `${admissionBriefZh.nowFocus} ${currentLead}` : "",
-    [active ? `${admissionBriefZh.problems} ${active}` : "", evidence.length > 0 ? `${admissionBriefZh.evidence} ${evidence.join("; ")}` : ""].filter(Boolean).join(zhSemicolon),
-    tasks.length > 0 ? `${admissionBriefZh.todayPending} ${tasks.join("; ")}` : "",
+    objective ? `${admissionBriefZh.keyObjective} ${objective}` : "",
+    ...focusAndPending,
   ], options);
 }
 
