@@ -8,6 +8,7 @@ import {
   isImageLine,
   isLabLine,
   isVitalLine,
+  replaceSameStudyImageLines,
 } from "../clinicalFieldRouter";
 import type {
   AiClinicalSourceType,
@@ -1177,7 +1178,7 @@ function AiIntakePanel({ patient, selectedDate, onApplyPatient }: AiIntakePanelP
       physicalExam: appendUniqueLines(patient.physicalExam, routedPhysicalExamLines),
       newLabs: appendUniqueLines(patient.newLabs, routedLabSummaryLines),
       rawLabText: appendUniqueLines(patient.rawLabText, routedLabSummaryLines),
-      newImaging: appendUniqueLines(patient.newImaging, cleanedImageSummaryLines),
+      newImaging: appendUniqueLines(replaceSameStudyImageLines(patient.newImaging, cleanedImageSummaryLines), cleanedImageSummaryLines),
       importantRedFlags: appendUniqueLines(patient.importantRedFlags, redFlagLines),
       dischargeBarriers: appendUniqueLines(patient.dischargeBarriers, dischargeIssueLines),
       labReports: mergeLabReportsByDateTitle([...safeArray(patient.labReports), ...labReports]),

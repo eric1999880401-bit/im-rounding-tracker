@@ -121,6 +121,51 @@ export function isLabLine(value: string) {
     /\d/.test(value);
 }
 
+const imageStudyAliases: Array<[RegExp, string]> = [
+  [/\bchest\s*x-?ray\b|\bcxr\b/i, "cxr"],
+  [/\bkub\b/i, "kub"],
+  [/\bmri\b/i, "mri"],
+  [/\bct\b/i, "ct"],
+  [/\becho(?:cardiogra(?:m|phy))?\b/i, "echo"],
+  [/\bsono(?:graphy)?\b|\bultrasound\b|\bus\b/i, "sono"],
+  [/\begd\b|\bendoscopy\b/i, "egd"],
+  [/\bercp\b/i, "ercp"],
+  [/\bcolonoscopy\b/i, "colonoscopy"],
+  [/\bbronchoscopy\b/i, "bronch"],
+  [/\bpet\b/i, "pet"],
+  [/\bx-?ray\b/i, "xray"],
+];
+
+const imageRegionAliases: Array<[RegExp, string]> = [
+  [/\b(?:brain|head)\b/i, "brain"],
+  [/\b(?:chest|lung|thorax)\b/i, "chest"],
+  [/\b(?:abdomen|abdominal|abd|a\/p)\b/i, "abd"],
+  [/\b(?:pelvis|pelvic)\b/i, "pelvis"],
+  [/\b(?:spine|c-spine|l-spine|t-spine)\b/i, "spine"],
+  [/\bneck\b/i, "neck"],
+];
+
+// Same study type (and body region when stated) means a fresh report should replace the stale line, not stack under it.
+export function imageStudyKey(value: string) {
+  const text = String(value ?? "");
+  const study = imageStudyAliases.find(([pattern]) => pattern.test(text))?.[1] ?? "";
+  if (!study) return "";
+  const region = imageRegionAliases.find(([pattern]) => pattern.test(text))?.[1] ?? "";
+  return region ? `${study}:${region}` : study;
+}
+
+export function replaceSameStudyImageLines(existingText: string, incomingLines: string[]) {
+  const incomingKeys = new Set(incomingLines.map(imageStudyKey).filter(Boolean));
+  if (incomingKeys.size === 0) return existingText;
+  return String(existingText ?? "")
+    .split(/\r?\n/)
+    .filter((line) => {
+      const key = imageStudyKey(line);
+      return !key || !incomingKeys.has(key);
+    })
+    .join("\n");
+}
+
 export function isImageLine(value: string) {
   return /\b(?:ct|mri|cxr|x-?ray|sonography|sono|ultrasound|us\b|echo|egd|scope|endoscopy|colonoscopy|pet|imaging|image|brain|neck\/chest|abdomen\/pelvis)\b/i.test(value) &&
     !/\b(?:no murmur|bs clear|breath sounds|abd soft|warm ext|edema on exam|alert|clear consciousness)\b/i.test(value);

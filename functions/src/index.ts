@@ -1231,12 +1231,12 @@ const admissionSummaryZh = {
 };
 
 const admissionSummaryStyleBullets = [
-  "Admission summary/oral brief style: default to a 1-min oral brief in 3-5 short mixed Chinese-English clinical sentences, not an English paragraph, full H&P, or copied admission note.",
+  "Admission summary/oral brief style: follow the standard 3-min patient presentation (3分鐘報病人) used at IM morning rounds, in 6-9 short mixed Chinese-English clinical sentences, not an English paragraph, full H&P, or copied admission note.",
   "Use abbreviation-forward inpatient IM style: s/p, c/f, r/o, f/u, cont, Abx, Cx, B/C, U/C, Sputum Cx, PNA, UTI, AKI/CKD, RF, HF, AF, CAD, DM, HTN, COPD, O2/SpO2, NC/RA, CXR/CT/MRI/U/S, EGD, DC, OPD.",
   `Keep Dx/PMH, organisms, drug names, procedures, image studies, lab values, devices, and consult services in English; use Chinese only for connective clinical judgment such as ${admissionSummaryZh.because}, ${admissionSummaryZh.background}, ${admissionSummaryZh.arrivalOrTransfer}, ${admissionSummaryZh.through}, ${admissionSummaryZh.after}, ${admissionSummaryZh.nowFocus}, ${admissionSummaryZh.todayPending}.`,
-  `1-min structure without headings: 1) who/why admitted, 2) key PMH/context, 3) HPI/ED or transfer severity + treatment/response, 4) key objective anchors, 5) current assessment plus pending/plan/dispo.`,
-  `Sentence skeleton: [age/sex if known] ${admissionSummaryZh.because} [reason/Dx] ${admissionSummaryZh.admitted}. ${admissionSummaryZh.background} [PMH/context]. ${admissionSummaryZh.arrivalOrTransfer} [severity/HPI], ${admissionSummaryZh.through} [ED/ICU/transfer treatment] ${admissionSummaryZh.after} [response]. 關鍵O [V/S/O2 + 2-4 key labs/micro/image/procedure]. ${admissionSummaryZh.nowFocus} [active assessment], ${admissionSummaryZh.todayPending} [pending/plan/dispo].`,
-  "If the user explicitly asks for a 3-min or expanded oral brief, use 6-8 concise source-grounded sentences: one-liner, focused HPI chronology/pertinent negatives, relevant PMH/high-risk meds/allergies, key V/S/exam/lab/micro/image/procedure, prioritized assessment, plan/consults/dispo/contingency.",
+  "3-min presentation order without headings: 1) one-liner identification: age/sex + key PMH context + chief concern/reason for admission, 2) focused HPI in chronological order with pertinent positives AND pertinent negatives (HPI carries the most weight), 3) relevant PMH/high-risk meds/allergy only, 4) key objective anchors: V/S + O2, focused PE findings, then 2-4 key labs/micro/image/procedure results with exact values/dates, 5) one summary statement that synthesizes who the patient is and the leading diagnosis, 6) problem-based assessment ranked by acuity, 7) plan: today's actions, pending work, consults, disposition/contingency.",
+  `Sentence skeleton: [age/sex if known] ${admissionSummaryZh.because} [reason/Dx] ${admissionSummaryZh.admitted}. ${admissionSummaryZh.background} [PMH/context]. ${admissionSummaryZh.arrivalOrTransfer} [severity/HPI chronology + pertinent positives/negatives], ${admissionSummaryZh.through} [ED/ICU/transfer treatment] ${admissionSummaryZh.after} [response]. 關鍵O [V/S/O2 + focused PE + 2-4 key labs/micro/image/procedure]. ${admissionSummaryZh.nowFocus} [summary statement + ranked active assessment], ${admissionSummaryZh.todayPending} [pending/plan/dispo].`,
+  "If a 1-min ultra-short brief is explicitly requested, compress the same order into 3-5 sentences without dropping the one-liner, key objective anchors, or active assessment/plan.",
   "Prioritize life-threatening or admission-defining problems first; include exact values/dates when they change assessment or plan.",
   "Omit full ROS, full PMH, unrelated remote history, stable normal data, copied full lab panels, and routine medication lists.",
   "Do not write 'The patient is', full admission-note prose, copied full lab panels, routine normal data, or generic filler.",
@@ -1268,12 +1268,12 @@ function documentInstructions(documentType: DocumentType) {
     ],
     admissionSummary: [
       ...admissionSummaryStyleBullets,
-      "Create a short attending-rounds admission brief ready to paste into the rounding list.",
-      "Write like a senior IM resident's hand-written admission brief: diagnosis-oriented, clinically selective, abbreviation-forward, and mixed Chinese-English.",
-      "Use this mental order without headings: one-liner/admission reason, focused HPI or ED/transfer course, relevant PMH/context, key objective anchors, current assessment, today/pending/disposition.",
+      "Create a 3-min oral patient presentation (3分鐘報病人) ready to read aloud at attending rounds and paste into the rounding list.",
+      "Write like a senior IM resident presenting at morning rounds: diagnosis-oriented, clinically selective, abbreviation-forward, and mixed Chinese-English.",
+      "Follow the 3-min presentation order: one-liner identification, chronological focused HPI with pertinent positives/negatives, relevant PMH/meds/allergy, key V/S + focused PE, key labs/micro/images, summary statement, problem-based assessment, today/pending/disposition plan.",
       "Emphasize why admitted, important PMH/context, key positive/negative findings, active problems, major prior course, today's important changes, initial/current treatment, and pending/disposition decisions.",
       "Exclude trivial daily stable updates unless they affect management, safety, discharge, or handoff.",
-      "Keep the default 1-min brief to 3-5 short sentences; complex patients should still stay telegraphic and oral-ready.",
+      "Keep the 3-min brief to 6-9 short sentences; complex patients should still stay telegraphic and oral-ready.",
       "Use conciseSummary as the best one-paragraph presentation.",
     ],
     dischargeHospitalCourse: [
