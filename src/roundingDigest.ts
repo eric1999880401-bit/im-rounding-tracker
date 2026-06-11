@@ -10,7 +10,9 @@ import {
   pendingDischargePrep,
   plainClinicalText,
   safeClinicalLine,
+  safeClinicalLinePreservingMarks,
   splitHighlightLines,
+  stripColorMarkup,
 } from "./utils";
 
 type DigestMode = "board" | "rounds";
@@ -90,16 +92,20 @@ function digestLimits(mode: DigestMode) {
 }
 
 function cleanDigestLine(value: string) {
+  // Keep [[color:...]] marks so clinician colors survive into board/print digests; strip them only for compare keys.
   return value
-    .replace(/\[\[(red|orange|yellow|blue|green|purple)(?:-(?:highlight|text))?:([\s\S]*?)\]\]/gi, "$2")
     .replace(/\s+-\s*Reason:\s*.*$/i, "")
     .replace(/\s*\(\s*source:\s*AI\s*\)\s*$/i, "")
     .replace(/\s+/g, " ")
     .trim();
 }
 
+function digestComparableText(value: string) {
+  return stripColorMarkup(cleanDigestLine(value));
+}
+
 function cleanShortTail(value: string) {
-  return safeClinicalLine(value, value.length);
+  return safeClinicalLinePreservingMarks(value, value.length);
 }
 
 export function shortDigestText(value: string, maxChars = 52) {
@@ -122,7 +128,7 @@ export function shortDigestText(value: string, maxChars = 52) {
     .replace(/\s+/g, " ")
     .trim();
 
-  return safeClinicalLine(clean, maxChars);
+  return safeClinicalLinePreservingMarks(clean, maxChars);
 }
 
 function uniqueLines(lines: string[]) {
@@ -139,7 +145,7 @@ function uniqueLines(lines: string[]) {
 }
 
 function digestDedupeKey(value: string) {
-  const clean = cleanDigestLine(value).toLowerCase();
+  const clean = digestComparableText(value).toLowerCase();
   if (/(neutropenic|leukopen|anc|wbc).*(fever|infection|risk)|(?:fever|infection|risk).*(neutropenic|leukopen|anc|wbc)/.test(clean)) {
     return "neutropenic-infection-risk";
   }
@@ -153,7 +159,7 @@ function digestDedupeKey(value: string) {
 }
 
 function clinicalDedupeKey(value: string) {
-  return cleanDigestLine(value)
+  return digestComparableText(value)
     .replace(/^\d{1,2}\/\d{1,2}(?:\/\d{2,4})?\s*[:/-]?\s*/i, "")
     .replace(/^(?:ct|cta|mri|mra|cxr|xray|x-ray|u\/s|us|sono|ultrasound|image|study)(?:\s+[^:]{0,28})?:\s*/i, "")
     .replace(/^(?:neuro|heent|cv|resp|chest|abd|gi|gu|ext|skin|msk|general|gen|ob|gyn|pe)\s*:\s*/i, "")
@@ -165,7 +171,7 @@ function clinicalDedupeKey(value: string) {
 }
 
 function conceptKey(value: string) {
-  const clean = cleanDigestLine(value).toLowerCase();
+  const clean = digestComparableText(value).toLowerCase();
   if (/mrsa|enterococcus|bacteremia|blood culture|\bb\/c\b|bcx/.test(clean)) return "bacteremia";
   if (/infection|sepsis|septic|pneumonia|\bpna\b|uti/.test(clean)) return "infection";
   if (/esophageal|hypopharyngeal|tonsil|scc|cancer|carcinoma|malign|tumou?r|metasta/.test(clean)) return "cancer";
@@ -214,7 +220,8 @@ const problemStopWords = new Set([
 ]);
 
 function clinicalItems(value: string) {
-  const text = plainClinicalText(value, "");
+  // Same shape as plainClinicalText but keeps [[color:...]] marks for digest display.
+  const text = splitHighlightLines(String(value ?? "")).map((line) => line.text).join("; ");
   if (!text || text === "-") return [];
   return text.split(/\s*;\s*|\r?\n/).map(cleanDigestLine).filter(Boolean);
 }
