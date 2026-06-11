@@ -1,7 +1,8 @@
 import { classifyClinicalLine } from "./clinicalLineClassifier";
 import { ensureAntibioticApInDraft } from "./antibioticPlan";
+import { imageStudyKey } from "./clinicalFieldRouter";
 import { formatSoapDraft, parseSoapText, type SoapApProblem, type SoapDraft } from "./soapDraft";
-import { parseLabReports, safeClinicalLine } from "./utils";
+import { parseLabReports, safeClinicalLine, safeClinicalLinePreservingMarks, stripColorMarkup } from "./utils";
 
 export type RoundSoapWorkflowMode = "dailyUpdate" | "newSoap" | "transferHandoff";
 
@@ -67,7 +68,7 @@ const sectionLabels: Record<SoapDeltaSection, string> = {
 sectionLabels.orders = "藥囑";
 
 function normalizeLine(value: string) {
-  return String(value ?? "")
+  return stripColorMarkup(String(value ?? ""))
     .replace(/^!+\s*/, "")
     .replace(/^[-*#]\s*/, "")
     .replace(/\s+/g, " ")
@@ -83,7 +84,7 @@ function uniqueLines(values: string[], maxItems = 20) {
   const seen = new Set<string>();
   const next: string[] = [];
   values
-    .map((line) => safeClinicalLine(line, 160))
+    .map((line) => safeClinicalLinePreservingMarks(line, 160))
     .filter((line) => !isObviousPastedNoise(line))
     .filter(Boolean)
     .forEach((line) => {
@@ -364,11 +365,23 @@ function mergeApProblemsForDaily(baseline: SoapApProblem[], candidate: SoapApPro
   const warnings: string[] = [];
   const highRiskWarnings: string[] = [];
   const compactProblemLines = (baselineLines: string[], candidateLines: string[]) => {
-    const primary = uniqueLines(baselineLines, 1)[0] || uniqueLines(candidateLines, 1)[0] || "";
-    const secondaryPool = uniqueLines([...candidateLines, ...baselineLines.slice(1)], 6).filter((line) => normalizeLine(line) !== normalizeLine(primary));
-    if (!primary) return uniqueLines(secondaryPool, 2);
+    // New pasted status replaces stale baseline lines; protected baseline lines (abx/Cx/DC plans)
+    // stay ahead unless the new content already restates their facts.
+    const candidates = uniqueLines(candidateLines, 4);
+    if (candidates.length === 0) return uniqueLines(baselineLines, 2);
+    const candidateTokens = new Set(candidates.flatMap(meaningfulTokens));
+    const carriedProtected = baselineLines
+      .filter(isProtectedLine)
+      .filter((line) => {
+        const tokens = meaningfulTokens(line);
+        return tokens.length === 0 || !tokens.every((token) => candidateTokens.has(token));
+      });
+    const ordered = uniqueLines([...carriedProtected, ...candidates], 6);
+    const primary = ordered[0];
+    const secondaryPool = ordered.slice(1);
+    if (!primary) return [];
     if (secondaryPool.length === 0) return [primary];
-    return uniqueLines([primary, safeClinicalLine(secondaryPool.join("; "), 170)], 2);
+    return uniqueLines([primary, safeClinicalLinePreservingMarks(secondaryPool.join("; "), 170)], 2);
   };
   const next = baseline.map((problem) => {
     const matches = findMatchingProblems(problem, candidate);
@@ -593,10 +606,16 @@ function draftForDailyUpdate(baseline: SoapDraft, candidate: SoapDraft, fields: 
         nextObjective[section] = uniqueLines(candidateObjective[section], 4);
       } else if (section === "lab") {
         nextObjective[section] = mergeLabLinesForDaily(baseObjective[section], candidateObjective[section], 12);
-      } else {
-        nextObjective[section] = mergeDailyLines(baseObjective[section], candidateObjective[section], {
-          maxItems: section === "image" ? 8 : 5,
+      } else if (section === "image") {
+        // A fresh report for the same study (e.g., today's CXR) replaces the stale line instead of stacking under it.
+        const incomingStudyKeys = new Set(candidateObjective.image.map(imageStudyKey).filter(Boolean));
+        const baselineWithoutReplacedStudies = baseObjective.image.filter((line) => {
+          const key = imageStudyKey(line);
+          return !key || !incomingStudyKeys.has(key);
         });
+        nextObjective[section] = mergeDailyLines(baselineWithoutReplacedStudies, candidateObjective.image, { maxItems: 8 });
+      } else {
+        nextObjective[section] = mergeDailyLines(baseObjective[section], candidateObjective[section], { maxItems: 5 });
       }
       pushChanged(changed, section, `${sectionLabels[section]} updated from pasted field`);
     } else {

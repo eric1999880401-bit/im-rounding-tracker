@@ -5,9 +5,11 @@ import {
   createId,
   dischargePrepText,
   getUnderlyingDiseaseItems,
+  hasColorMarkup,
   nowIso,
   plainClinicalText,
-  safeClinicalLine,
+  safeClinicalLinePreservingMarks,
+  stripColorMarkup,
   textToItems,
 } from "./utils";
 
@@ -40,7 +42,7 @@ function hasText(value: unknown) {
 }
 
 function normalizeKey(value: string) {
-  return value
+  return stripColorMarkup(value)
     .replace(/^!+/, "")
     .replace(/^[-*]\s*/, "")
     .replace(/\s+/g, " ")
@@ -49,7 +51,7 @@ function normalizeKey(value: string) {
 }
 
 function cleanSoapLine(value: unknown, maxChars = SOAP_LINE_LIMIT) {
-  return safeClinicalLine(String(value ?? ""), maxChars)
+  return safeClinicalLinePreservingMarks(String(value ?? ""), maxChars)
     .replace(/^[-*]\s*/, "")
     .replace(/^#+\s*/, "# ")
     .trim();
@@ -140,7 +142,7 @@ function apProblemsFromText(value: string): SoapApProblem[] {
     const clean = line.replace(/^A\/P\s*:\s*/i, "").trim();
     if (!clean) return;
     const colon = clean.match(/^([^:]{3,72}):\s*(.+)$/);
-    if (colon) {
+    if (colon && !colon[1].includes("[[")) {
       problems.push({ title: cleanSoapLine(colon[1], 72), lines: uniqueSoapLines([colon[2]], 3, 140) });
       return;
     }
@@ -264,6 +266,7 @@ export function soapTextWithDerivedHighlights(text: string) {
       if (!clean || clean.startsWith("!") || /^#{1,6}\s/.test(clean) || /^(?:S|O|A\/P|Tasks|DC|Warnings)\s*:/i.test(clean)) {
         return line;
       }
+      if (hasColorMarkup(clean)) return line;
       if (criticalSoapLine(clean)) return `!!${line}`;
       if (importantSoapLine(clean)) return line.replace(clean, `[[orange:${clean}]]`);
       return line;
@@ -859,7 +862,7 @@ function inlineApProblem(line: string) {
   const stripped = stripSoapBullet(line);
   const clean = stripped.replace(/^!+\s*/, "");
   const match = clean.match(/^([^:]{3,80}):\s*(.+)$/);
-  if (!match) return null;
+  if (!match || match[1].includes("[[")) return null;
   const title = cleanSoapLine(match[1], 72);
   const body = cleanSoapLine(`${stripped.startsWith("!") ? "!" : ""}${match[2]}`, 130);
   if (!title || !body || /^(?:s|o|a\/p|ap|tasks?|dc|v\/s|vs|pe|lab|image|img)$/i.test(title)) return null;
@@ -1039,7 +1042,7 @@ function splitObjectiveLines(oLines: string[]) {
 
   oLines.forEach((line) => {
     const clean = cleanSoapLine(line, 180);
-    const plain = clean.replace(/^!\s*/, "");
+    const plain = clean.replace(/^!+\s*/, "");
     if (!clean) return;
     if (/^(?:v\/s|vs|vitals?)\s*:/i.test(plain) || /\bBP\b|\bSpO2\b|\bHR\b|\bRR\b|\bT\s*\d/i.test(plain)) {
       vitalSigns.push(plain.replace(/^(?:v\/s|vs|vitals?)\s*:\s*/i, ""));
@@ -1052,7 +1055,7 @@ function splitObjectiveLines(oLines: string[]) {
     } else if (/^(?:image|img)\s*:/i.test(plain) || /^(?:ct|mri|cxr|xray|x-ray|echo|sono|ultrasound)\b/i.test(plain)) {
       imageSummary.push(plain.replace(/^(?:image|img)\s*:\s*/i, ""));
     } else {
-      physicalExam.push(clean);
+      physicalExam.push(plain);
     }
   });
 
@@ -1106,6 +1109,10 @@ function assessmentItemsFromSoapProblems(problems: SoapApProblem[]): AssessmentP
   });
 }
 
+function stripTonePrefix(value: string) {
+  return String(value ?? "").replace(/^!+\s*/, "");
+}
+
 export function soapDraftToPatientPatch(
   draft: SoapDraft,
   patient: Patient,
@@ -1113,22 +1120,23 @@ export function soapDraftToPatientPatch(
   reviewedSoapText = formatSoapDraft(draft),
 ): SoapDraftPatch {
   const objective = splitObjectiveLines(draft.oLines);
+  // Tone markers (!/!!) stay encoded in soapText; plain patient/note fields must not leak literal bangs.
   const apText = draft.apProblems
-    .map((problem) => [`# ${problem.title}`, ...problem.lines.map((line) => `- ${line}`)].join("\n"))
+    .map((problem) => [`# ${stripTonePrefix(problem.title)}`, ...problem.lines.map((line) => `- ${stripTonePrefix(line)}`)].join("\n"))
     .join("\n");
   const now = nowIso();
   const nextPatient: Patient = {
     ...patient,
-    subjectiveOrChiefConcern: draft.sLines.join("\n"),
+    subjectiveOrChiefConcern: draft.sLines.map(stripTonePrefix).join("\n"),
     vitalSigns: objective.vitalSigns.join("\n"),
     bloodSugar: objective.bloodSugar.join("\n"),
     physicalExam: objective.physicalExam.join("\n"),
     newLabs: objective.labSummary.join("\n"),
     rawLabText: objective.labSummary.join("\n"),
     newImaging: objective.imageSummary.join("\n"),
-    assessment: draft.apProblems.map((problem) => problem.title).join("\n"),
+    assessment: draft.apProblems.map((problem) => stripTonePrefix(problem.title)).join("\n"),
     plan: apText,
-    dischargePlan: draft.dcLines.join("\n"),
+    dischargePlan: draft.dcLines.map(stripTonePrefix).join("\n"),
     tasks: tasksFromSoapLines(draft.taskLines, patient),
     updatedAt: now,
   };

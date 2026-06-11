@@ -241,7 +241,7 @@ export function CompactItemList({ items, fallback = "-", maxItems }: ItemListPro
     <div className="compact-items">
       {visibleItems.map((item) => (
         <span className={item.trim().startsWith("!") ? "compact-item important-line" : "compact-item"} key={item}>
-          {item.trim().startsWith("!") ? item.trim().slice(1).trim() : item}
+          {item.trim().replace(/^!+\s*/, "")}
         </span>
       ))}
       {typeof maxItems === "number" && items.length > maxItems && (

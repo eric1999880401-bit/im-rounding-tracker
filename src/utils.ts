@@ -175,6 +175,20 @@ export function stripColorMarkup(value: string) {
   return value.replace(/\[\[(red|orange|yellow|blue|green|purple)(?:-(?:highlight|text))?:([\s\S]*?)\]\]/gi, "$2");
 }
 
+export function hasColorMarkup(value: string) {
+  return /\[\[(?:red|orange|yellow|blue|green|purple)(?:-(?:highlight|text))?:/i.test(String(value ?? ""));
+}
+
+export function safeClinicalLinePreservingMarks(value: string, maxChars = 120) {
+  const source = String(value ?? "");
+  if (!hasColorMarkup(source)) return safeClinicalLine(source, maxChars);
+  // Truncation or tail cleanup could split a [[color:...]] token, so marked lines only get whitespace normalization.
+  return source
+    .replace(/\s+([,.;:])/g, "$1")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function hasSpecificImagingTail(value: string) {
   return /\b(?:brain|head|neck|chest|lung|abd(?:omen|ominal)?|a\/p|ap|pelvis|pelvic|spine|cervical|thoracic|lumbar|sinus|cardiac|coronary)\s+(?:CT|MRI|CXR)\.?$/i.test(value)
     || /\b(?:CT|MRI)\s+(?:brain|head|neck|chest|lung|abd(?:omen|ominal)?|a\/p|ap|pelvis|pelvic|spine|cervical|thoracic|lumbar|sinus|cardiac|coronary)\.?$/i.test(value)

@@ -1,6 +1,12 @@
-import { classifyClinicalLine, type ClinicalLineKind, type ClinicalLineTone, stripClinicalMarkup } from "./clinicalLineClassifier";
+import {
+  classifyClinicalLine,
+  normalizeClinicalDisplayTextPreservingMarks,
+  type ClinicalLineKind,
+  type ClinicalLineTone,
+  stripClinicalMarkup,
+} from "./clinicalLineClassifier";
 import { formatSoapDraft, normalizeSoapTextForEditor, parseSoapText, type SoapApProblem, type SoapDraft } from "./soapDraft";
-import { createId, safeClinicalLine } from "./utils";
+import { createId, hasColorMarkup, safeClinicalLine, safeClinicalLinePreservingMarks } from "./utils";
 
 export interface SoapEditorLine {
   id: string;
@@ -49,12 +55,27 @@ function withoutTonePrefix(value: string) {
     .trim();
 }
 
+function markPreservingEditorText(value: string) {
+  const withoutTone = String(value ?? "")
+    .replace(/^!!+\s*/, "")
+    .replace(/^!+\s*/, "")
+    .replace(/^\*\s+/, "")
+    .trim()
+    .replace(/^(S|V\/S|VS|Vitals?|PE|Physical exam|Lab|Image|Img|Task|Tasks|DC|Discharge|Prep)\s*:\s*/i, "");
+  return normalizeClinicalDisplayTextPreservingMarks(withoutTone);
+}
+
+function editorLineText(value: string, classifiedText: string) {
+  // classifyClinicalLine strips [[color:...]] marks; keep them so clinician color tags survive round-trips.
+  return hasColorMarkup(value) ? markPreservingEditorText(value) : withoutTonePrefix(classifiedText);
+}
+
 function makeLine(value: string, fallbackKind: ClinicalLineKind): SoapEditorLine {
   const classified = classifyClinicalLine(value, { fallbackKind, explicitTone: bangTone(value) });
   const lockedKind = fallbackKind === "task" || fallbackKind === "dc" || fallbackKind === "ap" || fallbackKind === "s" || fallbackKind === "header";
   return {
     id: createId("soap-line"),
-    text: withoutTonePrefix(classified.text),
+    text: editorLineText(value, classified.text),
     tone: classified.tone === "info" ? "plain" : classified.tone,
     kind: lockedKind ? fallbackKind : classified.kind === "other" ? fallbackKind : classified.kind,
   };
@@ -86,9 +107,10 @@ function makeTaskLine(value: string): SoapEditorLine {
 
 function makeProblem(problem: SoapApProblem): SoapEditorProblem {
   const explicitTitleTone = bangTone(problem.title);
+  const rawTitle = problem.title || "Problem";
   return {
     id: createId("soap-ap"),
-    title: withoutTonePrefix(problem.title || "Problem"),
+    title: hasColorMarkup(rawTitle) ? markPreservingEditorText(rawTitle) : withoutTonePrefix(rawTitle),
     tone: explicitTitleTone ?? "plain",
     lines: problem.lines.map((line) => makeLine(line, "ap")),
   };
@@ -130,7 +152,7 @@ function orderSourceLines(sourceText: string) {
   return String(sourceText ?? "")
     .split(/\r?\n|[\u2028\u2029]/)
     .map(stripOrderPrefix)
-    .map((line) => safeClinicalLine(line, 170))
+    .map((line) => safeClinicalLinePreservingMarks(line, 170))
     .filter(Boolean)
     .map((line) => ({ ...makeLine(line, "task"), subtype: "order" as const }));
 }
@@ -180,7 +202,7 @@ export function parseSoapTextToEditorDraft(text: string): SoapEditorDraft {
 }
 
 function serializeLine(line: SoapEditorLine, fallbackKind: ClinicalLineKind) {
-  const clean = safeClinicalLine(line.text, 170);
+  const clean = safeClinicalLinePreservingMarks(line.text, 170);
   if (!clean) return "";
   const kind = line.kind || fallbackKind;
   const prefix =
@@ -199,7 +221,7 @@ function serializeLine(line: SoapEditorLine, fallbackKind: ClinicalLineKind) {
 
 function serializeTaskLine(line: SoapEditorLine) {
   if (line.subtype !== "order") return serializeLine(line, "task");
-  const clean = safeClinicalLine(line.text, 170);
+  const clean = safeClinicalLinePreservingMarks(line.text, 170);
   if (!clean) return "";
   const tonePrefix = line.tone === "critical" ? "!! " : line.tone === "important" ? "! " : "";
   const hasExplicitOrderPrefix = /^(?:order|orders?|meds?|藥囑|Abx|Anticoag\/AP|Steroid\/Immuno|Cardio\/Renal|Resp|Insulin\/Glucose|IVF\/Lyte|Nutrition|Monitoring|PRN|Routine(?: hidden)?)\s*[:：]/i.test(clean);
@@ -208,7 +230,7 @@ function serializeTaskLine(line: SoapEditorLine) {
 }
 
 function serializeProblem(problem: SoapEditorProblem) {
-  const title = safeClinicalLine(problem.title, 110) || "Problem";
+  const title = safeClinicalLinePreservingMarks(problem.title, 110) || "Problem";
   const titlePrefix = problem.tone === "critical" ? "!! " : problem.tone === "important" ? "! " : "";
   const lines = problem.lines.map((line) => serializeLine(line, "ap")).filter(Boolean).slice(0, 2);
   return {

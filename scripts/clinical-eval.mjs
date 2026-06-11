@@ -2619,6 +2619,106 @@ try {
   console.error(`FAIL Medication order cleaner summarizes noisy HIS orders without saving raw text: ${failures[failures.length - 1].error}`);
 }
 
+try {
+  const cxrFixBaseline = [
+    "S:",
+    "- stable overnight",
+    "O:",
+    "- V/S: BP 120/70, HR 80",
+    "- Lab: Na 128",
+    "- Image: CXR 5/18 RLL opacity",
+    "A/P:",
+    "# PNA",
+    "- Ceftriaxone 5/17-, f/u B/C",
+    "# Hyponatremia",
+    "- Na 128, fluid restriction",
+  ].join("\n");
+  const cxrFixCandidate = [
+    "S:",
+    "- stable overnight",
+    "O:",
+    "- V/S: BP 120/70, HR 80",
+    "- Lab: Na 134",
+    "- Image: CXR 5/20 RLL opacity improving",
+    "A/P:",
+    "# PNA",
+    "- Ceftriaxone 5/17-, f/u B/C",
+    "# Hyponatremia",
+    "- Na 134 improving, cont fluid restriction",
+  ].join("\n");
+  const cxrFixGuarded = guardRoundSoapDelta({
+    workflowMode: "dailyUpdate",
+    baselineText: cxrFixBaseline,
+    candidateText: cxrFixCandidate,
+    sourceFields: { labs: "Na 134 (was 128)", images: "CXR 5/20 RLL opacity improving" },
+  });
+  if (!/CXR 5\/20 RLL opacity improving/i.test(cxrFixGuarded.acceptedText)) {
+    throw new Error(`New CXR report was not applied:\n${cxrFixGuarded.acceptedText}`);
+  }
+  if (/CXR 5\/18/i.test(cxrFixGuarded.acceptedText)) {
+    throw new Error(`Stale CXR line should be replaced by the new same-study report:\n${cxrFixGuarded.acceptedText}`);
+  }
+  if (!/Na 134 improving/i.test(cxrFixGuarded.acceptedText)) {
+    throw new Error(`Updated A/P status line was not applied:\n${cxrFixGuarded.acceptedText}`);
+  }
+  if (/Na 128, fluid restriction/i.test(cxrFixGuarded.acceptedText)) {
+    throw new Error(`Stale plain A/P line should be replaced by the pasted update:\n${cxrFixGuarded.acceptedText}`);
+  }
+  if (!/Ceftriaxone 5\/17-/i.test(cxrFixGuarded.acceptedText)) {
+    throw new Error(`Protected antibiotic A/P line must be preserved:\n${cxrFixGuarded.acceptedText}`);
+  }
+
+  const colorMarkSoap = [
+    "S:",
+    "- [[red:chest pain]] worse at night",
+    "O:",
+    "- V/S: BP 120/70",
+    "A/P:",
+    "# Sepsis",
+    "- [[orange:f/u B/C clearance]]",
+  ].join("\n");
+  const colorMarkRoundTrip = editorDraftToSoapText(parseSoapTextToEditorDraft(colorMarkSoap));
+  if (!/\[\[red:chest pain\]\]/i.test(colorMarkRoundTrip) || !/\[\[orange:f\/u B\/C clearance\]\]/i.test(colorMarkRoundTrip)) {
+    throw new Error(`Clinician color marks must survive the SOAP editor round-trip:\n${colorMarkRoundTrip}`);
+  }
+  if (/\[\[orange[^:]/i.test(colorMarkRoundTrip)) {
+    throw new Error(`Color markup was corrupted during round-trip:\n${colorMarkRoundTrip}`);
+  }
+
+  const bangLeakSoap = [
+    "S:",
+    "- !! new chest pain",
+    "O:",
+    "- !! V/S: BP 80/40",
+    "- ! Image: CXR 5/20 RLL opacity",
+    "A/P:",
+    "# ! Sepsis",
+    "- !! on norepi",
+    "DC:",
+    "- ! not ready",
+  ].join("\n");
+  const bangLeakPatch = soapTextToPatientPatch(bangLeakSoap, emptyPatient("bang-leak"), todayKey());
+  const bangLeakFields = [
+    bangLeakPatch.patient.subjectiveOrChiefConcern,
+    bangLeakPatch.patient.vitalSigns,
+    bangLeakPatch.patient.newImaging,
+    bangLeakPatch.patient.assessment,
+    bangLeakPatch.patient.plan,
+    bangLeakPatch.patient.dischargePlan,
+  ].join("\n");
+  if (/^\s*!|\n\s*!|- !/.test(bangLeakFields)) {
+    throw new Error(`Tone bangs leaked into plain patient fields:\n${bangLeakFields}`);
+  }
+  if (!/soapText/.test(JSON.stringify(Object.keys(bangLeakPatch.dailyNotePatch))) || !/!!/.test(bangLeakPatch.dailyNotePatch.soapText)) {
+    throw new Error("Tone markers must stay encoded inside the saved soapText.");
+  }
+  console.log("PASS Pasted CXR/A&P updates replace stale lines, color marks persist, and bangs stay out of plain fields");
+  supplementalPasses += 1;
+} catch (error) {
+  failures.push({ name: "CXR/A&P replace + color mark + bang regression", error: error instanceof Error ? error.message : String(error) });
+  console.error(`FAIL CXR/A&P replace + color mark + bang regression: ${failures[failures.length - 1].error}`);
+}
+
 await server.close();
 
 if (failures.length > 0) {

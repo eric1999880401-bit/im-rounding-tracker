@@ -72,7 +72,8 @@ function AdmissionBriefForm({
 
   function buildLocalAdmissionSummary(sourceText: string) {
     const plan = applyClinicalKnowledgeToText(sourceText);
-    const summary = formatRuleBasedAdmissionSummary(plan);
+    // 3-minute oral presentation format is the default admission summary output.
+    const summary = formatRuleBasedAdmissionSummary(plan, { length: "threeMinute" }) || formatRuleBasedAdmissionSummary(plan);
     return summary || compactAdmissionLine(sourceText) || sourceText.replace(/\s+/g, " ").trim().slice(0, 500);
   }
 
@@ -97,7 +98,8 @@ function AdmissionBriefForm({
     return {
       ...patient,
       generatedAdmissionSummary: summary,
-      admissionBriefFreeText: patient.admissionBriefFreeText.trim() ? patient.admissionBriefFreeText : summary,
+      // Explicit generation replaces the displayed summary; the clinician still reviews before Save.
+      admissionBriefFreeText: summary,
       oneLiner: patient.oneLiner.trim() ? patient.oneLiner : summary,
       chiefComplaint: patient.chiefComplaint.trim() ? patient.chiefComplaint : chiefConcern,
       admissionChiefConcern: patient.admissionChiefConcern.trim() ? patient.admissionChiefConcern : chiefConcern,
@@ -164,7 +166,8 @@ function AdmissionBriefForm({
 
   function handleAdmissionNotePaste(event: ClipboardEvent<HTMLTextAreaElement>) {
     const pastedText = event.clipboardData.getData("text");
-    if (!pastedText.trim()) return;
+    // Without de-identification confirmation the paste must still land in the textarea normally.
+    if (!pastedText.trim() || !deidentifiedConfirmed) return;
     event.preventDefault();
     setAdmissionNoteSource(pastedText);
     window.setTimeout(() => {
@@ -174,7 +177,7 @@ function AdmissionBriefForm({
 
   function handleAdmissionSummaryPaste(event: ClipboardEvent<HTMLTextAreaElement>) {
     const pastedText = event.clipboardData.getData("text");
-    if (!shouldTreatPasteAsAdmissionNote(pastedText)) return;
+    if (!deidentifiedConfirmed || !shouldTreatPasteAsAdmissionNote(pastedText)) return;
     event.preventDefault();
     setAdmissionNoteSource(pastedText);
     setGenerationStatus("");
