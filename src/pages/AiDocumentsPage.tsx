@@ -203,7 +203,7 @@ function hasClinicalRuleSignal(plan: GeneratedClinicalPlan) {
 
 function formatRuleReviewedDocument(documentType: AiDocumentType, plan: GeneratedClinicalPlan) {
   if (!hasClinicalRuleSignal(plan)) return "";
-  if (documentType === "admissionSummary") return formatRuleBasedAdmissionSummary(plan);
+  if (documentType === "admissionSummary") return formatRuleBasedAdmissionSummary(plan, { length: "threeMinute" });
   if (documentType === "isbar") return formatRuleBasedSbar(plan);
   if (documentType === "weeklySummary") return formatRuleBasedWeeklySummary(plan);
   return "";

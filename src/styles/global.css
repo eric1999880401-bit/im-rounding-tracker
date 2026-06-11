@@ -2883,6 +2883,17 @@ tbody tr:last-child td {
   color: var(--text-muted);
 }
 
+.color-markup-preview {
+  background: var(--surface);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  display: grid;
+  font-size: 13px;
+  gap: 2px;
+  line-height: 1.45;
+  padding: 6px 9px;
+}
+
 .inline-color-toolbar {
   align-items: center;
   display: flex;

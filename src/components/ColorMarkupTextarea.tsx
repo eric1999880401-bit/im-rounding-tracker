@@ -5,6 +5,9 @@ import {
   clinicalMarkColors,
   type ClinicalMarkColor,
 } from "../clinicalColorMarkup";
+import { hasColorMarkup } from "../utils";
+import { ClinicalInlineText } from "./ClinicalText";
+import { useSelectionRange } from "./useSelectionRange";
 
 interface ColorMarkupTextareaProps {
   value: string;
@@ -28,6 +31,7 @@ function ColorMarkupTextarea({
   className,
 }: ColorMarkupTextareaProps) {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const { rememberSelection, getSelectionRange } = useSelectionRange(textareaRef);
 
   function applySelection(nextValue: string, start: number, selectedLength: number) {
     onChange(nextValue);
@@ -38,24 +42,21 @@ function ColorMarkupTextarea({
   }
 
   function markColor(color: ClinicalMarkColor) {
-    const textarea = textareaRef.current;
-    if (!textarea) return;
+    const range = getSelectionRange(value.length);
+    if (!range) return;
 
-    const start = textarea.selectionStart;
-    const end = textarea.selectionEnd;
-    if (start === end) return;
-
-    const selectedText = value.slice(start, end);
-    applySelection(applyClinicalColorMarkup(value, start, end, color), start + `[[${color}:`.length, selectedText.length);
+    const selectedText = value.slice(range.start, range.end);
+    applySelection(
+      applyClinicalColorMarkup(value, range.start, range.end, color),
+      range.start + `[[${color}:`.length,
+      selectedText.length,
+    );
   }
 
   function clearColor() {
-    const textarea = textareaRef.current;
-    if (!textarea) return;
-    const start = textarea.selectionStart;
-    const end = textarea.selectionEnd;
-    if (start === end) return;
-    applySelection(clearClinicalColorMarkupAtSelection(value, start, end), start, value.slice(start, end).length);
+    const range = getSelectionRange(value.length);
+    if (!range) return;
+    applySelection(clearClinicalColorMarkupAtSelection(value, range.start, range.end), range.start, value.slice(range.start, range.end).length);
   }
 
   return (
@@ -65,6 +66,7 @@ function ColorMarkupTextarea({
         className={className}
         value={value}
         onChange={(event) => onChange(event.target.value)}
+        onSelect={rememberSelection}
         onBlur={onBlur}
         onCompositionStart={onCompositionStart}
         onCompositionEnd={onCompositionEnd}
@@ -88,6 +90,15 @@ function ColorMarkupTextarea({
           clear
         </button>
       </div>
+      {hasColorMarkup(value) && (
+        <div className="color-markup-preview" aria-label="Color preview">
+          {value.split(/\r?\n/).filter((line) => line.trim()).map((line, index) => (
+            <div key={`${line}-${index}`}>
+              <ClinicalInlineText value={line} />
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
