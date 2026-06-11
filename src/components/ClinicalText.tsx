@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { KeyboardEvent, ReactNode } from "react";
 import type { HighlightLine, KeywordHighlightRule } from "../types";
-import { safeClinicalLine, splitHighlightLines } from "../utils";
+import { hasColorMarkup, safeClinicalLine, safeClinicalLinePreservingMarks, splitHighlightLines } from "../utils";
 import { classifyClinicalLine, normalizeClinicalDisplayTextPreservingMarks } from "../clinicalLineClassifier";
 import { applyUserKeywordHighlights, clinicalMarkPattern } from "../clinicalColorMarkup";
 import { parseClinicalLabTokens } from "../labReference";
@@ -19,7 +19,8 @@ interface ClinicalTextProps {
 }
 
 function shortenText(text: string, maxChars?: number) {
-  return maxChars ? safeClinicalLine(text, maxChars) : text;
+  if (!maxChars) return text;
+  return hasColorMarkup(text) ? safeClinicalLinePreservingMarks(text, maxChars) : safeClinicalLine(text, maxChars);
 }
 
 function groupLines(lines: HighlightLine[], maxCharsPerLine?: number) {

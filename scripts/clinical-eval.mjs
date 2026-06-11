@@ -1,4 +1,6 @@
 import { createServer } from "vite";
+import React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 
 const server = await createServer({
   appType: "custom",
@@ -81,6 +83,7 @@ const { labReferenceText, parseClinicalLabTokens } = await server.ssrLoadModule(
 const { boardDischargeTasks, hasBoardDischargeSoonSignal, isBoardNewAdmission } = await server.ssrLoadModule("/src/boardCockpit.ts");
 const { buildLabVisualSummaryFromText, formatLabVisualSummaryLinesFromText } = await server.ssrLoadModule("/src/labVisualSummary.ts");
 const { formatSoapBasedIsbar } = await server.ssrLoadModule("/src/soapSbar.ts");
+const { SoapVisualPreview } = await server.ssrLoadModule("/src/components/SoapVisualPreview.tsx");
 
 function haystack(plan) {
   return [
@@ -2156,6 +2159,20 @@ try {
   const markedPrint = displayPrintLine("A/P: [[yellow:AKI Cr 2.7]]; [[green:UO improving]]");
   if (!/\[\[yellow:AKI Cr 2\.7\]\]/.test(markedPrint) || !/\[\[green:UO improving\]\]/.test(markedPrint)) {
     throw new Error(`Print display should preserve inline color markup: ${markedPrint}`);
+  }
+  const colorPreviewHtml = renderToStaticMarkup(React.createElement(SoapVisualPreview, {
+    value: [
+      "S:",
+      "- [[red:SOB]] improved",
+      "O:",
+      "- Lab: [[red:Cr 6.1]]",
+      "A/P:",
+      "# [[orange:AKI]]",
+      "- f/u Cr",
+    ].join("\n"),
+  }));
+  if (!/clinical-mark-red/.test(colorPreviewHtml) || !/clinical-mark-orange/.test(colorPreviewHtml)) {
+    throw new Error(`Highlighted SOAP preview did not render clinician color markup: ${colorPreviewHtml.slice(0, 600)}`);
   }
   const appliedColor = applyClinicalColorMarkup("Cr 2.7 improving", 0, 6, "yellow");
   if (appliedColor !== "[[yellow:Cr 2.7]] improving") {

@@ -2,7 +2,7 @@ import { useMemo, type ReactNode } from "react";
 import { parseSoapText, soapTextWithDerivedHighlights } from "../soapDraft";
 import { deriveSoapEvidence, type SoapSourceFields } from "../soapEvidence";
 import { ClinicalInlineText, ClinicalText, type LabReferenceDisplayMode } from "./ClinicalText";
-import { classifyClinicalLine, normalizeClinicalDisplayText, type ClinicalLineKind, type ClinicalLineTone } from "../clinicalLineClassifier";
+import { classifyClinicalLine, normalizeClinicalDisplayTextPreservingMarks, type ClinicalLineKind, type ClinicalLineTone } from "../clinicalLineClassifier";
 import { formatLabVisualSummaryLinesFromText } from "../labVisualSummary";
 import { formatMedicationOrderLinesForDisplay } from "../medicationOrderParser";
 import type { KeywordHighlightRule, RoundingLayoutPreferences } from "../types";
@@ -145,7 +145,7 @@ export function SoapVisualPreview({ value, compact = false, sourceFields = {}, l
         <div className="soap-preview-header">
           {headerLines.slice(0, 4).map((line, index) => (
             <span key={`${line}-${index}`}>
-              <ClinicalInlineText value={normalizeClinicalDisplayText(line)} keywordRules={keywordRules} labReferenceDisplay={labReferenceDisplay} />
+              <ClinicalInlineText value={normalizeClinicalDisplayTextPreservingMarks(line)} keywordRules={keywordRules} labReferenceDisplay={labReferenceDisplay} />
             </span>
           ))}
         </div>
