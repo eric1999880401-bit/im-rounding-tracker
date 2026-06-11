@@ -6,7 +6,6 @@ import { classifyClinicalLine, normalizeClinicalDisplayText, type ClinicalLineKi
 import { formatLabVisualSummaryLinesFromText } from "../labVisualSummary";
 import { formatMedicationOrderLinesForDisplay } from "../medicationOrderParser";
 import type { KeywordHighlightRule, RoundingLayoutPreferences } from "../types";
-import { hasColorMarkup } from "../utils";
 import {
   isDcSoapLineVisible,
   isLayoutSectionVisible,
@@ -94,9 +93,8 @@ export function SoapVisualPreview({ value, compact = false, sourceFields = {}, l
   const sLines = isLayoutSectionVisible(layoutPreferences, "subjective") ? draft.sLines : [];
   const oLines = draft.oLines.filter((line) => isObjectiveSoapLineVisible(line, layoutPreferences));
   const objectiveLabLinePattern = /^!{0,2}\s*Labs?\s*[:：]/i;
-  // Clinician-colored lab lines render verbatim (the lab visual summarizer cannot keep [[color:...]] marks).
-  const objectiveLabLines = oLines.filter((line) => objectiveLabLinePattern.test(line) && !hasColorMarkup(line));
-  const objectiveNonLabLines = oLines.filter((line) => !objectiveLabLinePattern.test(line) || hasColorMarkup(line));
+  const objectiveLabLines = oLines.filter((line) => objectiveLabLinePattern.test(line));
+  const objectiveNonLabLines = oLines.filter((line) => !objectiveLabLinePattern.test(line));
   const labVisualLines = formatLabVisualSummaryLinesFromText(objectiveLabLines.join("\n"), {
     maxGroups: 7,
     maxItemsPerGroup: compact ? 6 : 10,

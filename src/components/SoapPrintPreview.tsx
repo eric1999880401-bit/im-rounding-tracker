@@ -8,7 +8,6 @@ import {
 } from "../printPriority";
 import { parseSoapText } from "../soapDraft";
 import type { KeywordHighlightRule, RoundingLayoutPreferences } from "../types";
-import { hasColorMarkup } from "../utils";
 import {
   isDcSoapLineVisible,
   isLayoutSectionVisible,
@@ -81,9 +80,8 @@ function PrintSection({
 export function SoapPrintPreview({ value, layoutPreferences, keywordRules = [] }: SoapPrintPreviewProps) {
   const draft = parseSoapText(value);
   const visibleObjective = draft.oLines.filter((line) => isObjectiveSoapLineVisible(line, layoutPreferences));
-  // Clinician-colored lab lines render verbatim (the lab visual summarizer cannot keep [[color:...]] marks).
-  const labLines = visibleObjective.filter((line) => /^!{0,2}\s*Labs?\s*[:：]/i.test(line) && !hasColorMarkup(line));
-  const nonLabObjective = visibleObjective.filter((line) => !/^!{0,2}\s*Labs?\s*[:：]/i.test(line) || hasColorMarkup(line));
+  const labLines = visibleObjective.filter((line) => /^!{0,2}\s*Labs?\s*[:：]/i.test(line));
+  const nonLabObjective = visibleObjective.filter((line) => !/^!{0,2}\s*Labs?\s*[:：]/i.test(line));
   const labVisualLines = formatLabVisualSummaryLinesFromText(labLines.join("\n"), {
     maxGroups: 7,
     maxItemsPerGroup: 8,

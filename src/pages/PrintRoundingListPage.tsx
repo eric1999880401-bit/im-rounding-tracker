@@ -23,7 +23,6 @@ import {
   groupPatientsByAttending,
   dischargePrepText,
   formatDateLabel,
-  hasColorMarkup,
   plainClinicalText,
   sortPatients,
   todayKey,
@@ -637,7 +636,7 @@ function PrintRoundingListPage({
               {group.label}
             </span>
             <span className="print-lab-mini-values" role="cell">
-              {group.items.join(", ")}
+              <ClinicalInlineText value={group.items.join(", ")} keywordRules={preferences.keywordHighlightRules} />
             </span>
           </div>
         ))}
@@ -661,7 +660,7 @@ function PrintRoundingListPage({
             <span className="print-lab-date">{group.label}</span>
             <span className="print-lab-chip-row">
               <span className={`print-lab-chip ${group.tone === "critical" || group.tone === "important" ? "important" : ""}`}>
-                {group.items.map((item) => item.text).join(", ")}
+                <ClinicalInlineText value={group.items.map((item) => item.text).join(", ")} keywordRules={preferences.keywordHighlightRules} />
               </span>
             </span>
           </div>
@@ -759,20 +758,14 @@ function PrintRoundingListPage({
     if (!isLayoutSectionVisible(roundingLayout, "objectiveLabs")) return "";
     const soap = patientToSoapDraft(patient, dailyNotesByPatient[patient.id] ?? [], todayKey());
     const limits = printLimitsForPatient(patient);
-    const allLabLines = soap.oLines.filter((line) => isObjectiveSoapLineVisible(line, roundingLayout) && /^!{0,2}\s*Labs?\s*[:：]/i.test(line));
-    // Clinician-colored lab lines print verbatim (the lab visual summarizer cannot keep [[color:...]] marks).
-    const markedLabLines = allLabLines.filter((line) => hasColorMarkup(line));
-    const labLines = allLabLines.filter((line) => !hasColorMarkup(line));
+    const labLines = soap.oLines.filter((line) => isObjectiveSoapLineVisible(line, roundingLayout) && /^!{0,2}\s*Labs?\s*[:：]/i.test(line));
     const visualLines = formatLabVisualSummaryLinesFromText(labLines.join("\n"), {
       patient,
       maxGroups: limits.labItems,
       maxItemsPerGroup: density === "ultra-compact" ? 4 : 6,
       maxCharsPerGroup: limits.detailChars + 28,
     });
-    const sourceLines = [
-      ...markedLabLines,
-      ...(visualLines.length > 0 ? visualLines.map((line) => `Lab: ${line}`) : labLines),
-    ];
+    const sourceLines = visualLines.length > 0 ? visualLines.map((line) => `Lab: ${line}`) : labLines;
     return printListItems(sourceLines, "lab", limits.labItems, limits.detailChars + 28).map((item) => item.raw).join("\n");
   }
 

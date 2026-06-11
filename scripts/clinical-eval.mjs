@@ -2722,6 +2722,16 @@ try {
   if (!/soapText/.test(JSON.stringify(Object.keys(bangLeakPatch.dailyNotePatch))) || !/!!/.test(bangLeakPatch.dailyNotePatch.soapText)) {
     throw new Error("Tone markers must stay encoded inside the saved soapText.");
   }
+  const markedLabSummary = formatLabVisualSummaryLinesFromText(
+    "Lab: WBC 4.0, BUN/Cr 41/5.55, [[orange:K 2.9]], Na 128",
+    { maxGroups: 6, maxItemsPerGroup: 8, maxCharsPerGroup: 160 },
+  ).join("\n");
+  if (!/\[\[orange:K 2\.9\]\]/.test(markedLabSummary)) {
+    throw new Error(`Lab visual summary dropped the clinician color mark:\n${markedLabSummary}`);
+  }
+  if (/K 2\.9(?!\]\])/.test(markedLabSummary.replace(/\[\[orange:K 2\.9\]\]/g, ""))) {
+    throw new Error(`Lab visual summary duplicated the marked lab value:\n${markedLabSummary}`);
+  }
   console.log("PASS Pasted CXR/A&P updates replace stale lines, color marks persist, and bangs stay out of plain fields");
   supplementalPasses += 1;
 } catch (error) {
