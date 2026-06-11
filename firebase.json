@@ -1,7 +1,19 @@
 {
   "functions": {
     "source": "functions",
-    "runtime": "nodejs20"
+    "runtime": "nodejs20",
+    "predeploy": ["npm --prefix functions ci", "npm --prefix functions run build"]
+  },
+  "hosting": {
+    "public": "dist",
+    "predeploy": ["npm ci", "npm run build"],
+    "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
+    "rewrites": [
+      {
+        "source": "**",
+        "destination": "/index.html"
+      }
+    ]
   },
   "firestore": {
     "rules": "firestore.rules"
