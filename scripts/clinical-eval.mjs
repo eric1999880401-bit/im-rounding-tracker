@@ -117,6 +117,16 @@ function assertOneMinuteAdmissionBrief(value, label) {
   }
 }
 
+function assertThreeMinuteAdmissionBrief(value, label) {
+  const count = admissionSentenceCount(value);
+  if (count < 3 || count > 8) {
+    throw new Error(`${label} should be a 3-8 sentence 3-min patient presentation, got ${count}: ${value}`);
+  }
+  if (!/[\u56e0\u80cc\u666f\u5230\u8f49\u7d93\u5f8c\u76ee\u524d\u91cd\u9ede\u4eca\u65e5\u5f85]/.test(value)) {
+    throw new Error(`${label} did not use mixed Chinese-English oral-brief connectors: ${value}`);
+  }
+}
+
 function assertSbarReadable(plan) {
   const sbar = formatRuleBasedSbar(plan);
   if (/Rule-matched/i.test(sbar)) {
@@ -465,7 +475,7 @@ try {
   if (!/[\u76ee\u524d\u91cd\u9ede\u554f\u984c\u4f9d\u64da\u5f85\u95dc\u9375]/.test(admission) || /The patient is|Admitted\/managed|PMH\/context|Key course|Active issues|Today\/pending/i.test(admission)) {
     throw new Error(`admission summary did not use mixed Chinese-English brief style: ${admission}`);
   }
-  assertOneMinuteAdmissionBrief(admission, "reasoning admission summary");
+  assertThreeMinuteAdmissionBrief(admission, "reasoning admission summary");
   assertDocumentIncludes(admission, /\u95dc\u9375O[\s\S]*(Cr|K|SpO2|O2|Plt|Hb|Cx|CXR|CT|ERCP)/i, "reasoning admission summary should include key objective anchors");
   assertDocumentIncludes(admission, /AKI\/hyperK|Plt-limited anticoag|aspiration risk/i, "admission summary should lead with current transfer risks");
   if (/Problem-Based A\/P|Pending \/ Disposition|\n\s*-/i.test(weekly)) {

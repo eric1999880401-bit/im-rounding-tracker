@@ -16,6 +16,7 @@ import {
   type SoapEditorProblem,
 } from "../soapEditorDraft";
 import MedicationOrderReviewPanel, { type MedicationOrderSummaryLine } from "./MedicationOrderReviewPanel";
+import { useSelectionRange } from "./useSelectionRange";
 
 interface StructuredSoapEditorProps {
   draft: SoapEditorDraft;
@@ -80,10 +81,12 @@ function SelectionColorToolbar({
   value,
   onChange,
   controlRef,
+  getSelectionRange,
 }: {
   value: string;
   onChange: (value: string) => void;
   controlRef: RefObject<HTMLTextAreaElement | HTMLInputElement | null>;
+  getSelectionRange: (valueLength: number) => { start: number; end: number } | null;
 }) {
   const applySelection = (nextValue: string, start: number, selectedLength: number) => {
     onChange(nextValue);
@@ -96,22 +99,16 @@ function SelectionColorToolbar({
   };
 
   const markColor = (color: ClinicalMarkColor) => {
-    const control = controlRef.current;
-    if (!control) return;
-    const start = control.selectionStart ?? 0;
-    const end = control.selectionEnd ?? 0;
-    if (start === end) return;
-    const selectedText = value.slice(start, end);
-    applySelection(applyClinicalColorMarkup(value, start, end, color), start + `[[${color}:`.length, selectedText.length);
+    const range = getSelectionRange(value.length);
+    if (!range) return;
+    const selectedText = value.slice(range.start, range.end);
+    applySelection(applyClinicalColorMarkup(value, range.start, range.end, color), range.start + `[[${color}:`.length, selectedText.length);
   };
 
   const clearColor = () => {
-    const control = controlRef.current;
-    if (!control) return;
-    const start = control.selectionStart ?? 0;
-    const end = control.selectionEnd ?? 0;
-    if (start === end) return;
-    applySelection(clearClinicalColorMarkupAtSelection(value, start, end), start, value.slice(start, end).length);
+    const range = getSelectionRange(value.length);
+    if (!range) return;
+    applySelection(clearClinicalColorMarkupAtSelection(value, range.start, range.end), range.start, value.slice(range.start, range.end).length);
   };
 
   return (
@@ -161,6 +158,7 @@ function LineEditor({
   onCompositionEnd?: () => void;
 }) {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const { rememberSelection, getSelectionRange } = useSelectionRange(textareaRef);
   return (
     <div className={`structured-soap-line structured-soap-line-${line.tone}`}>
       <textarea
@@ -168,6 +166,7 @@ function LineEditor({
         className="structured-soap-line-text"
         value={line.text}
         onChange={(event) => onChange({ ...line, text: event.target.value })}
+        onSelect={rememberSelection}
         onCompositionStart={onCompositionStart}
         onCompositionEnd={onCompositionEnd}
         rows={1}
@@ -200,6 +199,7 @@ function LineEditor({
           value={line.text}
           onChange={(text) => onChange({ ...line, text })}
           controlRef={textareaRef}
+          getSelectionRange={getSelectionRange}
         />
         <div className="structured-soap-line-actions">
           <button type="button" className="secondary compact-button" onClick={() => onChange({ ...line, tone: "important" })} title="Keep in Print">Keep</button>
@@ -283,6 +283,7 @@ function ProblemEditor({
 }) {
   const lines = problem.lines.length > 0 ? problem.lines : [emptySoapEditorLine("ap")];
   const titleRef = useRef<HTMLInputElement | null>(null);
+  const { rememberSelection, getSelectionRange } = useSelectionRange(titleRef);
   return (
     <article className={`structured-soap-problem structured-soap-line-${problem.tone}`}>
       <div className="structured-soap-problem-heading">
@@ -292,6 +293,7 @@ function ProblemEditor({
             ref={titleRef}
             value={problem.title}
             onChange={(event) => onChange({ ...problem, title: event.target.value })}
+            onSelect={rememberSelection}
             onCompositionStart={onCompositionStart}
             onCompositionEnd={onCompositionEnd}
             placeholder="Problem title"
@@ -300,6 +302,7 @@ function ProblemEditor({
             value={problem.title}
             onChange={(title) => onChange({ ...problem, title })}
             controlRef={titleRef}
+            getSelectionRange={getSelectionRange}
           />
         </div>
         <div className="structured-soap-line-meta">

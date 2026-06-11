@@ -1210,7 +1210,7 @@ export function applyClinicalKnowledgeToAiSoapDraft(draft: AiSoapDraft, rawText:
     assessmentPlan: dedupeRuleObjects(assessmentPlan, "problemTitle"),
     thinkingPrompts,
     oneLiner: formatReasoningOneLiner(reasoning) || draft.oneLiner,
-    admissionSummary: formatReasoningAdmissionSummary(reasoning, plan) || draft.admissionSummary || formatRuleBasedAdmissionSummary(plan),
+    admissionSummary: formatReasoningAdmissionSummary(reasoning, plan, { length: "threeMinute" }) || draft.admissionSummary || formatRuleBasedAdmissionSummary(plan, { length: "threeMinute" }),
     isbarHandoff: formatReasoningSbar(reasoning, plan) || draft.isbarHandoff || formatRuleBasedSbar(plan),
   };
 }
@@ -1338,7 +1338,7 @@ export function applyClinicalKnowledgeToPatientImportDraft(
     activeProblems: compactImportActiveProblems(draft, plan, sourceText),
     importantRedFlags: compactImportRedFlags(draft, plan, sourceText),
     tasks: compactImportTasks(draft, plan, sourceText),
-    admissionSummary: options.targetUpdate ? draft.admissionSummary : draft.admissionSummary || formatRuleBasedAdmissionSummary(plan),
+    admissionSummary: options.targetUpdate ? draft.admissionSummary : draft.admissionSummary || formatRuleBasedAdmissionSummary(plan, { length: "threeMinute" }),
     uncertainty: dedupe([
       ...draft.uncertainty,
       ...(plan.needsReview ? [`Review rule matches: ${plan.ruleMatches.map((match) => match.title).join(", ")}`] : []),

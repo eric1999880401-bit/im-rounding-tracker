@@ -194,7 +194,7 @@ export function formatClinicalDocumentDraft(draft: AiDocumentDraft) {
 
   if (draft.documentType === "admissionSummary") {
     if (hasClinicalReasoning(draft.clinicalReasoning)) {
-      return formatReasoningAdmissionSummary(draft.clinicalReasoning);
+      return formatReasoningAdmissionSummary(draft.clinicalReasoning, undefined, { length: "threeMinute" });
     }
     return normalizeParagraph(draft.conciseSummary || draft.sections.map((section) => section.content).join(" "));
   }
