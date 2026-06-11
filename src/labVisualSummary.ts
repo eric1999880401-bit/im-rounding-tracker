@@ -1,7 +1,9 @@
 import type { DailyNote, ParsedLabItem, Patient } from "./types";
 import { findLabDictionaryItem } from "./data/labDictionary";
 import { labReferenceForLabel } from "./labReference";
-import { parseLabReports, safeClinicalLine, stripColorMarkup } from "./utils";
+import { parseLabReports, safeClinicalLine, safeClinicalLinePreservingMarks, stripColorMarkup } from "./utils";
+
+const labColorMarkPattern = /\[\[(red|orange|yellow|blue|green|purple)(?:-(?:highlight|text))?:([\s\S]*?)\]\]/gi;
 
 export type LabVisualGroupId =
   | "cbc"
@@ -118,10 +120,53 @@ function labSourceLineFrom(raw: string, requireLabSignal: boolean): LabSourceLin
   const { body, hasLabPrefix } = stripLabLinePrefix(withoutImportantPrefix);
   if (!body || (!hasLabPrefix && hasNonLabObjectivePrefix(withoutImportantPrefix))) return null;
 
-  const items = parseLabReports(`${important ? "! " : ""}${body}`).flatMap((report) => report.items);
+  // Parse values from the unmarked text; clinician [[color:...]] segments are re-added as marked visual items.
+  const items = parseLabReports(`${important ? "! " : ""}${stripColorMarkup(body)}`).flatMap((report) => report.items);
   if (requireLabSignal && !hasLabPrefix && !items.some(trustedLabItem)) return null;
 
   return { raw: source, body, important, items };
+}
+
+interface MarkedLabSegment {
+  markup: string;
+  color: string;
+  inner: string;
+}
+
+function markedLabSegments(value: string): MarkedLabSegment[] {
+  const segments: MarkedLabSegment[] = [];
+  const pattern = new RegExp(labColorMarkPattern.source, "gi");
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(String(value ?? "")))) {
+    const inner = match[2].trim();
+    if (inner) segments.push({ markup: match[0], color: match[1].toLowerCase(), inner });
+  }
+  return segments;
+}
+
+function markedVisualItemsFromText(value: string): LabVisualItem[] {
+  const items: LabVisualItem[] = [];
+  splitInputLines(value).forEach((line, sourceIndex) => {
+    markedLabSegments(line).forEach((segment) => {
+      const parsed = parseLabReports(segment.inner).flatMap((report) => report.items).find(trustedLabItem);
+      const label = parsed ? labelForItem(parsed) : "Other";
+      const value = parsed ? String(parsed.value ?? "").trim() : segment.inner;
+      const computedTone = parsed ? toneForText(label, value, parsed) : "plain";
+      const tone: LabVisualTone = segment.color === "red" || computedTone === "critical" ? "critical" : "important";
+      const groupId = parsed ? groupIdForItem(parsed) : "other";
+      items.push({
+        key: parsed ? label.toLowerCase() : `marked|${segment.inner.toLowerCase()}`,
+        label,
+        value,
+        previousValue: parsed ? String(parsed.previousValue ?? "").trim() : "",
+        // Keep the clinician's color markup verbatim so renderers show the chosen color.
+        text: segment.markup,
+        tone,
+        score: scoreForItem(groupId, label, tone, sourceIndex) + 500,
+      });
+    });
+  });
+  return items;
 }
 
 function normalizeNumber(value: string) {
@@ -261,11 +306,15 @@ function visualItemFromParsed(item: ParsedLabItem, sourceIndex = 0): LabVisualIt
 }
 
 function cleanOtherText(source: LabSourceLine) {
-  return stripReferenceText(stripColorMarkup(source.body))
+  // Marked segments become their own colored items, so drop them from the leftover text.
+  return stripReferenceText(String(source.body).replace(new RegExp(labColorMarkPattern.source, "gi"), " "))
     .replace(/^!+\s*/, "")
     .replace(/^(?:Crit|Critical|Abn|Abnormal|Trend|Anchor|Ref)\s*:?\s*/i, "")
+    .replace(/\s+,\s*/g, ", ")
+    .replace(/,\s*,/g, ",")
     .replace(/\s+/g, " ")
-    .trim();
+    .trim()
+    .replace(/^[,;]+\s*|[,;]+$/g, "");
 }
 
 function dedupeVisualItems(items: LabVisualItem[]) {
@@ -309,7 +358,7 @@ function buildGroupsFromVisualItems(items: LabVisualItem[], options: LabVisualSu
         label: group.label,
         tone,
         items: sourceItems,
-        text: options.maxCharsPerGroup ? safeClinicalLine(rawText, options.maxCharsPerGroup) : rawText,
+        text: options.maxCharsPerGroup ? safeClinicalLinePreservingMarks(rawText, options.maxCharsPerGroup) : rawText,
       } satisfies LabVisualGroup;
     })
     .filter((group): group is LabVisualGroup => Boolean(group))
@@ -329,7 +378,7 @@ export function buildLabVisualSummaryFromText(value: string, options: LabVisualS
   const sourceLines = splitInputLines(value)
     .map((line) => labSourceLineFrom(line, false))
     .filter((line): line is LabSourceLine => Boolean(line));
-  const visualItems: LabVisualItem[] = [];
+  const visualItems: LabVisualItem[] = markedVisualItemsFromText(sourceLines.map((line) => line.body).join("\n"));
 
   sourceLines.forEach((source, sourceIndex) => {
     const trustedItems = source.items.filter(trustedLabItem);
@@ -366,18 +415,25 @@ export function buildPatientLabVisualSummary(patient: Patient, notes: DailyNote[
     items.push(...note.parsedLabItems);
   });
 
-  if (items.length > 0) return buildLabVisualSummaryFromItems(items, { ...options, patient });
-  return buildLabVisualSummaryFromText(
-    [
-      patient.rawLabText,
-      patient.newLabs,
-      patient.initialLabs,
-      ...notes.flatMap((note) => [note.rawLabText, note.labSummary]),
-    ]
-      .filter(Boolean)
-      .join("\n"),
-    { ...options, patient },
-  );
+  const textSource = [
+    patient.rawLabText,
+    patient.newLabs,
+    patient.initialLabs,
+    ...notes.flatMap((note) => [note.rawLabText, note.labSummary]),
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  if (items.length > 0) {
+    const includePlain = options.includePlain ?? true;
+    const parsedVisualItems = items
+      .map((item, index) => visualItemFromParsed(item, index))
+      .filter((item): item is LabVisualItem => Boolean(item))
+      .filter((item) => includePlain || item.tone !== "plain");
+    // Clinician-colored segments live in the raw lab text; merge them so colors survive the structured path too.
+    return buildGroupsFromVisualItems([...parsedVisualItems, ...markedVisualItemsFromText(textSource)], { ...options, patient });
+  }
+  return buildLabVisualSummaryFromText(textSource, { ...options, patient });
 }
 
 export function formatLabVisualSummaryLines(groups: LabVisualGroup[]) {

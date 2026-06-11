@@ -637,7 +637,7 @@ function PrintRoundingListPage({
               {group.label}
             </span>
             <span className="print-lab-mini-values" role="cell">
-              {group.items.join(", ")}
+              <ClinicalInlineText value={group.items.join(", ")} keywordRules={preferences.keywordHighlightRules} />
             </span>
           </div>
         ))}
@@ -661,7 +661,7 @@ function PrintRoundingListPage({
             <span className="print-lab-date">{group.label}</span>
             <span className="print-lab-chip-row">
               <span className={`print-lab-chip ${group.tone === "critical" || group.tone === "important" ? "important" : ""}`}>
-                {group.items.map((item) => item.text).join(", ")}
+                <ClinicalInlineText value={group.items.map((item) => item.text).join(", ")} keywordRules={preferences.keywordHighlightRules} />
               </span>
             </span>
           </div>
