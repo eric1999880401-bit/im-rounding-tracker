@@ -5,8 +5,6 @@ import {
   clinicalMarkColors,
   type ClinicalMarkColor,
 } from "../clinicalColorMarkup";
-import { hasColorMarkup } from "../utils";
-import { ClinicalInlineText } from "./ClinicalText";
 import { useSelectionRange } from "./useSelectionRange";
 
 interface ColorMarkupTextareaProps {
@@ -100,15 +98,6 @@ function ColorMarkupTextarea({
           clear
         </button>
       </div>
-      {hasColorMarkup(value) && (
-        <div className="color-markup-preview" aria-label="Color preview">
-          {value.split(/\r?\n/).filter((line) => line.trim()).map((line, index) => (
-            <div key={`${line}-${index}`}>
-              <ClinicalInlineText value={line} />
-            </div>
-          ))}
-        </div>
-      )}
     </div>
   );
 }

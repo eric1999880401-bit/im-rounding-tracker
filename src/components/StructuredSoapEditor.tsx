@@ -17,8 +17,6 @@ import {
 } from "../soapEditorDraft";
 import MedicationOrderReviewPanel, { type MedicationOrderSummaryLine } from "./MedicationOrderReviewPanel";
 import { useSelectionRange } from "./useSelectionRange";
-import { ClinicalInlineText } from "./ClinicalText";
-import { hasColorMarkup } from "../utils";
 
 interface StructuredSoapEditorProps {
   draft: SoapEditorDraft;
@@ -177,11 +175,6 @@ function LineEditor({
         onCompositionEnd={onCompositionEnd}
         rows={1}
       />
-      {hasColorMarkup(line.text) && (
-        <div className="color-markup-preview" aria-label="Color preview">
-          <ClinicalInlineText value={line.text} />
-        </div>
-      )}
       <div className="structured-soap-line-meta">
         <div className="structured-soap-line-selects">
           {showKind && (
@@ -316,11 +309,6 @@ function ProblemEditor({
             getSelectionRange={getSelectionRange}
           />
         </div>
-        {hasColorMarkup(problem.title) && (
-          <div className="color-markup-preview" aria-label="Color preview">
-            <ClinicalInlineText value={problem.title} />
-          </div>
-        )}
         <div className="structured-soap-line-meta">
           <div className="structured-soap-line-selects">
             <select

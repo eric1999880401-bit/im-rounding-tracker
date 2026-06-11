@@ -78,6 +78,7 @@ const {
 const { displayPrintLine, selectPriorityPrintItems } = await server.ssrLoadModule("/src/printPriority.ts");
 const { applyClinicalColorMarkup, applyUserKeywordHighlights, clearClinicalColorMarkupAtSelection } = await server.ssrLoadModule("/src/clinicalColorMarkup.ts");
 const { labReferenceText, parseClinicalLabTokens } = await server.ssrLoadModule("/src/labReference.ts");
+const { boardDischargeTasks, hasBoardDischargeSoonSignal, isBoardNewAdmission } = await server.ssrLoadModule("/src/boardCockpit.ts");
 const { buildLabVisualSummaryFromText, formatLabVisualSummaryLinesFromText } = await server.ssrLoadModule("/src/labVisualSummary.ts");
 const { formatSoapBasedIsbar } = await server.ssrLoadModule("/src/soapSbar.ts");
 
@@ -2240,6 +2241,55 @@ try {
   }
   if (isDcSoapLineVisible("Barrier: oxygen requirement", layout) || !isDcSoapLineVisible("Pending: meds/OPD/certificate", layout)) {
     throw new Error("DC barrier/prep layout filtering was incorrect");
+  }
+
+  const briefOnlyPatient = {
+    ...emptyPatient(),
+    id: "brief-only",
+    status: "active",
+    isNewAdmission: false,
+    showAdmissionBriefOnPrint: true,
+  };
+  if (isBoardNewAdmission(briefOnlyPatient)) {
+    throw new Error("Board New Admits should not include patients only marked Brief included");
+  }
+  const actualNewAdmission = { ...briefOnlyPatient, isNewAdmission: true };
+  if (!isBoardNewAdmission(actualNewAdmission)) {
+    throw new Error("Board New Admits should include explicitly marked new admissions");
+  }
+  const defaultPrepPatient = {
+    ...emptyPatient(),
+    id: "default-dc-prep",
+    status: "active",
+    dischargeMedsStatus: "pending",
+    opdAppointmentStatus: "pending",
+    diagnosisCertificateStatus: "pending",
+    dischargePlan: "Home after stable condition.",
+  };
+  if (hasBoardDischargeSoonSignal(defaultPrepPatient)) {
+    throw new Error("Board DC Soon should not include routine pending prep without near-discharge signal");
+  }
+  const todayDischargePatient = { ...defaultPrepPatient, dischargeTargetDate: todayKey() };
+  if (!hasBoardDischargeSoonSignal(todayDischargePatient)) {
+    throw new Error("Board DC Soon should include patients with today/tomorrow discharge target");
+  }
+  const urgentDischargeTaskPatient = {
+    ...defaultPrepPatient,
+    tasks: [
+      {
+        id: "dc-task",
+        text: "prepare discharge meds today",
+        done: false,
+        priority: "urgent",
+        category: "discharge",
+        dueDate: "",
+        createdAt: nowIso(),
+        completedAt: "",
+      },
+    ],
+  };
+  if (!hasBoardDischargeSoonSignal(urgentDischargeTaskPatient) || boardDischargeTasks(urgentDischargeTaskPatient).length !== 1) {
+    throw new Error("Board DC Soon should include urgent near-term discharge tasks");
   }
 
   const stylePatient = { ...emptyPatient(), id: "style-patient" };

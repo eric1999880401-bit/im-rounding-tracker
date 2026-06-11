@@ -55,6 +55,7 @@ import {
   normalizeRoundingLayoutPreferences,
   stripOrderLinePrefix,
 } from "../userPreferences";
+import { boardDischargeTasks, hasBoardDischargeSoonSignal, isBoardNewAdmission } from "../boardCockpit";
 
 interface PageProps {
   patients: Patient[];
@@ -674,10 +675,10 @@ function PatientBoardPage({
     .map((patient) => ({ patient, pending: pendingDischargePrep(patient) }))
     .filter(({ patient, pending }) => hasUpcomingDischarge(patient) && pending.length > 0);
   const newAdmissionPatients = activePatients
-    .filter((patient) => patient.isNewAdmission || patient.showAdmissionBriefOnPrint)
+    .filter(isBoardNewAdmission)
     .slice(0, 6);
   const dischargeSoonPatients = activePatients
-    .filter(hasDischargeSoonSignal)
+    .filter(hasBoardDischargeSoonSignal)
     .slice(0, 6);
   const activeTodayCount = activePatients.filter((patient) => {
     const digest = boardDigest(patient);
@@ -933,38 +934,6 @@ function PatientBoardPage({
     return firstClause.slice(0, maxChars).trim();
   }
 
-  function dateIsTodayOrTomorrow(date: string) {
-    if (!date) return false;
-    const today = todayKey();
-    const tomorrowDate = new Date(`${today}T00:00:00`);
-    tomorrowDate.setDate(tomorrowDate.getDate() + 1);
-    const tomorrow = tomorrowDate.toISOString().slice(0, 10);
-    return date === today || date === tomorrow;
-  }
-
-  function dischargeTasks(patient: Patient) {
-    return patient.tasks.filter((task) => {
-      if (task.done) return false;
-      const text = `${task.category} ${task.text}`.toLowerCase();
-      const isDischargeTask = task.category === "discharge" || /\bdc\b|discharge|出院|opd|certificate|診斷書|帶藥|meds/i.test(text);
-      return isDischargeTask && (!task.dueDate || dateIsTodayOrTomorrow(task.dueDate) || task.priority === "urgent");
-    });
-  }
-
-  function hasDischargeTextSignal(patient: Patient) {
-    const text = [patient.dischargePlan, patient.dischargeBarriers, patient.vsOrder].join(" ");
-    return /\bdc\b|discharge|出院|home|transfer|OPD|certificate|診斷書|帶藥/i.test(text);
-  }
-
-  function hasDischargeSoonSignal(patient: Patient) {
-    return (
-      hasUpcomingDischarge(patient) ||
-      dischargeTasks(patient).length > 0 ||
-      Boolean(patient.dischargeTargetDate && dateIsTodayOrTomorrow(patient.dischargeTargetDate)) ||
-      (hasDischargeTextSignal(patient) && pendingDischargePrep(patient).length > 0)
-    );
-  }
-
   function dischargeCockpitLine(patient: Patient) {
     const pending = pendingDischargePrep(patient);
     if (hasUpcomingDischarge(patient)) {
@@ -974,7 +943,7 @@ function PatientBoardPage({
       ].filter(Boolean).join("; ");
     }
 
-    const task = dischargeTasks(patient)[0];
+    const task = boardDischargeTasks(patient)[0];
     if (task) return `Task: ${shortCockpitText(task.text)}`;
     if (patient.dischargeTargetDate) return `Target ${patient.dischargeTargetDate}`;
     if (patient.dischargePlan.trim()) return shortCockpitText(patient.dischargePlan);
