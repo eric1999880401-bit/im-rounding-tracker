@@ -120,8 +120,10 @@ function SelectionColorToolbar({
           type="button"
           className={`inline-color-tool color-tool-${color}`}
           key={color}
-          onMouseDown={(event) => event.preventDefault()}
-          onClick={() => markColor(color)}
+          onMouseDown={(event) => {
+            event.preventDefault();
+            markColor(color);
+          }}
           title={`Mark selected text ${color}`}
           aria-label={`Mark selected text ${color}`}
         />
@@ -129,12 +131,14 @@ function SelectionColorToolbar({
       <button
         type="button"
         className="inline-color-clear"
-        onMouseDown={(event) => event.preventDefault()}
-        onClick={clearColor}
+        onMouseDown={(event) => {
+          event.preventDefault();
+          clearColor();
+        }}
         title="Clear selected color"
         aria-label="Clear selected color"
       >
-        ✕
+        clear
       </button>
     </div>
   );
@@ -440,7 +444,7 @@ export function StructuredSoapEditor({
       </section>
 
       <SectionEditor
-        title="藥囑"
+        title={"\u85e5\u56d1"}
         lines={orderLines}
         fallbackKind="task"
         onChange={(nextOrderLines) => updateDraft({ taskLines: [...asOrderLines(nextOrderLines), ...taskOnlyLines] })}

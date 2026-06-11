@@ -61,11 +61,11 @@ const sectionLabels: Record<SoapDeltaSection, string> = {
   lab: "Lab",
   image: "Image",
   ap: "A/P",
-  orders: "藥囑",
+  orders: "\u85e5\u56d1",
   tasks: "Tasks",
   dc: "DC",
 };
-sectionLabels.orders = "藥囑";
+sectionLabels.orders = "\u85e5\u56d1";
 
 function normalizeLine(value: string) {
   return stripColorMarkup(String(value ?? ""))
@@ -238,10 +238,10 @@ function ensureObjectivePrefix(line: string, prefix: "V/S" | "PE" | "Lab" | "Ima
 
 function isOrderLine(line: string) {
   const text = String(line ?? "").replace(/^!+\s*/, "").trim();
-  if (/^\s*藥囑\s*[:：]/i.test(text)) return true;
-  if (/^\s*(?:order|orders?|meds?|藥囑)\s*[:：]/i.test(text)) return true;
+  if (/^\s*\u85e5\u56d1\s*[:\uFF1A]/i.test(text)) return true;
+  if (/^\s*(?:order|orders?|meds?|\u85e5\u56d1)\s*[:\uFF1A]/i.test(text)) return true;
   return (
-    /^\s*(?:order|orders?|meds?|藥囑)\s*[:：]/i.test(text) ||
+    /^\s*(?:order|orders?|meds?|\u85e5\u56d1)\s*[:\uFF1A]/i.test(text) ||
     /^\s*(?:Abx|Anticoag\/AP|Steroid\/Immuno|Cardio\/Renal|Resp|Insulin\/Glucose|IVF\/Lyte|Nutrition|Monitoring|PRN|Routine(?: hidden)?)\s*:/i.test(text) ||
     /\b(?:teicoplanin|vancomycin|ceftriaxone|cefepime|zosyn|pip\/tazo|meropenem|levofloxacin|heparin|apixaban|warfarin|insulin|lasix|furosemide|steroid|methylpred|oxygen|morphine|fentanyl)\b/i.test(text)
   );
@@ -364,24 +364,21 @@ function findMatchingProblems(problem: SoapApProblem, problems: SoapApProblem[])
 function mergeApProblemsForDaily(baseline: SoapApProblem[], candidate: SoapApProblem[], allowNewProblem: boolean) {
   const warnings: string[] = [];
   const highRiskWarnings: string[] = [];
+  const shouldCarryForwardApLine = (line: string, candidateLines: string[]) => {
+    if (!isProtectedLine(line)) return false;
+    if (/\[\[(?:red|orange|yellow|blue|green|purple)(?:-(?:highlight|text))?:/i.test(line)) return true;
+    const candidateText = candidateLines.join(" ");
+    const staleObjectivePattern = /\b(?:wbc|hb|hgb|plt|cr|bun|na|k\b|ast|alt|t-?bil|inr|lactate|crp|cxr|ct\b|mri\b|echo\b|sono|ultrasound)\b/i;
+    if (staleObjectivePattern.test(line) && staleObjectivePattern.test(candidateText)) return false;
+    return /\b(?:abx|antibiotic|teicoplanin|vancomycin|ceftriaxone|cefepime|meropenem|zosyn|pip\/tazo|culture|b\/c|bcx|source control|ercp|stent|drain|tube|dc|discharge|opd|certificate|hold|resume|restart|apixaban|heparin|warfarin)\b/i.test(line);
+  };
   const compactProblemLines = (baselineLines: string[], candidateLines: string[]) => {
-    // New pasted status replaces stale baseline lines; protected baseline lines (abx/Cx/DC plans)
-    // stay ahead unless the new content already restates their facts.
-    const candidates = uniqueLines(candidateLines, 4);
-    if (candidates.length === 0) return uniqueLines(baselineLines, 2);
-    const candidateTokens = new Set(candidates.flatMap(meaningfulTokens));
-    const carriedProtected = baselineLines
-      .filter(isProtectedLine)
-      .filter((line) => {
-        const tokens = meaningfulTokens(line);
-        return tokens.length === 0 || !tokens.every((token) => candidateTokens.has(token));
-      });
-    const ordered = uniqueLines([...carriedProtected, ...candidates], 6);
-    const primary = ordered[0];
-    const secondaryPool = ordered.slice(1);
-    if (!primary) return [];
-    if (secondaryPool.length === 0) return [primary];
-    return uniqueLines([primary, safeClinicalLinePreservingMarks(secondaryPool.join("; "), 170)], 2);
+    const updatedLines = uniqueLines(candidateLines, 3);
+    if (updatedLines.length === 0) return uniqueLines(baselineLines, 2);
+    const protectedCarryForward = baselineLines
+      .filter((line) => shouldCarryForwardApLine(line, updatedLines))
+      .filter((line) => !hasEquivalentLine(updatedLines, line));
+    return uniqueLines([...updatedLines, ...protectedCarryForward], 2);
   };
   const next = baseline.map((problem) => {
     const matches = findMatchingProblems(problem, candidate);

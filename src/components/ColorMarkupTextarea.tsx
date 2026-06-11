@@ -79,14 +79,24 @@ function ColorMarkupTextarea({
             type="button"
             className={`color-tool color-tool-${color}`}
             key={color}
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={() => markColor(color)}
+            onMouseDown={(event) => {
+              event.preventDefault();
+              markColor(color);
+            }}
             title={`Mark selected text ${color}`}
           >
             {color}
           </button>
         ))}
-        <button type="button" className="color-tool color-tool-clear" onMouseDown={(event) => event.preventDefault()} onClick={clearColor} title="Clear selected color">
+        <button
+          type="button"
+          className="color-tool color-tool-clear"
+          onMouseDown={(event) => {
+            event.preventDefault();
+            clearColor();
+          }}
+          title="Clear selected color"
+        >
           clear
         </button>
       </div>

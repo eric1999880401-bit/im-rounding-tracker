@@ -152,7 +152,7 @@ function AdmissionBriefForm({
       const fallbackSummary = buildLocalAdmissionSummary(text);
       setExpandedAdmissionBrief(buildExpandedAdmissionBrief(text));
       onChange(buildAdmissionPatch(text, fallbackSummary));
-      setGenerationError(`${getErrorMessage(error)} Local 1-min oral brief was generated for review.`);
+      setGenerationError(`${getErrorMessage(error)} Local 3-min oral brief was generated for review.`);
     } finally {
       setGeneratingSummary(false);
     }
@@ -177,7 +177,12 @@ function AdmissionBriefForm({
 
   function handleAdmissionSummaryPaste(event: ClipboardEvent<HTMLTextAreaElement>) {
     const pastedText = event.clipboardData.getData("text");
-    if (!deidentifiedConfirmed || !shouldTreatPasteAsAdmissionNote(pastedText)) return;
+    if (!shouldTreatPasteAsAdmissionNote(pastedText)) return;
+    if (!deidentifiedConfirmed) {
+      setGenerationStatus("");
+      setGenerationError("Confirm de-identification, then click Generate summary to convert this admission note.");
+      return;
+    }
     event.preventDefault();
     setAdmissionNoteSource(pastedText);
     setGenerationStatus("");

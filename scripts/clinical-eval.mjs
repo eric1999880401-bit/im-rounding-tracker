@@ -1832,11 +1832,48 @@ try {
   if (!/WBC 10\.2.*\(13\)|Cr 2\.0.*\(1\.6\)/i.test(labOnlyVisual)) {
     throw new Error(`Lab visual summary did not display current(previous) trend:\n${labOnlyVisual}`);
   }
-  if (!/# PNA \/ bacteremia[\s\S]*Ceftriaxone 5\/19-[\s\S]*WBC improving[\s\S]*# AKI on CKD[\s\S]*Cr 2\.0 from 1\.6/i.test(labOnly.acceptedText)) {
+  if (!/# PNA \/ bacteremia[\s\S]*WBC improving[\s\S]*Ceftriaxone 5\/19-[\s\S]*# AKI on CKD[\s\S]*Cr 2\.0 from 1\.6/i.test(labOnly.acceptedText)) {
     throw new Error(`Lab-only update did not merge facts under existing A/P titles:\n${labOnly.acceptedText}`);
   }
   if (/New CHF|Start diuresis/i.test(labOnly.acceptedText)) {
     throw new Error(`Lab-only update accepted unsupported new A/P problem:\n${labOnly.acceptedText}`);
+  }
+  if (/Cr 1\.6, trend renal\/lytes and I\/O/i.test(labOnly.acceptedText)) {
+    throw new Error(`Lab-only A/P kept stale renal assessment instead of replacing under same problem:\n${labOnly.acceptedText}`);
+  }
+
+  const imageBaseline = [
+    "7A-02 IM-A02 70/M",
+    "Dx: aspiration PNA",
+    "",
+    "S:",
+    "- cough improving.",
+    "",
+    "O:",
+    "- V/S: BP 120/70, SpO2 96% RA",
+    "- Image: CXR 5/20 RLL opacity, small R effusion.",
+    "",
+    "A/P:",
+    "# Aspiration PNA",
+    "- CXR 5/20 RLL opacity; Ceftriaxone 5/20-, f/u sputum Cx.",
+    "",
+    "Tasks:",
+    "- f/u sputum Cx",
+  ].join("\n");
+  const imageCandidate = imageBaseline
+    .replace("Image: CXR 5/20 RLL opacity, small R effusion.", "Image: CXR 5/21 RLL opacity improving, no effusion.")
+    .replace("CXR 5/20 RLL opacity; Ceftriaxone 5/20-, f/u sputum Cx.", "CXR 5/21 improved; continue Ceftriaxone and f/u sputum Cx.");
+  const imageOnly = guardRoundSoapDelta({
+    workflowMode: "dailyUpdate",
+    baselineText: imageBaseline,
+    candidateText: imageCandidate,
+    sourceFields: { images: "CXR 5/21 RLL opacity improving, no effusion" },
+  });
+  if (!/Image: CXR 5\/21 RLL opacity improving, no effusion/i.test(imageOnly.acceptedText) || /Image: CXR 5\/20 RLL opacity/i.test(imageOnly.acceptedText)) {
+    throw new Error(`Image-only update did not replace stale CXR line:\n${imageOnly.acceptedText}`);
+  }
+  if (!/CXR 5\/21 improved/i.test(imageOnly.acceptedText) || /CXR 5\/20 RLL opacity/i.test(imageOnly.acceptedText)) {
+    throw new Error(`Image-only A/P kept stale CXR assessment instead of updating matching problem:\n${imageOnly.acceptedText}`);
   }
 
   const ordersCandidate = baselineSoap.replace("- Order: VS q4h", "- Order: Ceftriaxone 5/19-, VS q4h, KCl replacement").replace("- Ceftriaxone 5/19-, f/u B/C clearance and de-escalation.", "- Broad new A/P rewrite.");

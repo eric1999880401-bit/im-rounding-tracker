@@ -139,7 +139,7 @@ function sanitizeGeneratedText(value: string, rawText: string, maxLines = 8) {
 }
 
 function sanitizeAdmissionSummaryText(value: string, rawText: string) {
-  const compact = sanitizeGeneratedText(value, rawText, 4)
+  const compact = sanitizeGeneratedText(value, rawText, 8)
     .replace(/\n+/g, " ")
     .replace(/\b(?:The patient is|This patient is)\s+/gi, "")
     .replace(/\bcontinue current management\b\.?/gi, "")
@@ -148,12 +148,12 @@ function sanitizeAdmissionSummaryText(value: string, rawText: string) {
     .trim();
   if (!compact) return "";
   const sentences = compact
-    .split(/(?<=[。.!?])\s+|(?<=。)/)
-    .map((line) => compactLine(line.replace(/[.;。；\s]+$/g, ""), 140))
+    .split(/(?<=[\u3002.!?\uFF01\uFF1F])\s+|(?<=\u3002)/)
+    .map((line) => compactLine(line.replace(/[.;\u3002!?\uFF01\uFF1F\s]+$/g, ""), 150))
     .filter(Boolean)
-    .slice(0, 3);
-  const joined = sentences.map((line) => (/[。.!?]$/.test(line) ? line : `${line}。`)).join("");
-  return compactLine(joined, 420);
+    .slice(0, 6);
+  const joined = sentences.map((line) => (/[\u3002.!?\uFF01\uFF1F]$/.test(line) ? line : `${line}\u3002`)).join("");
+  return compactLine(joined, 820);
 }
 
 function sanitizeVitals(vitals: Vital[], rawText: string) {
