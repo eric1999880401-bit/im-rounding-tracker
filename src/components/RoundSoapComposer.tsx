@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import type { AiClinicalSourceType, DailyNote, KeywordHighlightRule, Patient, RoundingLayoutPreferences, UserAiStyleProfile } from "../types";
 import { generateRoundSoap } from "../firebase/aiService";
 import { ClinicalText } from "./ClinicalText";
@@ -23,6 +23,27 @@ import {
   type SoapDeltaReview,
   type SoapDeltaSection,
 } from "../soapDeltaGuardrails";
+import { normalizeAiSoapText } from "../aiSoapContract";
+import {
+  canRedo,
+  canUndo,
+  createUndoRedoHistory,
+  pushUndoRedoEdit,
+  redoEdit,
+  replaceUndoRedoPresent,
+  undoEdit,
+  type UndoRedoHistory,
+} from "../editHistory";
+import {
+  getSessionDraftStorage,
+  makeRecoveryDraft,
+  readRecoveryDraft,
+  recoveryFingerprint,
+  recoveryStaleState,
+  removeRecoveryDraft,
+  writeRecoveryDraft,
+  type RecoveryDraft,
+} from "../draftRecovery";
 
 interface RoundSoapComposerProps {
   patient: Patient;
@@ -149,6 +170,17 @@ function selectedNoteForDate(notes: DailyNote[], selectedDate: string) {
   return notes.find((note) => note.date === selectedDate);
 }
 
+function editorDraftEquals(left: ReturnType<typeof parseSoapTextToEditorDraft>, right: ReturnType<typeof parseSoapTextToEditorDraft>) {
+  return editorDraftToSoapText(left) === editorDraftToSoapText(right);
+}
+
+function recoveryTimeLabel(value: string) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
 function buildSavedNote(
   soapText: string,
   patient: Patient,
@@ -197,6 +229,9 @@ function RoundSoapComposer({
   const [previewMode, setPreviewMode] = useState<"soap" | "print">("soap");
   const [qualityMode, setQualityMode] = useState<RoundSoapQualityMode>("fast");
   const [editorDraft, setEditorDraft] = useState(() => parseSoapTextToEditorDraft(canonical.text));
+  const [editorHistory, setEditorHistory] = useState<UndoRedoHistory<ReturnType<typeof parseSoapTextToEditorDraft>>>(() =>
+    createUndoRedoHistory(parseSoapTextToEditorDraft(canonical.text)),
+  );
   const [rawSoapText, setRawSoapText] = useState(canonical.text);
   const [dirty, setDirty] = useState(false);
   const [pendingOrderSources, setPendingOrderSources] = useState<Record<WorkflowMode, boolean>>(emptyPendingOrderSources);
@@ -205,16 +240,54 @@ function RoundSoapComposer({
   const [error, setError] = useState("");
   const [warnings, setWarnings] = useState<string[]>([]);
   const [deltaReview, setDeltaReview] = useState<SoapDeltaReview | null>(null);
+  const [recoveryDraft, setRecoveryDraft] = useState<RecoveryDraft<{ soapText: string }> | null>(null);
+  const [recoverySavedAt, setRecoverySavedAt] = useState("");
   const editorDraftRef = useRef(editorDraft);
+  const editorHistoryRef = useRef(editorHistory);
   const isComposingRef = useRef(false);
   const externalSoapRevisionRef = useRef(externalSoapRevision);
   const pendingSavedSoapRef = useRef<{ date: string; text: string } | null>(null);
   const pendingOrderSourcesRef = useRef<Record<WorkflowMode, boolean>>(emptyPendingOrderSources);
+  const recoveryScope = { kind: "roundSoap" as const, patientId: patient.id, selectedDate };
+  const recoveryBaseline = canonical.text;
+  const recoveryBaselineUpdatedAt = selectedNoteForDate(dailyNotes, selectedDate)?.soapUpdatedAt || selectedNoteForDate(dailyNotes, selectedDate)?.updatedAt || "";
+  const recoveryStorage = getSessionDraftStorage();
   const soapText = editorDraftToSoapText(editorDraft);
+
+  useEffect(() => {
+    editorHistoryRef.current = editorHistory;
+  }, [editorHistory]);
 
   useEffect(() => {
     onDirtyChange?.(dirty || Object.values(pendingOrderSources).some(Boolean));
   }, [dirty, onDirtyChange, pendingOrderSources]);
+
+  useEffect(() => {
+    const savedDraft = readRecoveryDraft<{ soapText: string }>(recoveryStorage, recoveryScope);
+    if (!savedDraft?.payload.soapText.trim() || savedDraft.payload.soapText.trim() === canonical.text.trim()) {
+      setRecoveryDraft(null);
+      return;
+    }
+    setRecoveryDraft(savedDraft);
+  }, [canonical.text, patient.id, recoveryStorage, selectedDate]);
+
+  useEffect(() => {
+    if (!dirty || isComposingRef.current) return;
+    const text = editorDraftToSoapText(editorDraftRef.current).trim();
+    if (!text || text === canonical.text.trim()) return;
+    const timeout = window.setTimeout(() => {
+      const draft = makeRecoveryDraft(
+        recoveryScope,
+        { soapText: text },
+        recoveryBaseline,
+        recoveryBaselineUpdatedAt,
+      );
+      if (writeRecoveryDraft(recoveryStorage, draft)) {
+        setRecoverySavedAt(draft.draftUpdatedAt);
+      }
+    }, 700);
+    return () => window.clearTimeout(timeout);
+  }, [canonical.text, dirty, editorDraft, patient.id, recoveryBaseline, recoveryBaselineUpdatedAt, recoveryStorage, selectedDate]);
 
   useEffect(() => {
     if (dirty || isComposingRef.current) return;
@@ -250,14 +323,59 @@ function RoundSoapComposer({
   }, [workflowMode]);
 
   function updateEditorDraft(nextDraft: typeof editorDraft) {
-    setEditorDraftState(nextDraft);
+    const nextHistory = pushUndoRedoEdit(editorHistoryRef.current, nextDraft, editorDraftEquals);
+    editorHistoryRef.current = nextHistory;
+    setEditorHistory(nextHistory);
+    setEditorDraftState(nextDraft, { replaceHistory: false });
     setRawSoapText(editorDraftToSoapText(nextDraft));
     setDirty(true);
   }
 
-  function setEditorDraftState(nextDraft: typeof editorDraft) {
+  function setEditorDraftState(nextDraft: typeof editorDraft, options: { replaceHistory?: boolean } = {}) {
     editorDraftRef.current = nextDraft;
     setEditorDraft(nextDraft);
+    if (options.replaceHistory !== false) {
+      const nextHistory = replaceUndoRedoPresent(editorHistoryRef.current, nextDraft);
+      editorHistoryRef.current = nextHistory;
+      setEditorHistory(nextHistory);
+    }
+  }
+
+  function restoreEditorDraftFromHistory(nextDraft: typeof editorDraft) {
+    editorDraftRef.current = nextDraft;
+    setEditorDraft(nextDraft);
+    setRawSoapText(editorDraftToSoapText(nextDraft));
+    setDirty(editorDraftToSoapText(nextDraft) !== canonical.text);
+    setDeltaReview(null);
+  }
+
+  function undoEditorDraft() {
+    const result = undoEdit(editorHistoryRef.current);
+    if (!result.changed) return;
+    editorHistoryRef.current = result.history;
+    setEditorHistory(result.history);
+    restoreEditorDraftFromHistory(result.history.present);
+    setStatus("Undo applied to local SOAP draft. Save reviewed SOAP to write Firestore.");
+  }
+
+  function redoEditorDraft() {
+    const result = redoEdit(editorHistoryRef.current);
+    if (!result.changed) return;
+    editorHistoryRef.current = result.history;
+    setEditorHistory(result.history);
+    restoreEditorDraftFromHistory(result.history.present);
+    setStatus("Redo applied to local SOAP draft. Save reviewed SOAP to write Firestore.");
+  }
+
+  function handleEditorKeyDown(event: KeyboardEvent<HTMLElement>) {
+    const isUndo = (event.ctrlKey || event.metaKey) && !event.shiftKey && event.key.toLowerCase() === "z";
+    const isRedo =
+      (event.ctrlKey || event.metaKey) &&
+      (event.key.toLowerCase() === "y" || (event.shiftKey && event.key.toLowerCase() === "z"));
+    if ((!isUndo && !isRedo) || isComposingRef.current) return;
+    event.preventDefault();
+    if (isUndo) undoEditorDraft();
+    else redoEditorDraft();
   }
 
   const workflow = workflowModes.find((item) => item.value === workflowMode) ?? workflowModes[0];
@@ -359,7 +477,7 @@ function RoundSoapComposer({
     setDirty(true);
     updatePendingOrderSource(workflowMode, false);
     setError("");
-    setStatus("藥囑摘要 applied to local SOAP draft. Save reviewed SOAP to write Firestore.");
+    setStatus("藥囑 summary applied to local SOAP draft. Save reviewed SOAP to write Firestore.");
     setDeltaReview(null);
   }
 
@@ -368,6 +486,25 @@ function RoundSoapComposer({
     setNewSoapFields(emptyNewSoapFields);
     setTransferFields(emptyTransferFields);
     clearPendingOrderSources();
+  }
+
+  function restoreRecoveryDraft() {
+    if (!recoveryDraft?.payload.soapText.trim()) return;
+    const nextDraft = parseSoapTextToEditorDraft(recoveryDraft.payload.soapText);
+    setEditorDraftState(nextDraft);
+    setRawSoapText(editorDraftToSoapText(nextDraft));
+    setDirty(true);
+    setDeltaReview(null);
+    setError("");
+    setStatus("Recovery draft restored locally. Review, then Save reviewed SOAP to write Firestore.");
+    setRecoveryDraft(null);
+  }
+
+  function discardRecoveryDraft() {
+    removeRecoveryDraft(recoveryStorage, recoveryScope);
+    setRecoveryDraft(null);
+    setRecoverySavedAt("");
+    setStatus("Recovery draft discarded. Saved SOAP was not changed.");
   }
 
   async function handleGenerate(requestedQualityMode: RoundSoapQualityMode = qualityMode) {
@@ -411,12 +548,13 @@ function RoundSoapComposer({
             userStyleProfile: aiStyleProfile,
           });
 
+      const normalizedResult = normalizeAiSoapText(result.soapText.trim() || canonical.text, result.warnings ?? []);
       const guarded = guardRoundSoapDelta({
         workflowMode,
         baselineText: currentSoapText || canonical.text,
-        candidateText: result.soapText.trim() || canonical.text,
+        candidateText: normalizedResult.soapText,
         sourceFields: currentSourceFields(),
-        candidateWarnings: result.warnings ?? [],
+        candidateWarnings: normalizedResult.warnings,
         selectedDate,
       });
       const nextDraft = parseSoapTextToEditorDraft(guarded.acceptedText);
@@ -486,6 +624,9 @@ function RoundSoapComposer({
       clearSourceText();
       setDirty(false);
       setDeltaReview(null);
+      removeRecoveryDraft(recoveryStorage, recoveryScope);
+      setRecoveryDraft(null);
+      setRecoverySavedAt("");
       setStatus("Reviewed SOAP saved. Board, Details, and Print now read this note.");
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : "Saving SOAP failed.");
@@ -537,6 +678,10 @@ function RoundSoapComposer({
   }
 
   const estimatedTokens = Math.ceil((composeRawText().length + soapText.length) / 4);
+  const currentRecoveryStaleState = recoveryDraft
+    ? recoveryStaleState(recoveryDraft, recoveryFingerprint(recoveryBaseline), recoveryBaselineUpdatedAt)
+    : null;
+  const recoverySavedLabel = recoveryTimeLabel(recoverySavedAt);
 
   return (
     <section className={compact ? "round-soap-composer compact-round-soap-composer" : "round-soap-composer"}>
@@ -570,6 +715,12 @@ function RoundSoapComposer({
             <option value="balanced">Balanced</option>
             <option value="highAccuracy">High accuracy</option>
           </select>
+          <button type="button" className="secondary" disabled={!canUndo(editorHistory)} onClick={undoEditorDraft} title="Ctrl+Z">
+            Undo
+          </button>
+          <button type="button" className="secondary" disabled={!canRedo(editorHistory)} onClick={redoEditorDraft} title="Ctrl+Y / Ctrl+Shift+Z">
+            Redo
+          </button>
           <button type="button" className="secondary" onClick={() => {
             pendingSavedSoapRef.current = null;
             const nextDraft = parseSoapTextToEditorDraft(canonical.text);
@@ -579,6 +730,9 @@ function RoundSoapComposer({
             setStatus("");
             setError("");
             setDeltaReview(null);
+            removeRecoveryDraft(recoveryStorage, recoveryScope);
+            setRecoveryDraft(null);
+            setRecoverySavedAt("");
           }}>
             Reset
           </button>
@@ -594,6 +748,28 @@ function RoundSoapComposer({
       <p className="muted round-soap-mode-helper">
         AI mode: {qualityMode === "fast" ? "fast/cheap delta" : qualityMode === "balanced" ? "balanced draft" : "high-accuracy draft"}; approx. {estimatedTokens.toLocaleString()} input+baseline tokens. Save is still manual.
       </p>
+      {recoveryDraft && (
+        <div className={currentRecoveryStaleState?.stale ? "status-message recovery-draft-banner stale-recovery" : "status-message recovery-draft-banner"}>
+          <div>
+            <strong>Unsaved recovery draft available</strong>
+            <span>
+              {recoveryTimeLabel(recoveryDraft.draftUpdatedAt) || "recent draft"}
+              {currentRecoveryStaleState?.stale ? ` · ${currentRecoveryStaleState.reason}` : ""}
+            </span>
+          </div>
+          <div className="form-actions">
+            <button type="button" className="secondary compact-button" onClick={discardRecoveryDraft}>
+              Discard
+            </button>
+            <button type="button" className="compact-button" onClick={restoreRecoveryDraft}>
+              Restore locally
+            </button>
+          </div>
+        </div>
+      )}
+      {!recoveryDraft && recoverySavedLabel && dirty && (
+        <p className="muted round-soap-mode-helper">Session recovery draft autosaved at {recoverySavedLabel}. Firestore still changes only after Save reviewed SOAP.</p>
+      )}
 
       {workflowMode === "dailyUpdate" ? (
         <div className="round-soap-daily-grid round-soap-guided-grid">
@@ -954,7 +1130,7 @@ function RoundSoapComposer({
         </section>
       )}
 
-      <div className="round-soap-editor-grid">
+      <div className="round-soap-editor-grid" onKeyDownCapture={handleEditorKeyDown}>
         <section className="round-soap-structured-editor">
           <div className="structured-soap-main-heading">
             <div>

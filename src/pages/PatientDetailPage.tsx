@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { Link, useParams } from "react-router-dom";
 import type { DailyNote, DailyNotesByPatient, Patient, UserPreferences } from "../types";
 import PatientForm from "../components/PatientForm";
@@ -37,6 +37,26 @@ import {
 import { getRoundingDigest } from "../roundingDigest";
 import { fallbackSoapTextFromPatient, soapPreviewTextFromPatient, soapTextToPatientPatch } from "../soapDraft";
 import { normalizeRoundingLayoutPreferences } from "../userPreferences";
+import {
+  canRedo,
+  canUndo,
+  createUndoRedoHistory,
+  pushUndoRedoEdit,
+  redoEdit,
+  replaceUndoRedoPresent,
+  undoEdit,
+  type UndoRedoHistory,
+} from "../editHistory";
+import {
+  getSessionDraftStorage,
+  makeRecoveryDraft,
+  readRecoveryDraft,
+  recoveryFingerprint,
+  recoveryStaleState,
+  removeRecoveryDraft,
+  writeRecoveryDraft,
+  type RecoveryDraft,
+} from "../draftRecovery";
 
 interface PageProps {
   patients: Patient[];
@@ -68,6 +88,23 @@ type PendingSavedDailyNote = {
   date: string;
   note: DailyNote;
 };
+
+type DetailRecoveryPayload = {
+  patient: Patient;
+  soapEditorText: string;
+};
+
+function detailPayloadEquals(left: DetailRecoveryPayload | null, right: DetailRecoveryPayload | null) {
+  if (!left || !right) return left === right;
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function recoveryTimeLabel(value: string) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
 
 function appendUniqueClinicalText(existing: string, additions: string[]) {
   const seen = new Set<string>();
@@ -225,25 +262,76 @@ function PatientDetailPage({
         ? dailyNoteFromPatient(displayFallbackPatient, selectedDate)
         : emptyDailyNote(selectedDate);
   const initialDraft = displayFallbackPatient ? patientWithDailyNote(displayFallbackPatient, selectedDraftNote) : null;
+  const initialSoapEditorText = initialDraft ? soapPreviewTextFromPatient(initialDraft, patientNotes, selectedDate) : "";
   const [draftPatient, setDraftPatient] = useState<Patient | null>(initialDraft);
+  const [detailHistory, setDetailHistory] = useState<UndoRedoHistory<DetailRecoveryPayload | null>>(() =>
+    createUndoRedoHistory(initialDraft ? { patient: initialDraft, soapEditorText: initialSoapEditorText } : null),
+  );
   const [isDirty, setIsDirty] = useState(false);
   const [activeTab, setActiveTab] = useState<DetailTab>("rounds");
   const [selectedDittoDate, setSelectedDittoDate] = useState("");
   const [quickVsOrder, setQuickVsOrder] = useState("");
   const [cleanupPreview, setCleanupPreview] = useState<{ patient: Patient; changes: ClinicalFieldCleanupChange[] } | null>(null);
   const [cleanupStatus, setCleanupStatus] = useState("");
-  const [soapEditorText, setSoapEditorText] = useState("");
+  const [soapEditorText, setSoapEditorText] = useState(initialSoapEditorText);
   const [soapEditorDirty, setSoapEditorDirty] = useState(false);
   const [externalSoapDraft, setExternalSoapDraft] = useState({ revision: 0, text: "", status: "" });
   const [roundSoapDirty, setRoundSoapDirty] = useState(false);
+  const [detailRecoveryDraft, setDetailRecoveryDraft] = useState<RecoveryDraft<DetailRecoveryPayload> | null>(null);
+  const [detailRecoverySavedAt, setDetailRecoverySavedAt] = useState("");
+  const [detailRecoveryStatus, setDetailRecoveryStatus] = useState("");
   const [admissionPromptOpen, setAdmissionPromptOpen] = useState(false);
   const [admissionPromptDismissedPatientId, setAdmissionPromptDismissedPatientId] = useState("");
   const draftRef = useRef<Patient | null>(initialDraft);
+  const detailHistoryRef = useRef(detailHistory);
+  const soapEditorTextRef = useRef(initialSoapEditorText);
   const isDirtyRef = useRef(false);
   const soapEditorDirtyRef = useRef(false);
   const roundSoapDirtyRef = useRef(false);
   const isComposingRef = useRef(false);
   const pendingSavedDailyNoteRef = useRef<PendingSavedDailyNote | null>(null);
+  const detailRecoveryScope = sourcePatient ? { kind: "patientDetail" as const, patientId: sourcePatient.id, selectedDate } : null;
+  const detailRecoveryBaseline = initialDraft ? { patient: initialDraft, soapEditorText: initialSoapEditorText } : null;
+  const detailRecoveryBaselineUpdatedAt = selectedNote?.updatedAt || initialDraft?.updatedAt || "";
+  const detailRecoveryStorage = getSessionDraftStorage();
+
+  useEffect(() => {
+    detailHistoryRef.current = detailHistory;
+  }, [detailHistory]);
+
+  useEffect(() => {
+    if (!detailRecoveryScope || !detailRecoveryBaseline) {
+      setDetailRecoveryDraft(null);
+      return;
+    }
+    const savedDraft = readRecoveryDraft<DetailRecoveryPayload>(detailRecoveryStorage, detailRecoveryScope);
+    if (!savedDraft) {
+      setDetailRecoveryDraft(null);
+      return;
+    }
+    const currentFingerprint = recoveryFingerprint(detailRecoveryBaseline);
+    const savedFingerprint = recoveryFingerprint(savedDraft.payload);
+    if (savedFingerprint === currentFingerprint) {
+      setDetailRecoveryDraft(null);
+      return;
+    }
+    setDetailRecoveryDraft(savedDraft);
+  }, [detailRecoveryBaselineUpdatedAt, detailRecoveryStorage, patientId, selectedDate]);
+
+  useEffect(() => {
+    if ((!isDirty && !soapEditorDirty) || isComposingRef.current || !detailRecoveryScope || !detailRecoveryBaseline || !draftRef.current) return;
+    const payload: DetailRecoveryPayload = {
+      patient: draftRef.current,
+      soapEditorText: soapEditorTextRef.current,
+    };
+    const timeout = window.setTimeout(() => {
+      const draft = makeRecoveryDraft(detailRecoveryScope, payload, detailRecoveryBaseline, detailRecoveryBaselineUpdatedAt);
+      if (writeRecoveryDraft(detailRecoveryStorage, draft)) {
+        setDetailRecoverySavedAt(draft.draftUpdatedAt);
+      }
+    }, 700);
+    return () => window.clearTimeout(timeout);
+  }, [detailRecoveryBaseline, detailRecoveryBaselineUpdatedAt, detailRecoveryStorage, isDirty, patientId, selectedDate, soapEditorDirty]);
 
   useEffect(() => {
     if (!sourcePatient) return;
@@ -271,9 +359,15 @@ function PatientDetailPage({
         ? mergeNoteWithFallback(selectedNote, nextDisplayPatient, selectedDate)
         : dailyNoteFromPatient(nextDisplayPatient, selectedDate);
       const nextPatient = patientWithDailyNote(nextDisplayPatient, nextNote);
+      const nextSoapEditorText = soapPreviewTextFromPatient(nextPatient, patientNotes, selectedDate);
       draftRef.current = nextPatient;
       setDraftPatient(nextPatient);
-      setSoapEditorText(soapPreviewTextFromPatient(nextPatient, patientNotes, selectedDate));
+      soapEditorTextRef.current = nextSoapEditorText;
+      setSoapEditorText(nextSoapEditorText);
+      const nextPayload = { patient: nextPatient, soapEditorText: nextSoapEditorText };
+      const nextHistory = replaceUndoRedoPresent(detailHistoryRef.current, nextPayload);
+      detailHistoryRef.current = nextHistory;
+      setDetailHistory(nextHistory);
       setSoapEditorDirty(false);
       soapEditorDirtyRef.current = false;
       setIsDirty(false);
@@ -324,6 +418,10 @@ function PatientDetailPage({
   const visibleCleanupChanges = cleanupPreview?.changes ?? cleanupSignal.changes;
 
   function updateDraft(nextPatient: Patient) {
+    const nextPayload = { patient: nextPatient, soapEditorText: soapEditorTextRef.current };
+    const nextHistory = pushUndoRedoEdit(detailHistoryRef.current, nextPayload, detailPayloadEquals);
+    detailHistoryRef.current = nextHistory;
+    setDetailHistory(nextHistory);
     draftRef.current = nextPatient;
     setDraftPatient(nextPatient);
     setIsDirty(true);
@@ -331,9 +429,72 @@ function PatientDetailPage({
   }
 
   function updateSoapEditor(value: string) {
+    const nextPayload = draftRef.current ? { patient: draftRef.current, soapEditorText: value } : null;
+    const nextHistory = pushUndoRedoEdit(detailHistoryRef.current, nextPayload, detailPayloadEquals);
+    detailHistoryRef.current = nextHistory;
+    setDetailHistory(nextHistory);
+    soapEditorTextRef.current = value;
     setSoapEditorText(value);
     setSoapEditorDirty(true);
     soapEditorDirtyRef.current = true;
+  }
+
+  function restoreDetailPayload(payload: DetailRecoveryPayload | null, message: string) {
+    if (!payload) return;
+    draftRef.current = payload.patient;
+    setDraftPatient(payload.patient);
+    soapEditorTextRef.current = payload.soapEditorText;
+    setSoapEditorText(payload.soapEditorText);
+    setIsDirty(true);
+    isDirtyRef.current = true;
+    setSoapEditorDirty(true);
+    soapEditorDirtyRef.current = true;
+    setCleanupStatus(message);
+  }
+
+  function undoDetailDraft() {
+    const result = undoEdit(detailHistoryRef.current);
+    if (!result.changed) return;
+    detailHistoryRef.current = result.history;
+    setDetailHistory(result.history);
+    restoreDetailPayload(result.history.present, "Undo applied to local Details draft. Save to write Firestore.");
+  }
+
+  function redoDetailDraft() {
+    const result = redoEdit(detailHistoryRef.current);
+    if (!result.changed) return;
+    detailHistoryRef.current = result.history;
+    setDetailHistory(result.history);
+    restoreDetailPayload(result.history.present, "Redo applied to local Details draft. Save to write Firestore.");
+  }
+
+  function handleDetailKeyDown(event: KeyboardEvent<HTMLElement>) {
+    const target = event.target as HTMLElement | null;
+    if (target?.closest(".round-soap-composer")) return;
+    const isUndo = (event.ctrlKey || event.metaKey) && !event.shiftKey && event.key.toLowerCase() === "z";
+    const isRedo =
+      (event.ctrlKey || event.metaKey) &&
+      (event.key.toLowerCase() === "y" || (event.shiftKey && event.key.toLowerCase() === "z"));
+    if ((!isUndo && !isRedo) || isComposingRef.current) return;
+    event.preventDefault();
+    if (isUndo) undoDetailDraft();
+    else redoDetailDraft();
+  }
+
+  function restoreDetailRecoveryDraft() {
+    if (!detailRecoveryDraft) return;
+    const nextHistory = replaceUndoRedoPresent(detailHistoryRef.current, detailRecoveryDraft.payload);
+    detailHistoryRef.current = nextHistory;
+    setDetailHistory(nextHistory);
+    restoreDetailPayload(detailRecoveryDraft.payload, "Recovery draft restored locally. Review, then Save to write Firestore.");
+    setDetailRecoveryDraft(null);
+  }
+
+  function discardDetailRecoveryDraft() {
+    if (detailRecoveryScope) removeRecoveryDraft(detailRecoveryStorage, detailRecoveryScope);
+    setDetailRecoveryDraft(null);
+    setDetailRecoverySavedAt("");
+    setDetailRecoveryStatus("Recovery draft discarded. Saved patient data was not changed.");
   }
 
   function markPendingSavedDailyNote(patientId: string, note: DailyNote) {
@@ -377,6 +538,9 @@ function PatientDetailPage({
     await onSaveDailyNote(nextPatient.id, nextNote);
     setIsDirty(false);
     isDirtyRef.current = false;
+    if (detailRecoveryScope) removeRecoveryDraft(detailRecoveryStorage, detailRecoveryScope);
+    setDetailRecoveryDraft(null);
+    setDetailRecoverySavedAt("");
   }
 
   async function createSelectedDateNote() {
@@ -481,11 +645,16 @@ function PatientDetailPage({
     setDraftPatient(safeNextPatient);
     await onSavePatient(safeNextPatient);
     await onSaveDailyNote(safeNextPatient.id, acceptedNote);
-    setSoapEditorText(soapPreviewTextFromPatient(safeNextPatient, [acceptedNote, ...patientNotes], selectedDate));
+    const nextSoapText = soapPreviewTextFromPatient(safeNextPatient, [acceptedNote, ...patientNotes], selectedDate);
+    setSoapEditorText(nextSoapText);
+    soapEditorTextRef.current = nextSoapText;
     setSoapEditorDirty(false);
     soapEditorDirtyRef.current = false;
     setIsDirty(false);
     isDirtyRef.current = false;
+    if (detailRecoveryScope) removeRecoveryDraft(detailRecoveryStorage, detailRecoveryScope);
+    setDetailRecoveryDraft(null);
+    setDetailRecoverySavedAt("");
   }
 
   async function saveSoapEditor() {
@@ -507,11 +676,16 @@ function PatientDetailPage({
     setDraftPatient(nextPatient);
     await onSavePatient(nextPatient);
     await onSaveDailyNote(nextPatient.id, nextNote);
-    setSoapEditorText(soapPreviewTextFromPatient(nextPatient, [nextNote, ...patientNotes], selectedDate));
+    const nextSoapText = soapPreviewTextFromPatient(nextPatient, [nextNote, ...patientNotes], selectedDate);
+    setSoapEditorText(nextSoapText);
+    soapEditorTextRef.current = nextSoapText;
     setSoapEditorDirty(false);
     soapEditorDirtyRef.current = false;
     setIsDirty(false);
     isDirtyRef.current = false;
+    if (detailRecoveryScope) removeRecoveryDraft(detailRecoveryStorage, detailRecoveryScope);
+    setDetailRecoveryDraft(null);
+    setDetailRecoverySavedAt("");
   }
 
   async function appendQuickVsOrder() {
@@ -534,6 +708,9 @@ function PatientDetailPage({
     await onSaveDailyNote(nextPatient.id, nextNote);
     setIsDirty(false);
     isDirtyRef.current = false;
+    if (detailRecoveryScope) removeRecoveryDraft(detailRecoveryStorage, detailRecoveryScope);
+    setDetailRecoveryDraft(null);
+    setDetailRecoverySavedAt("");
   }
 
   async function dittoSelectedNote() {
@@ -558,6 +735,9 @@ function PatientDetailPage({
     await onSaveDailyNote(sourcePatient.id, copiedNote);
     setIsDirty(false);
     isDirtyRef.current = false;
+    if (detailRecoveryScope) removeRecoveryDraft(detailRecoveryStorage, detailRecoveryScope);
+    setDetailRecoveryDraft(null);
+    setDetailRecoverySavedAt("");
   }
 
   function renderDittoControls() {
@@ -727,6 +907,9 @@ function PatientDetailPage({
             await onSavePatient(nextPatient);
             setIsDirty(false);
             isDirtyRef.current = false;
+            if (detailRecoveryScope) removeRecoveryDraft(detailRecoveryStorage, detailRecoveryScope);
+            setDetailRecoveryDraft(null);
+            setDetailRecoverySavedAt("");
           }}
           onSaveDailyNote={async (patientId, note) => {
             markPendingSavedDailyNote(patientId, note);
@@ -755,9 +938,14 @@ function PatientDetailPage({
       .find((line) => /^Red flags:/i.test(line.trim()))
       ?.replace(/^Red flags:\s*/i, "") ?? "",
   );
+  const currentDetailRecoveryStaleState =
+    detailRecoveryDraft && detailRecoveryBaseline
+      ? recoveryStaleState(detailRecoveryDraft, recoveryFingerprint(detailRecoveryBaseline), detailRecoveryBaselineUpdatedAt)
+      : null;
+  const detailRecoverySavedLabel = recoveryTimeLabel(detailRecoverySavedAt);
 
   return (
-    <div className="page">
+    <div className="page" onKeyDownCapture={handleDetailKeyDown}>
       <header className="page-header">
         <div>
           <h2>
@@ -777,6 +965,40 @@ function PatientDetailPage({
           </Link>
         </div>
       </header>
+
+      {detailRecoveryDraft && (
+        <div className={currentDetailRecoveryStaleState?.stale ? "status-message recovery-draft-banner stale-recovery" : "status-message recovery-draft-banner"}>
+          <div>
+            <strong>Unsaved Details draft available</strong>
+            <span>
+              {recoveryTimeLabel(detailRecoveryDraft.draftUpdatedAt) || "recent draft"}
+              {currentDetailRecoveryStaleState?.stale ? ` · ${currentDetailRecoveryStaleState.reason}` : ""}
+            </span>
+          </div>
+          <div className="form-actions">
+            <button type="button" className="secondary compact-button" onClick={discardDetailRecoveryDraft}>
+              Discard
+            </button>
+            <button type="button" className="compact-button" onClick={restoreDetailRecoveryDraft}>
+              Restore locally
+            </button>
+          </div>
+        </div>
+      )}
+      {!detailRecoveryDraft && detailRecoverySavedLabel && (isDirty || soapEditorDirty) && (
+        <p className="muted">Details recovery draft autosaved at {detailRecoverySavedLabel}. Firestore still changes only after Save.</p>
+      )}
+      {detailRecoveryStatus && <p className="status-message">{detailRecoveryStatus}</p>}
+      {(isDirty || soapEditorDirty) && (
+        <div className="form-actions detail-undo-actions">
+          <button type="button" className="secondary compact-button" disabled={!canUndo(detailHistory)} onClick={undoDetailDraft} title="Ctrl+Z">
+            Undo
+          </button>
+          <button type="button" className="secondary compact-button" disabled={!canRedo(detailHistory)} onClick={redoDetailDraft} title="Ctrl+Y / Ctrl+Shift+Z">
+            Redo
+          </button>
+        </div>
+      )}
 
       <section className="panel patient-detail-header">
         <div className="detail-id-block">

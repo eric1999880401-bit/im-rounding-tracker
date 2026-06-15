@@ -83,6 +83,22 @@ const { labReferenceText, parseClinicalLabTokens } = await server.ssrLoadModule(
 const { boardDischargeTasks, hasBoardDischargeSoonSignal, isBoardNewAdmission } = await server.ssrLoadModule("/src/boardCockpit.ts");
 const { buildLabVisualSummaryFromText, formatLabVisualSummaryLinesFromText } = await server.ssrLoadModule("/src/labVisualSummary.ts");
 const { formatSoapBasedIsbar } = await server.ssrLoadModule("/src/soapSbar.ts");
+const { AI_SOAP_OUTPUT_CONTRACT_VERSION, normalizeAiSoapText } = await server.ssrLoadModule("/src/aiSoapContract.ts");
+const {
+  createUndoRedoHistory,
+  pushUndoRedoEdit,
+  redoEdit,
+  replaceUndoRedoPresent,
+  undoEdit,
+} = await server.ssrLoadModule("/src/editHistory.ts");
+const {
+  makeRecoveryDraft,
+  readRecoveryDraft,
+  recoveryFingerprint,
+  recoveryStaleState,
+  removeRecoveryDraft,
+  writeRecoveryDraft,
+} = await server.ssrLoadModule("/src/draftRecovery.ts");
 const { SoapVisualPreview } = await server.ssrLoadModule("/src/components/SoapVisualPreview.tsx");
 
 function haystack(plan) {
@@ -1712,6 +1728,78 @@ try {
 } catch (error) {
   failures.push({ name: "Structured SOAP editor normalizes symbols and shares clinical severity", error: error instanceof Error ? error.message : String(error) });
   console.error(`FAIL Structured SOAP editor normalizes symbols and shares clinical severity: ${failures[failures.length - 1].error}`);
+}
+
+try {
+  const malformedAiSoap = [
+    "H5-113 51/M",
+    "Subjective: weak, afebrile",
+    "Objective:",
+    "BP 100/69 HR 99 SpO2 100%",
+    "Lab: WBC 12.7, Hb 9.4, K 3.0",
+    "Assessment/Plan:",
+    "MRSA/Enterococcus bacteremia: Teicoplanin 5/13-, f/u B/C clearance.",
+    "Orders:",
+    "continue Teicoplanin",
+    "Discharge:",
+    "OPD oncology after infection clearance",
+  ].join("\n");
+  const normalizedAi = normalizeAiSoapText(malformedAiSoap, ["source warning"]);
+  if (normalizedAi.contractVersion !== AI_SOAP_OUTPUT_CONTRACT_VERSION) {
+    throw new Error(`AI SOAP contract version mismatch: ${normalizedAi.contractVersion}`);
+  }
+  if (!/^S:\n- weak, afebrile/m.test(normalizedAi.soapText) || !/^O:\n- V\/S: BP 100\/69 HR 99 SpO2 100%/m.test(normalizedAi.soapText)) {
+    throw new Error(`AI SOAP normalizer did not stabilize S/O sections:\n${normalizedAi.soapText}`);
+  }
+  if (!/^A\/P:\n# MRSA\/Enterococcus bacteremia\n- Teicoplanin 5\/13-, f\/u B\/C clearance\./m.test(normalizedAi.soapText)) {
+    throw new Error(`AI SOAP normalizer did not stabilize A/P block:\n${normalizedAi.soapText}`);
+  }
+  if (!/Tasks:[\s\S]*continue Teicoplanin/i.test(normalizedAi.soapText) || !/DC:[\s\S]*OPD oncology/i.test(normalizedAi.soapText)) {
+    throw new Error(`AI SOAP normalizer lost task/DC content:\n${normalizedAi.soapText}`);
+  }
+  const sparseAi = normalizeAiSoapText("A/P:\n# PNA\n- Ceftriaxone started");
+  if (!/S:\n- No documented interval event\./.test(sparseAi.soapText) || !/O:\n- No new objective data provided\./.test(sparseAi.soapText)) {
+    throw new Error(`AI SOAP normalizer did not add explicit empty states:\n${sparseAi.soapText}`);
+  }
+
+  let history = createUndoRedoHistory("A");
+  history = pushUndoRedoEdit(history, "AB");
+  history = pushUndoRedoEdit(history, "ABC");
+  const undoOnce = undoEdit(history);
+  if (!undoOnce.changed || undoOnce.history.present !== "AB") throw new Error("Undo did not restore previous edit state");
+  const redoOnce = redoEdit(undoOnce.history);
+  if (!redoOnce.changed || redoOnce.history.present !== "ABC") throw new Error("Redo did not restore undone edit state");
+  const replacedHistory = replaceUndoRedoPresent(redoOnce.history, "Firestore snapshot");
+  if (replacedHistory.past.length !== 0 || replacedHistory.future.length !== 0 || replacedHistory.present !== "Firestore snapshot") {
+    throw new Error(`Programmatic replace polluted undo stack: ${JSON.stringify(replacedHistory)}`);
+  }
+
+  const storageMap = new Map();
+  const storage = {
+    getItem: (key) => storageMap.get(key) ?? null,
+    setItem: (key, value) => storageMap.set(key, value),
+    removeItem: (key) => storageMap.delete(key),
+  };
+  const scope = { kind: "roundSoap", patientId: "p-test", selectedDate: "2026-05-20" };
+  const baseline = { soapText: "S:\n- baseline" };
+  const recoveryDraft = makeRecoveryDraft(scope, { soapText: "S:\n- unsaved edit" }, baseline, "2026-05-20T08:00:00.000Z");
+  if (!writeRecoveryDraft(storage, recoveryDraft)) throw new Error("Recovery draft write failed");
+  const restoredDraft = readRecoveryDraft(storage, scope);
+  if (!restoredDraft || restoredDraft.payload.soapText !== "S:\n- unsaved edit") {
+    throw new Error(`Recovery draft did not round-trip: ${JSON.stringify(restoredDraft)}`);
+  }
+  const cleanState = recoveryStaleState(restoredDraft, recoveryFingerprint(baseline), "2026-05-20T08:00:00.000Z");
+  if (cleanState.stale) throw new Error(`Recovery draft should not be stale: ${JSON.stringify(cleanState)}`);
+  const staleState = recoveryStaleState(restoredDraft, recoveryFingerprint({ soapText: "S:\n- newer saved" }), "2026-05-20T09:00:00.000Z");
+  if (!staleState.stale) throw new Error("Recovery stale protection did not detect newer saved data");
+  removeRecoveryDraft(storage, scope);
+  if (readRecoveryDraft(storage, scope)) throw new Error("Recovery draft cleanup failed");
+
+  console.log("PASS AI SOAP contract, undo/redo, and recovery draft protection");
+  supplementalPasses += 1;
+} catch (error) {
+  failures.push({ name: "AI SOAP contract, undo/redo, and recovery draft protection", error: error instanceof Error ? error.message : String(error) });
+  console.error(`FAIL AI SOAP contract, undo/redo, and recovery draft protection: ${failures[failures.length - 1].error}`);
 }
 
 try {

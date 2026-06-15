@@ -206,6 +206,29 @@ h4 {
   padding: 10px 12px;
 }
 
+.recovery-draft-banner {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.recovery-draft-banner > div:first-child {
+  display: grid;
+  gap: 3px;
+}
+
+.stale-recovery {
+  background: var(--warning-bg);
+  border-color: var(--warning-border);
+  border-left-color: var(--warning-text);
+  color: var(--warning-text);
+}
+
+.detail-undo-actions {
+  justify-content: flex-end;
+}
+
 /* ============================================================
    Buttons
    ============================================================ */
