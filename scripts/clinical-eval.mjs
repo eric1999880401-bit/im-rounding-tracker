@@ -1751,7 +1751,7 @@ try {
   if (!/^S:\n- weak, afebrile/m.test(normalizedAi.soapText) || !/^O:\n- V\/S: BP 100\/69 HR 99 SpO2 100%/m.test(normalizedAi.soapText)) {
     throw new Error(`AI SOAP normalizer did not stabilize S/O sections:\n${normalizedAi.soapText}`);
   }
-  if (!/^A\/P:\n# MRSA\/Enterococcus bacteremia\n- Teicoplanin 5\/13-, f\/u B\/C clearance\./m.test(normalizedAi.soapText)) {
+  if (!/^A\/P:\n# MRSA\/Enterococcus bacteremia\n- Teicoplanin 5\/13-;\s*f\/u B\/C clearance\./m.test(normalizedAi.soapText)) {
     throw new Error(`AI SOAP normalizer did not stabilize A/P block:\n${normalizedAi.soapText}`);
   }
   if (!/Tasks:[\s\S]*continue Teicoplanin/i.test(normalizedAi.soapText) || !/DC:[\s\S]*OPD oncology/i.test(normalizedAi.soapText)) {
@@ -1760,6 +1760,29 @@ try {
   const sparseAi = normalizeAiSoapText("A/P:\n# PNA\n- Ceftriaxone started");
   if (!/S:\n- No documented interval event\./.test(sparseAi.soapText) || !/O:\n- No new objective data provided\./.test(sparseAi.soapText)) {
     throw new Error(`AI SOAP normalizer did not add explicit empty states:\n${sparseAi.soapText}`);
+  }
+  const repetitiveAi = normalizeAiSoapText([
+    "S:",
+    "- dyspnea improved",
+    "O:",
+    "- V/S: SpO2 94% NC2L",
+    "- Lab: WBC 14, Na 156",
+    "A/P:",
+    "# PNA / infection",
+    "- Ceftriaxone 6/1-, f/u B/C; O2 NC2L",
+    "# Hypernatremia",
+    "- Na 156; Ceftriaxone 6/1-, f/u B/C; O2 NC2L",
+    "# O2 need",
+    "- O2 NC2L; Ceftriaxone 6/1-, f/u B/C",
+  ].join("\n"));
+  const repetitiveAp = parseSoapText(repetitiveAi.soapText).apProblems;
+  const ceftriaxoneProblemCount = repetitiveAp.filter((problem) => /Ceftriaxone/i.test(problem.lines.join(" "))).length;
+  const oxygenProblemCount = repetitiveAp.filter((problem) => /\bO2\b|NC2L/i.test(problem.lines.join(" "))).length;
+  if (ceftriaxoneProblemCount > 1 || oxygenProblemCount > 1) {
+    throw new Error(`AI SOAP normalizer allowed repeated treatment lines across A/P:\n${repetitiveAi.soapText}`);
+  }
+  if (!/# Hypernatremia[\s\S]*Na 156/i.test(repetitiveAi.soapText)) {
+    throw new Error(`AI SOAP normalizer did not preserve/create sodium A/P from critical O/Lab:\n${repetitiveAi.soapText}`);
   }
 
   let history = createUndoRedoHistory("A");
@@ -2868,6 +2891,38 @@ try {
   }
   if (!/Ceftriaxone 5\/17-/i.test(cxrFixGuarded.acceptedText)) {
     throw new Error(`Protected antibiotic A/P line must be preserved:\n${cxrFixGuarded.acceptedText}`);
+  }
+  const sodiumGuarded = guardRoundSoapDelta({
+    workflowMode: "dailyUpdate",
+    baselineText: [
+      "S:",
+      "- no new dyspnea",
+      "O:",
+      "- V/S: BP 118/70, HR 88",
+      "- Lab: Na 140, Cr 0.9",
+      "A/P:",
+      "# PNA",
+      "- Ceftriaxone 6/1-, f/u B/C.",
+    ].join("\n"),
+    candidateText: [
+      "S:",
+      "- no new dyspnea",
+      "O:",
+      "- V/S: BP 118/70, HR 88",
+      "- Lab: Na 156, Cr 0.9",
+      "A/P:",
+      "# PNA",
+      "- Ceftriaxone 6/1-, f/u B/C.",
+      "# Hypernatremia",
+      "- Na 156; f/u trend, volume/free water plan.",
+    ].join("\n"),
+    sourceFields: { labs: "Na 156 from 140, Cr 0.9" },
+  });
+  if (!/# Hypernatremia[\s\S]*Na 156/i.test(sodiumGuarded.acceptedText)) {
+    throw new Error(`Daily lab update did not allow objective-supported sodium A/P:\n${sodiumGuarded.acceptedText}`);
+  }
+  if (!/Ceftriaxone 6\/1-/i.test(sodiumGuarded.acceptedText) || !/S:\n- no new dyspnea/i.test(sodiumGuarded.acceptedText)) {
+    throw new Error(`Daily lab update should preserve unrelated reviewed SOAP:\n${sodiumGuarded.acceptedText}`);
   }
 
   const colorMarkSoap = [

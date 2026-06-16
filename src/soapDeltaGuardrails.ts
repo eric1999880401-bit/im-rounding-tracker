@@ -150,7 +150,7 @@ function lineHasSourceSupport(line: string, sourceText: string, baselineText: st
   const matching = tokens.filter((token) => sourceTokens.has(token));
   const hasNumericAnchor = tokens.some((token) => /^\d/.test(token) && sourceTokens.has(token));
   const hasClinicalAnchor = matching.some((token) =>
-    /^(?:bp|hr|rr|spo2|o2|nc|ra|wbc|hb|plt|cr|bun|na|k|inr|lactate|crp|cx|b\/c|bcx|uc|c\/s|ct|cxr|mri|us|abx|cef|ceftriaxone|vanco|vancomycin|mero|meropenem|teicoplanin|apixaban|heparin|insulin|lasix|aki|pna|uti|sepsis|shock|bleed|dc|opd|rehab)$/i.test(token),
+    /^(?:bp|hr|rr|spo2|o2|nc|ra|wbc|hb|plt|cr|bun|na|sodium|hypernatremia|hyponatremia|k|inr|lactate|crp|cx|b\/c|bcx|uc|c\/s|ct|cxr|mri|us|abx|cef|ceftriaxone|vanco|vancomycin|mero|meropenem|teicoplanin|apixaban|heparin|insulin|lasix|aki|pna|uti|sepsis|shock|bleed|dc|opd|rehab)$/i.test(token),
   );
   return hasNumericAnchor || hasClinicalAnchor || matching.length >= Math.min(2, tokens.length);
 }
@@ -177,8 +177,12 @@ function filterUnsupportedDailyAp(problems: SoapApProblem[], fields: RoundSoapSo
     if (problem.lines.length > lines.length || (!titleSupported && !problemBucket(problem))) {
       warnings.push("A/P line(s) without pasted-source support were held for review.");
     }
+    if (!titleSupported && lines.length === 0) {
+      warnings.push("Unsupported A/P problem title was held for review.");
+      return { title: "", lines: [] };
+    }
     return { title: problem.title, lines };
-  });
+  }).filter((problem) => problem.title || problem.lines.length > 0);
   return {
     problems: filtered,
     warnings: uniqueLines(warnings, 2),
@@ -339,7 +343,7 @@ function problemBucket(problem: SoapApProblem | string) {
   const title = typeof problem === "string" ? problem.toLowerCase() : problem.title.toLowerCase();
   const text = typeof problem === "string" ? title : `${problem.title} ${problem.lines.join(" ")}`.toLowerCase();
   const bucketFrom = (value: string) => {
-    if (/\b(aki|ckd|renal|cr\b|creatinine|bun|hyperk|hypok|potassium|uo|urine)\b/.test(value)) return "renal";
+    if (/\b(aki|ckd|renal|cr\b|creatinine|bun|hyperk|hypok|potassium|na\b|sodium|hypernat|hyponat|lyte|electrolyte|uo|urine)\b/.test(value)) return "renal";
     if (/\b(pleural|effusion|dyspnea|oxygen|o2|spo2|resp|rf|cxr|thoracentesis|tap|pulm)\b/.test(value)) return "resp";
     if (/\b(hb|anemia|cytopenia|plt|platelet|inr|coag|bleed|apixaban|warfarin|anticoag|ac\b)\b/.test(value)) return "heme";
     if (/\b(dm|glucose|insulin|hypergly)\b/.test(value)) return "endo";
@@ -644,7 +648,11 @@ function draftForDailyUpdate(baseline: SoapDraft, candidate: SoapDraft, fields: 
     if (profile.allowed.has("ap")) {
       const filteredAp = filterUnsupportedDailyAp(candidate.apProblems, fields, baselineText);
       warnings.push(...filteredAp.warnings);
-      const merged = mergeApProblemsForDaily(baseline.apProblems, filteredAp.problems, profile.allowed.has("s") || profile.allowed.has("pe"));
+      const merged = mergeApProblemsForDaily(
+        baseline.apProblems,
+        filteredAp.problems,
+        profile.allowed.has("s") || profile.allowed.has("pe") || profile.allowed.has("lab") || profile.allowed.has("image"),
+      );
       nextApProblems = merged.apProblems;
       warnings.push(...merged.warnings);
       highRiskWarnings.push(...merged.highRiskWarnings);

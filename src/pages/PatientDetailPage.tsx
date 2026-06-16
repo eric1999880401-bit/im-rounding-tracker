@@ -35,7 +35,7 @@ import {
   todayKey,
 } from "../utils";
 import { getRoundingDigest } from "../roundingDigest";
-import { fallbackSoapTextFromPatient, soapPreviewTextFromPatient, soapTextToPatientPatch } from "../soapDraft";
+import { fallbackSoapTextFromPatient, getCanonicalSoapText, soapPreviewTextFromPatient, soapTextToPatientPatch } from "../soapDraft";
 import { normalizeRoundingLayoutPreferences } from "../userPreferences";
 import {
   canRedo,
@@ -931,7 +931,7 @@ function PatientDetailPage({
     mode: "rounds",
     hideCompletedTasks: true,
   });
-  const headerSoap = fallbackSoapTextFromPatient(currentPatient, patientNotes, selectedDate);
+  const headerSoap = getCanonicalSoapText(currentPatient, patientNotes, selectedDate).text;
   const headerRedFlags = simpleDetailRedFlags(
     headerSoap
       .split(/\r?\n/)

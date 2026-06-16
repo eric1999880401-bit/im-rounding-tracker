@@ -227,7 +227,7 @@ function RoundSoapComposer({
   const [confirmed, setConfirmed] = useState(false);
   const [soapFormat, setSoapFormat] = useState<SoapEditorFormat>("standard");
   const [previewMode, setPreviewMode] = useState<"soap" | "print">("soap");
-  const [qualityMode, setQualityMode] = useState<RoundSoapQualityMode>("fast");
+  const [qualityMode, setQualityMode] = useState<RoundSoapQualityMode>("balanced");
   const [editorDraft, setEditorDraft] = useState(() => parseSoapTextToEditorDraft(canonical.text));
   const [editorHistory, setEditorHistory] = useState<UndoRedoHistory<ReturnType<typeof parseSoapTextToEditorDraft>>>(() =>
     createUndoRedoHistory(parseSoapTextToEditorDraft(canonical.text)),
@@ -309,9 +309,7 @@ function RoundSoapComposer({
     if (!nextSoapText) return;
     pendingSavedSoapRef.current = null;
     const nextDraft = parseSoapTextToEditorDraft(nextSoapText);
-    setEditorDraftState(nextDraft);
-    setRawSoapText(editorDraftToSoapText(nextDraft));
-    setDirty(true);
+    updateEditorDraft(nextDraft);
     setError("");
     setWarnings([]);
     setDeltaReview(null);
@@ -319,7 +317,7 @@ function RoundSoapComposer({
   }, [externalSoapRevision, externalSoapStatus, externalSoapText]);
 
   useEffect(() => {
-    setQualityMode(workflowMode === "dailyUpdate" ? "fast" : "balanced");
+    setQualityMode("balanced");
   }, [workflowMode]);
 
   function updateEditorDraft(nextDraft: typeof editorDraft) {
@@ -373,6 +371,9 @@ function RoundSoapComposer({
       (event.ctrlKey || event.metaKey) &&
       (event.key.toLowerCase() === "y" || (event.shiftKey && event.key.toLowerCase() === "z"));
     if ((!isUndo && !isRedo) || isComposingRef.current) return;
+    const target = event.target as HTMLElement | null;
+    const editableTarget = target?.closest("textarea,input,[contenteditable='true']");
+    if (editableTarget && !target?.closest(".structured-soap-editor")) return;
     event.preventDefault();
     if (isUndo) undoEditorDraft();
     else redoEditorDraft();
@@ -472,9 +473,7 @@ function RoundSoapComposer({
       subtype: "order" as const,
     }));
     const nextDraft = { ...editorDraftRef.current, taskLines: [...nextOrderLines, ...taskOnlyLines] };
-    setEditorDraftState(nextDraft);
-    setRawSoapText(editorDraftToSoapText(nextDraft));
-    setDirty(true);
+    updateEditorDraft(nextDraft);
     updatePendingOrderSource(workflowMode, false);
     setError("");
     setStatus("藥囑 summary applied to local SOAP draft. Save reviewed SOAP to write Firestore.");
@@ -491,9 +490,7 @@ function RoundSoapComposer({
   function restoreRecoveryDraft() {
     if (!recoveryDraft?.payload.soapText.trim()) return;
     const nextDraft = parseSoapTextToEditorDraft(recoveryDraft.payload.soapText);
-    setEditorDraftState(nextDraft);
-    setRawSoapText(editorDraftToSoapText(nextDraft));
-    setDirty(true);
+    updateEditorDraft(nextDraft);
     setDeltaReview(null);
     setError("");
     setStatus("Recovery draft restored locally. Review, then Save reviewed SOAP to write Firestore.");
@@ -558,9 +555,7 @@ function RoundSoapComposer({
         selectedDate,
       });
       const nextDraft = parseSoapTextToEditorDraft(guarded.acceptedText);
-      setEditorDraftState(nextDraft);
-      setRawSoapText(editorDraftToSoapText(nextDraft));
-      setDirty(true);
+      updateEditorDraft(nextDraft);
       updatePendingOrderSource(workflowMode, false);
       setWarnings([...guarded.warnings, ...guarded.highRiskWarnings]);
       setDeltaReview(guarded);
@@ -639,9 +634,7 @@ function RoundSoapComposer({
     if (!rawSoapText.trim() || isComposingRef.current) return;
     const normalized = formatSoapTextForEditorStyle(rawSoapText, soapFormat);
     const nextDraft = parseSoapTextToEditorDraft(normalized);
-    setEditorDraftState(nextDraft);
-    setRawSoapText(editorDraftToSoapText(nextDraft));
-    setDirty(true);
+    updateEditorDraft(nextDraft);
     setError("");
     setDeltaReview(null);
     setStatus(`${soapFormatOptions.find((item) => item.value === soapFormat)?.label ?? "SOAP"} applied. Review, then Save reviewed SOAP.`);
@@ -649,9 +642,7 @@ function RoundSoapComposer({
 
   function loadDeltaSoapText(nextText: string, nextStatus: string) {
     const nextDraft = parseSoapTextToEditorDraft(nextText);
-    setEditorDraftState(nextDraft);
-    setRawSoapText(editorDraftToSoapText(nextDraft));
-    setDirty(true);
+    updateEditorDraft(nextDraft);
     setStatus(nextStatus);
   }
 
@@ -684,7 +675,7 @@ function RoundSoapComposer({
   const recoverySavedLabel = recoveryTimeLabel(recoverySavedAt);
 
   return (
-    <section className={compact ? "round-soap-composer compact-round-soap-composer" : "round-soap-composer"}>
+    <section className={compact ? "round-soap-composer compact-round-soap-composer" : "round-soap-composer"} onKeyDownCapture={handleEditorKeyDown}>
       <div className="round-soap-toolbar">
         <div>
           <h3>Update SOAP</h3>
@@ -1130,7 +1121,7 @@ function RoundSoapComposer({
         </section>
       )}
 
-      <div className="round-soap-editor-grid" onKeyDownCapture={handleEditorKeyDown}>
+      <div className="round-soap-editor-grid">
         <section className="round-soap-structured-editor">
           <div className="structured-soap-main-heading">
             <div>
