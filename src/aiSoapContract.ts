@@ -1,5 +1,6 @@
 import { formatSoapDraft, normalizeSoapTextForEditor, parseSoapText, type SoapDraft } from "./soapDraft";
 import { classifyClinicalLine } from "./clinicalLineClassifier";
+import { normalizeApProblems } from "./apProblemNormalizer";
 import { parseLabReports, safeClinicalLinePreservingMarks } from "./utils";
 
 export const AI_SOAP_OUTPUT_CONTRACT_VERSION = "ai-soap-v2";
@@ -25,7 +26,7 @@ function normalizeLines(lines: string[], maxItems: number, maxChars: number) {
 }
 
 function normalizedApProblems(draft: SoapDraft) {
-  const problems = normalizeObjectiveSupportedApProblems(removeRepeatedApTreatmentNoise(draft.apProblems), draft.oLines)
+  const problems = normalizeApProblems(normalizeObjectiveSupportedApProblems(removeRepeatedApTreatmentNoise(draft.apProblems), draft.oLines))
     .map((problem) => ({
       title: safeClinicalLinePreservingMarks(problem.title || "Active problem", 90),
       lines: normalizeLines(problem.lines, 2, 160),

@@ -3714,6 +3714,7 @@ tbody tr:last-child td {
   font-size: 13.5px;
   line-height: 1.35;
   padding: 7px 8px;
+  width: 100%;
 }
 
 .structured-soap-line-meta {
@@ -3735,6 +3736,7 @@ tbody tr:last-child td {
 .structured-soap-line-actions {
   align-items: center;
   display: flex;
+  flex-wrap: wrap;
   gap: 3px;
   justify-content: flex-end;
 }

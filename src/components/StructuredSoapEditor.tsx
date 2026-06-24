@@ -273,6 +273,7 @@ function ProblemEditor({
   onRemove,
   onMoveUp,
   onMoveDown,
+  onMergeUp,
   onCompositionStart,
   onCompositionEnd,
 }: {
@@ -282,6 +283,7 @@ function ProblemEditor({
   onRemove: () => void;
   onMoveUp: () => void;
   onMoveDown: () => void;
+  onMergeUp: () => void;
   onCompositionStart?: () => void;
   onCompositionEnd?: () => void;
 }) {
@@ -326,6 +328,7 @@ function ProblemEditor({
           </div>
           <div className="structured-soap-line-actions">
             <button type="button" className="secondary compact-button" onClick={() => onChange({ ...problem, tone: "important" })} title="Keep in Print">Keep</button>
+            {index > 0 && <button type="button" className="secondary compact-button" onClick={onMergeUp} title="Merge this problem into the one above">Merge up</button>}
             <button type="button" className="secondary compact-button" onClick={onMoveUp} title="Move problem up">Up</button>
             <button type="button" className="secondary compact-button" onClick={onMoveDown} title="Move problem down">Down</button>
             <button type="button" className="secondary compact-button" onClick={onRemove} title="Remove problem">Remove</button>
@@ -358,6 +361,26 @@ function moveProblem(problems: SoapEditorProblem[], id: string, direction: -1 | 
   const next = [...problems];
   [next[index], next[nextIndex]] = [next[nextIndex], next[index]];
   return next;
+}
+
+function mergeProblemUp(problems: SoapEditorProblem[], id: string) {
+  const index = problems.findIndex((problem) => problem.id === id);
+  if (index <= 0) return problems;
+  const previous = problems[index - 1];
+  const current = problems[index];
+  const titleAsLine = current.title.trim()
+    ? {
+        ...emptySoapEditorLine("ap"),
+        text: current.title.trim(),
+        tone: current.tone,
+      }
+    : null;
+  const mergedLines = [...previous.lines, ...(titleAsLine ? [titleAsLine] : []), ...current.lines].filter((line) => line.text.trim());
+  return [
+    ...problems.slice(0, index - 1),
+    { ...previous, lines: mergedLines.length > 0 ? mergedLines : [emptySoapEditorLine("ap")] },
+    ...problems.slice(index + 1),
+  ];
 }
 
 export function StructuredSoapEditor({
@@ -425,6 +448,7 @@ export function StructuredSoapEditor({
             onRemove={() => updateDraft({ apProblems: problems.length > 1 ? problems.filter((item) => item.id !== problem.id) : [emptySoapEditorProblem()] })}
             onMoveUp={() => updateDraft({ apProblems: moveProblem(problems, problem.id, -1) })}
             onMoveDown={() => updateDraft({ apProblems: moveProblem(problems, problem.id, 1) })}
+            onMergeUp={() => updateDraft({ apProblems: mergeProblemUp(problems, problem.id) })}
             onCompositionStart={onCompositionStart}
             onCompositionEnd={onCompositionEnd}
           />

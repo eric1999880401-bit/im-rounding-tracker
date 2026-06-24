@@ -5,6 +5,7 @@ import {
   type ClinicalLineTone,
   stripClinicalMarkup,
 } from "./clinicalLineClassifier";
+import { normalizeApProblems } from "./apProblemNormalizer";
 import { formatSoapDraft, normalizeSoapTextForEditor, parseSoapText, type SoapApProblem, type SoapDraft } from "./soapDraft";
 import { createId, hasColorMarkup, safeClinicalLine, safeClinicalLinePreservingMarks } from "./utils";
 
@@ -181,7 +182,7 @@ export function parseSoapTextToEditorDraft(text: string): SoapEditorDraft {
     headerLines: draft.header.map((line) => makeLine(line, "header")),
     sLines: draft.sLines.map((line) => makeLine(line, "s")),
     oLines: draft.oLines.map((line) => makeLine(line, "other")),
-    apProblems: draft.apProblems.map(makeProblem),
+    apProblems: normalizeApProblems(draft.apProblems).map(makeProblem),
     taskLines: draft.taskLines.map((line) => makeTaskLine(line)),
     dcLines: draft.dcLines.map((line) => makeLine(line, "dc")),
     warnings: draft.warnings.map((line) => makeLine(line, "other")),

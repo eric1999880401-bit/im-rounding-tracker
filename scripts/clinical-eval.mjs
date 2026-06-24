@@ -1784,6 +1784,30 @@ try {
   if (!/# Hypernatremia[\s\S]*Na 156/i.test(repetitiveAi.soapText)) {
     throw new Error(`AI SOAP normalizer did not preserve/create sodium A/P from critical O/Lab:\n${repetitiveAi.soapText}`);
   }
+  const respiratorySplitAi = normalizeAiSoapText([
+    "S:",
+    "- SOB improved",
+    "O:",
+    "- V/S: SpO2 99% NC2L",
+    "A/P:",
+    "# Acute hypoxemic RF s/p MV/extubation, improving",
+    "# s/p lung-protective MV 6/8-6/11, prone 6/8 18",
+    "# 00-6/9 13",
+    "- 00; extubated 6/23 and now stable on NC.",
+    "- Cont pulm rehab, breathing training, and wean O2 as tolerated.",
+  ].join("\n"));
+  const respiratoryAp = parseSoapText(respiratorySplitAi.soapText).apProblems;
+  const respiratoryProblemCount = respiratoryAp.filter((problem) => /RF|resp|MV|extubat|O2|NC/i.test(`${problem.title} ${problem.lines.join(" ")}`)).length;
+  if (respiratoryProblemCount !== 1 || /00-6\/9|^00;|\?亙\?/i.test(respiratorySplitAi.soapText)) {
+    throw new Error(`AI SOAP normalizer did not merge respiratory course fragments:\n${respiratorySplitAi.soapText}`);
+  }
+  if (!/s\/p lung-protective MV 6\/8-6\/11/i.test(respiratorySplitAi.soapText) || !/extubated 6\/23/i.test(respiratorySplitAi.soapText)) {
+    throw new Error(`AI SOAP normalizer lost respiratory course details:\n${respiratorySplitAi.soapText}`);
+  }
+  const editorRespDraft = parseSoapTextToEditorDraft(respiratorySplitAi.soapText);
+  if (editorRespDraft.apProblems.length !== respiratoryAp.length || /00-6\/9|^00;/i.test(editorDraftToSoapText(editorRespDraft))) {
+    throw new Error(`Structured editor did not load normalized respiratory A/P:\n${editorDraftToSoapText(editorRespDraft)}`);
+  }
 
   let history = createUndoRedoHistory("A");
   history = pushUndoRedoEdit(history, "AB");
