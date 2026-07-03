@@ -57,7 +57,7 @@ const { deriveSoapEvidence } = await server.ssrLoadModule("/src/soapEvidence.ts"
 const { buildConcisePatientClinicalUpdate } = await server.ssrLoadModule("/src/clinicalPatientPolish.ts");
 const { sanitizeAiSoapDraftForReview } = await server.ssrLoadModule("/src/aiDraftSanitizer.ts");
 const { routePatientImportDraft, routePatientClinicalFields } = await server.ssrLoadModule("/src/clinicalFieldRouter.ts");
-const { classifyClinicalLine, normalizeClinicalDisplayText, normalizeClinicalDisplayTextPreservingMarks } = await server.ssrLoadModule("/src/clinicalLineClassifier.ts");
+const { classifyClinicalLine, compactDisplaySymbols, normalizeClinicalDisplayText, normalizeClinicalDisplayTextPreservingMarks } = await server.ssrLoadModule("/src/clinicalLineClassifier.ts");
 const { editorDraftToSoapText, lintSoapEditorDraft, mergeOrderSourceIntoEditorDraft, parseSoapTextToEditorDraft, splitSoapEditorTaskLines } = await server.ssrLoadModule("/src/soapEditorDraft.ts");
 const { buildAntibioticApSummary, ensureAntibioticApInDraft } = await server.ssrLoadModule("/src/antibioticPlan.ts");
 const {
@@ -3438,6 +3438,31 @@ try {
 } catch (error) {
   failures.push({ name: "Slash-pair lab parsing", error: error instanceof Error ? error.message : String(error) });
   console.error(`FAIL Slash-pair lab parsing: ${failures[failures.length - 1].error}`);
+}
+
+try {
+  const disp = compactDisplaySymbols;
+  if (disp("curam 07/02- and clindamycin 07/02-") !== "curam 07/02- + clindamycin 07/02-") {
+    throw new Error(`and->+ failed: ${disp("curam 07/02- and clindamycin 07/02-")}`);
+  }
+  if (disp("lactate elevation") !== "lactate ↑") throw new Error(`elevation->↑ failed: ${disp("lactate elevation")}`);
+  if (!/~prior$/.test(disp("mild BLL infil., similar to prior exam"))) {
+    throw new Error(`similar-to-prior failed: ${disp("mild BLL infil., similar to prior exam")}`);
+  }
+  if (disp("diarrhea improved") !== "diarrhea impr") {
+    throw new Error(`improved must shorten to 'impr' (not an arrow that can invert meaning): ${disp("diarrhea improved")}`);
+  }
+  if (/↗|↘/.test(disp("diarrhea improved"))) {
+    throw new Error("improving/improved must NOT render as a trajectory arrow (misread risk)");
+  }
+  // Value arrows still work and are not disturbed.
+  if (normalizeClinicalDisplayText("K 5.3 high") !== "K 5.3 ↑") throw new Error(`high->↑ regressed: ${normalizeClinicalDisplayText("K 5.3 high")}`);
+  if (normalizeClinicalDisplayText("dyspnea improved") !== "dyspnea improved") throw new Error("editor/stored normalizer must NOT compact (display-only)");
+  console.log("PASS Display compaction: and->+, elevation->↑, similar to prior->~prior, improved->impr (no inverting arrow)");
+  supplementalPasses += 1;
+} catch (error) {
+  failures.push({ name: "Display compaction substitutions", error: error instanceof Error ? error.message : String(error) });
+  console.error(`FAIL Display compaction substitutions: ${failures[failures.length - 1].error}`);
 }
 
 await server.close();

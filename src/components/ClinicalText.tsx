@@ -2,7 +2,7 @@ import { useState } from "react";
 import type { KeyboardEvent, ReactNode } from "react";
 import type { HighlightLine, KeywordHighlightRule } from "../types";
 import { hasColorMarkup, safeClinicalLine, safeClinicalLinePreservingMarks, splitHighlightLines } from "../utils";
-import { classifyClinicalLine, normalizeClinicalDisplayTextPreservingMarks } from "../clinicalLineClassifier";
+import { classifyClinicalLine, compactDisplaySymbols, normalizeClinicalDisplayTextPreservingMarks } from "../clinicalLineClassifier";
 import { applyUserKeywordHighlights, clinicalMarkPattern } from "../clinicalColorMarkup";
 import { parseClinicalLabTokens } from "../labReference";
 
@@ -47,7 +47,7 @@ function stripArrow(text: string) {
 }
 
 function displayClinicalText(text: string) {
-  return normalizeClinicalDisplayTextPreservingMarks(text);
+  return compactDisplaySymbols(normalizeClinicalDisplayTextPreservingMarks(text));
 }
 
 const colorClassNames: Record<string, string> = {
