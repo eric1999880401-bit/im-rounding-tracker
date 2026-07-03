@@ -695,6 +695,8 @@ function assembleStructuredBrief(sections: Array<{ label: string; fragments: str
     if (fragments.length === 0) return;
     if (section.label === "PHx" || section.label === "CC") {
       lines.push(`${section.label}: ${fragments.join("; ")}`);
+    } else if (section.label === "Imp") {
+      lines.push("Imp:", ...fragments.map((fragment, index) => `${index + 1}. ${fragment}`));
     } else {
       lines.push(`${section.label}:`, fragments.join("; "));
     }
@@ -768,8 +770,14 @@ export function formatRuleBasedAdmissionSummary(plan: GeneratedClinicalPlan, opt
           ...splitFragments(diagnosis).map(extractAdmissionReasonClause),
         ].filter(Boolean),
       },
-      { label: "PI", fragments: [...splitFragments(severity), ...splitFragments(treatment), ...splitFragments(response)] },
-      { label: "Key O", fragments: splitFragments(objective) },
+      { label: "PI", fragments: splitFragments(severity) },
+      // Treatment-action sentences belong in ED Course even when they also
+      // mention labs/imaging keywords that match the objective-anchor pattern.
+      {
+        label: "Key O",
+        fragments: splitFragments(objective).filter((fragment) => !/\b(?:was given|were given|started|initiated|s\/p)\b/i.test(fragment)),
+      },
+      { label: "ED Course", fragments: [...splitFragments(treatment), ...splitFragments(response)] },
       { label: "Imp", fragments: [...impressionClausesFromSource(plan.facts.sourceText), ...splitFragments(active)] },
       { label: "Plan", fragments: splitFragments(pending).filter(isActionLikeFragment) },
     ],
