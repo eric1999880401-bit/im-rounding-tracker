@@ -376,7 +376,6 @@ function AiDocumentsPage({ patients, dailyNotesByPatient = {}, onSavePatient }: 
       <header className="page-header">
         <div>
           <h2>AI Documents</h2>
-          <p className="muted">AI assists organization only; clinician must verify before saving.</p>
         </div>
       </header>
 
@@ -452,7 +451,7 @@ function AiDocumentsPage({ patients, dailyNotesByPatient = {}, onSavePatient }: 
               className="ai-raw-textarea"
               value={rawText}
               onChange={(event) => setRawText(event.target.value)}
-              placeholder="Paste de-identified ED/OPD note, V/S, lab, image report, consult note, nursing note, or extra context."
+              placeholder="Paste de-identified note / V/S / lab / image / consult…"
             />
           </label>
           <label className="checkbox-label span-2">

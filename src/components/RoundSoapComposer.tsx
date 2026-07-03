@@ -1195,7 +1195,7 @@ function RoundSoapComposer({
         </section>
       </div>
 
-      {(dirty || Object.values(pendingOrderSources).some(Boolean)) && <p className="muted">Edited preview or pending order source is not saved yet. Firestore changes only after Save reviewed SOAP.</p>}
+      {(dirty || Object.values(pendingOrderSources).some(Boolean)) && <p className="muted">Not saved yet.</p>}
     </section>
   );
 }

@@ -246,7 +246,6 @@ function ClinicalDocumentQuickActions({
       <div className="section-heading">
         <div>
           <h2>Clinical Documents</h2>
-          <p className="muted">Generate concise review drafts using standard SBAR and progress-summary structure.</p>
         </div>
       </div>
 

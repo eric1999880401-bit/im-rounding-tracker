@@ -95,7 +95,6 @@ export function MedicationOrderReviewPanel({ sourceText = "", compact = false, o
         <div className="med-order-intro">
           <div>
             <strong>Paste HIS order text</strong>
-            <p className="muted">Rules clean obvious order noise. Raw pasted text stays local and is not saved.</p>
           </div>
           <div className="form-actions">
             {sourceHasText && (
@@ -112,7 +111,7 @@ export function MedicationOrderReviewPanel({ sourceText = "", compact = false, o
           className="med-order-raw-textarea"
           value={rawText}
           onChange={(event) => setRawText(event.target.value)}
-          placeholder="Paste copied HIS medication/orders here. Tables, dates, route/frequency, PRN, hold/resume/start/stop are accepted."
+          placeholder="Paste HIS medication/orders"
           rows={compact ? 4 : 6}
         />
         {status && <p className="status-message">{status}</p>}
