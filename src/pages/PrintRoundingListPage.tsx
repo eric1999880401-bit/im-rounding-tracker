@@ -30,7 +30,7 @@ import {
 } from "../utils";
 import { ClinicalInlineText, ClinicalText } from "../components/ClinicalText";
 import { useT } from "../i18n";
-import { getRoundingDigest } from "../roundingDigest";
+import { getPatientHeadline, getRoundingDigest } from "../roundingDigest";
 import { patientToSoapDraft } from "../soapDraft";
 import { formatMedicationOrderLinesForDisplay } from "../medicationOrderParser";
 import { buildPatientLabVisualSummary, formatLabVisualSummaryLinesFromText } from "../labVisualSummary";
@@ -943,6 +943,7 @@ function PrintRoundingListPage({
             const soapForPrint = patientToSoapDraft(patient, dailyNotesByPatient[patient.id] ?? [], todayKey());
             const limits = printLimitsForPatient(patient);
             const isExpanded = isExpandedPrintPatient(patient);
+            const headline = getPatientHeadline(patient, dailyNotesByPatient[patient.id] ?? [], { mode: "rounds" });
             const soapRedFlags = isLayoutSectionVisible(roundingLayout, "redFlags")
               ? soapForPrint.header.find((line) => /^Red flags:/i.test(line))?.replace(/^Red flags:\s*/i, "") ?? ""
               : "";
@@ -959,6 +960,10 @@ function PrintRoundingListPage({
                   {patient.attending && <span>Att: {patient.attending}</span>}
                   {patient.teamOrService && <span>Svc: {patient.teamOrService}</span>}
                 </div>
+
+                {headline && (
+                  <div className={`print-headline print-headline-${headline.tone}`}>{headline.text}</div>
+                )}
 
                 {patientContextText(patient) && (
                   <div className="print-patient-context">{patientContextText(patient)}</div>

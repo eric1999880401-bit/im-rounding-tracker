@@ -2462,6 +2462,63 @@ tbody tr:last-child td {
   margin-bottom: 4px;
 }
 
+/* One-line "today headline" strip: the first thing the eye lands on per card. */
+.board-headline {
+  border-left: 3px solid var(--border-strong, #9aa5b1);
+  border-radius: var(--radius-sm);
+  font-size: 12.5px;
+  font-weight: 700;
+  line-height: 1.3;
+  margin-bottom: 7px;
+  overflow-wrap: anywhere;
+  padding: 5px 8px;
+}
+
+.board-headline-critical {
+  background: var(--danger-bg);
+  border-left-color: var(--danger-text);
+  color: var(--danger-text);
+}
+
+.board-headline-warning {
+  background: var(--warning-bg, #fff7e6);
+  border-left-color: var(--warning-text, #b76e00);
+  color: var(--warning-text, #8a5300);
+}
+
+.board-headline-discharge {
+  background: var(--success-bg, #eaf6ec);
+  border-left-color: var(--success-text, #2f7d32);
+  color: var(--success-text, #226625);
+}
+
+.board-headline-normal {
+  background: var(--surface-subtle, rgba(127, 127, 127, 0.08));
+  border-left-color: var(--border-strong, #9aa5b1);
+  color: var(--text);
+}
+
+/* Carried-forward (unchanged since the prior note) lines recede so today's
+   new or changed lines stand out. Content is preserved, only de-emphasized. */
+.board-visual-line-carried,
+.board-soap-problem.board-visual-line-carried {
+  opacity: 0.5;
+}
+
+.board-visual-line-carried .board-visual-text,
+.board-visual-line-carried strong,
+.board-visual-line-carried span {
+  font-weight: 400;
+}
+
+@media print {
+  .board-visual-line-carried,
+  .board-soap-problem.board-visual-line-carried {
+    opacity: 1;
+    color: #6b7280;
+  }
+}
+
 .board-red-flag-strip {
   align-items: center;
   background: var(--danger-bg);

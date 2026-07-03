@@ -34,8 +34,9 @@ import {
   IconStar,
 } from "../components/icons";
 import { useT } from "../i18n";
-import { getRoundingDigest } from "../roundingDigest";
+import { getPatientHeadline, getRoundingDigest } from "../roundingDigest";
 import { fallbackSoapTextFromPatient, patientToSoapDraft } from "../soapDraft";
+import { buildCarriedForwardKeys, isCarriedForwardLine } from "../soapLineDelta";
 import {
   classifyClinicalLine,
   normalizeClinicalDisplayText,
@@ -134,7 +135,7 @@ function boardVisualLabelForSection(label: string, fallbackKind: BoardVisualKind
   return normalized;
 }
 
-function renderBoardVisualLines(lines: string[], fallback: string, fallbackKind: BoardVisualKind = "other", maxLines = 4, keywordRules: KeywordHighlightRule[] = []) {
+function renderBoardVisualLines(lines: string[], fallback: string, fallbackKind: BoardVisualKind = "other", maxLines = 4, keywordRules: KeywordHighlightRule[] = [], carriedKeys: Set<string> = new Set()) {
   const visibleLines = lines.map((line) => line.trim()).filter(Boolean).slice(0, maxLines);
   if (visibleLines.length === 0) return <span className="board-visual-empty">{fallback}</span>;
 
@@ -143,9 +144,10 @@ function renderBoardVisualLines(lines: string[], fallback: string, fallbackKind:
       {visibleLines.map((line, index) => {
         const visual = classifyBoardVisualLine(line, fallbackKind);
         const visualLabel = boardVisualLabelForSection(visual.label, fallbackKind);
+        const carried = isCarriedForwardLine(line, carriedKeys) && visual.tone !== "critical";
         return (
           <div
-            className={`board-visual-line ${visualLabel ? "" : "board-visual-line-unlabeled"} board-visual-line-${visual.kind} board-visual-line-${visual.tone}`}
+            className={`board-visual-line ${visualLabel ? "" : "board-visual-line-unlabeled"} board-visual-line-${visual.kind} board-visual-line-${visual.tone}${carried ? " board-visual-line-carried" : ""}`}
             key={`${line}-${index}`}
           >
             {visualLabel && <span className="board-visual-label">{visualLabel}</span>}
@@ -1431,7 +1433,10 @@ function PatientBoardPage({
         {dataError && <p className="error-message">{dataError}</p>}
         <div className="patient-board-grid">
           {activePatients.map((patient) => {
-            const soap = patientToSoapDraft(patient, dailyNotesByPatient[patient.id] ?? [], todayKey());
+            const patientNotes = dailyNotesByPatient[patient.id] ?? [];
+            const soap = patientToSoapDraft(patient, patientNotes, todayKey());
+            const headline = getPatientHeadline(patient, patientNotes);
+            const carriedKeys = buildCarriedForwardKeys(patientNotes, todayKey());
             const redFlagLine = isLayoutSectionVisible(roundingLayout, "redFlags")
               ? soap.header.find((line) => /^Red flags:/i.test(line))?.replace(/^Red flags:\s*/i, "") ?? ""
               : "";
@@ -1495,6 +1500,11 @@ function PatientBoardPage({
               </header>
 
               <div className="patient-board-card-body">
+                {headline && (
+                  <div className={`board-headline board-headline-${headline.tone}`}>
+                    <ClinicalInlineText value={headline.text} maxChars={90} keywordRules={preferences.keywordHighlightRules} />
+                  </div>
+                )}
                 <section className="patient-board-section patient-board-soap-context">
                   {redFlagLine && (
                     <div className="board-red-flag-strip">
@@ -1520,13 +1530,13 @@ function PatientBoardPage({
                     {isLayoutSectionVisible(roundingLayout, "subjective") && (
                       <div className="board-soap-row">
                         <span className="board-label">S</span>
-                        {renderBoardVisualLines(visibleSubjectiveLines, "-", "s", 2, preferences.keywordHighlightRules)}
+                        {renderBoardVisualLines(visibleSubjectiveLines, "-", "s", 2, preferences.keywordHighlightRules, carriedKeys)}
                       </div>
                     )}
                     {visibleObjectiveLines.length > 0 && (
                       <div className="board-soap-row">
                         <span className="board-label">O</span>
-                        {renderBoardVisualLines(prioritizedObjectiveLines, "-", "other", 6, preferences.keywordHighlightRules)}
+                        {renderBoardVisualLines(prioritizedObjectiveLines, "-", "other", 6, preferences.keywordHighlightRules, carriedKeys)}
                       </div>
                     )}
                   </section>
@@ -1539,8 +1549,13 @@ function PatientBoardPage({
                       renderBoardVisualLines(mergedApLine ? [mergedApLine] : [], "-", "ap", 1, preferences.keywordHighlightRules)
                     ) : (
                       <div className="board-soap-ap-list">
-                        {visibleApProblems.slice(0, roundingLayout.boardDensity === "normal" ? 5 : 4).map((problem) => (
-                          <div className={boardProblemClass(problem.title, problem.lines)} key={`${problem.title}-${problem.lines.join("|")}`}>
+                        {visibleApProblems.slice(0, roundingLayout.boardDensity === "normal" ? 5 : 4).map((problem) => {
+                          const problemClass = boardProblemClass(problem.title, problem.lines);
+                          const problemCarried =
+                            !problemClass.includes("critical") &&
+                            [problem.title, ...problem.lines].every((line) => isCarriedForwardLine(line, carriedKeys));
+                          return (
+                          <div className={`${problemClass}${problemCarried ? " board-visual-line-carried" : ""}`} key={`${problem.title}-${problem.lines.join("|")}`}>
                             <strong>#<ClinicalInlineText value={problem.title} maxChars={56} keywordRules={preferences.keywordHighlightRules} /></strong>
                             {problem.lines.length > 0 && (
                               <span>
@@ -1548,7 +1563,8 @@ function PatientBoardPage({
                               </span>
                             )}
                           </div>
-                        ))}
+                          );
+                        })}
                         {visibleApProblems.length === 0 && <span className="muted">-</span>}
                       </div>
                     )}
@@ -1560,7 +1576,7 @@ function PatientBoardPage({
                     {isLayoutSectionVisible(roundingLayout, "orders") && (
                       <div className="board-subsection patient-board-orders">
                         <span className="board-label">藥囑</span>
-                        {renderBoardVisualLines(displayOrderLines, roundingLayout.orderDisplayMode === "collapsed" ? "藥囑已收起" : "無藥囑", "task", 4, preferences.keywordHighlightRules)}
+                        {renderBoardVisualLines(displayOrderLines, roundingLayout.orderDisplayMode === "collapsed" ? "藥囑已收起" : "無藥囑", "task", 4, preferences.keywordHighlightRules, carriedKeys)}
                       </div>
                     )}
                     {isLayoutSectionVisible(roundingLayout, "tasks") && (
@@ -1572,7 +1588,7 @@ function PatientBoardPage({
                             <span>{pendingTaskCount} pending</span>
                           </span>
                         </div>
-                        {renderBoardVisualLines(visibleTaskLines, "No pending tasks", "task", 4, preferences.keywordHighlightRules)}
+                        {renderBoardVisualLines(visibleTaskLines, "No pending tasks", "task", 4, preferences.keywordHighlightRules, carriedKeys)}
                       </div>
                     )}
                     {(isLayoutSectionVisible(roundingLayout, "dcBarriers") || isLayoutSectionVisible(roundingLayout, "dcPrep")) && (
