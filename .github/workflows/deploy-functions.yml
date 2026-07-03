@@ -25,19 +25,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Check deploy configuration
-        env:
-          WIF_PROVIDER: ${{ vars.WORKLOAD_IDENTITY_PROVIDER }}
-        run: |
-          if [ -z "$WIF_PROVIDER" ]; then
-            echo "::error::WORKLOAD_IDENTITY_PROVIDER repository variable is not set. See docs/DEPLOY_FUNCTIONS.md."
-            exit 1
-          fi
-
       - name: Authenticate to Google Cloud (keyless)
         uses: google-github-actions/auth@v2
         with:
-          workload_identity_provider: ${{ vars.WORKLOAD_IDENTITY_PROVIDER }}
+          # Not a secret: the provider only trusts OIDC tokens from this exact repo.
+          workload_identity_provider: projects/128169914301/locations/global/workloadIdentityPools/github-pool/providers/github-provider
           service_account: github-functions-deploy@im-rounding-tracker.iam.gserviceaccount.com
 
       - name: Set up Node

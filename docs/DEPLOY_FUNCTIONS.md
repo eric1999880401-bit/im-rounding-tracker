@@ -45,12 +45,10 @@ echo "===== COPY THE LINE BELOW ====="
 echo "projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/github-pool/providers/github-provider"
 ```
 
-3. Copy the final output line (`projects/1234.../providers/github-provider`).
-4. In GitHub: repo → Settings → Secrets and variables → Actions →
-   **Variables** tab → New repository variable:
-   - Name: `WORKLOAD_IDENTITY_PROVIDER`
-   - Value: the line you copied
-   (This is a Variable, not a Secret — it is an identifier, not a credential.)
+3. The provider resource name printed at the end is hardcoded in
+   `deploy-functions.yml` (`projects/128169914301/.../github-provider`).
+   It is an identifier, not a credential — safe to commit. If the pool or
+   provider is ever recreated, update that line in the workflow.
 
 ## How it works
 
@@ -66,4 +64,3 @@ exchanges them for short-lived credentials to impersonate
   `firebase functions:secrets:set OPENAI_API_KEY`); deploys reuse it.
 - Local manual deploy still works: `npx firebase-tools deploy --only functions`
   after `npx firebase-tools login`.
-- The workflow fails fast with a clear error if the variable is missing.
