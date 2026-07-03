@@ -39,6 +39,7 @@ const {
 } = await server.ssrLoadModule("/src/utils.ts");
 const { getRoundingDigest, getPatientHeadline } = await server.ssrLoadModule("/src/roundingDigest.ts");
 const { buildCarriedForwardKeys, isCarriedForwardLine } = await server.ssrLoadModule("/src/soapLineDelta.ts");
+const { detectSourceType } = await server.ssrLoadModule("/src/aiPostprocess/sourceTypeDetect.ts");
 const {
   aiSoapDraftToSoapDraft,
   formatSoapDraft,
@@ -3390,6 +3391,26 @@ try {
 } catch (error) {
   failures.push({ name: "Headline + carried-forward delta", error: error instanceof Error ? error.message : String(error) });
   console.error(`FAIL Headline + carried-forward delta: ${failures[failures.length - 1].error}`);
+}
+
+try {
+  const detectCases = [
+    ["WBC 9.6\nHb 13.9\nPlt 197\nBUN/Cr 33/0.63", "lab"],
+    ["CXR: mild increased right infiltrate\nCT abdomen: no abscess", "image"],
+    ["BP 118/69, P 91, RR 18, SpO2 96%, T 36.6", "vitals"],
+    ["Chief complaint: fever x 1 day. Admitted via ED because of cellulitis.", "admission"],
+    ["Patient improving, family updated, plan to continue abx", "mixed"],
+    ["", "mixed"],
+  ];
+  for (const [text, want] of detectCases) {
+    const got = detectSourceType(text);
+    if (got !== want) throw new Error(`source-type detect: want ${want} got ${got} for: ${text.split("\n")[0]}`);
+  }
+  console.log("PASS AI intake source-type auto-detection classifies lab/image/vitals/admission/mixed");
+  supplementalPasses += 1;
+} catch (error) {
+  failures.push({ name: "Source-type auto-detect", error: error instanceof Error ? error.message : String(error) });
+  console.error(`FAIL Source-type auto-detect: ${failures[failures.length - 1].error}`);
 }
 
 await server.close();

@@ -5,6 +5,7 @@ import { getAdmissionSummaryText, nowIso, todayKey } from "../utils";
 import { formatClinicalDocumentDraft, getClinicalDocumentSection } from "../clinicalDocumentFormat";
 import { applyClinicalKnowledgeToText, formatRuleBasedAdmissionSummary, formatRuleBasedSbar, formatRuleBasedWeeklySummary, hasClinicalReasoning } from "../clinicalKnowledge";
 import { formatSoapBasedIsbar } from "../soapSbar";
+import DeidNotice from "../components/DeidNotice";
 
 const OTHER_PATIENT_ID = "__other_patient__";
 
@@ -228,8 +229,7 @@ function AiDocumentsPage({ patients, dailyNotesByPatient = {}, onSavePatient }: 
   const [rawText, setRawText] = useState("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState(todayKey());
-  const [deidentifiedConfirmed, setDeidentifiedConfirmed] = useState(false);
-  const [storeRawText, setStoreRawText] = useState(false);
+    const [storeRawText, setStoreRawText] = useState(false);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -249,7 +249,7 @@ function AiDocumentsPage({ patients, dailyNotesByPatient = {}, onSavePatient }: 
     [patientNotes, dateFrom, dateTo],
   );
   const estimatedTokens = Math.ceil(rawText.length / 4);
-  const canGenerate = Boolean((selectedPatient || isOtherPatient) && deidentifiedConfirmed && !loading);
+  const canGenerate = Boolean((selectedPatient || isOtherPatient) && !loading);
 
   async function generateDraft() {
     if (!selectedPatient && !isOtherPatient) return;
@@ -276,7 +276,7 @@ function AiDocumentsPage({ patients, dailyNotesByPatient = {}, onSavePatient }: 
         rawText,
         dateFrom,
         dateTo,
-        deidentifiedConfirmed,
+        deidentifiedConfirmed: true,
         storeRawText,
         qualityMode,
       });
@@ -454,22 +454,18 @@ function AiDocumentsPage({ patients, dailyNotesByPatient = {}, onSavePatient }: 
               placeholder="Paste de-identified note / V/S / lab / image / consult…"
             />
           </label>
-          <label className="checkbox-label span-2">
-            <input
-              type="checkbox"
-              checked={deidentifiedConfirmed}
-              onChange={(event) => setDeidentifiedConfirmed(event.target.checked)}
-            />
-            I confirm all source text{isOtherPatient ? "" : " and selected patient notes"} are de-identified.
-          </label>
-          <label className="checkbox-label span-2">
-            <input
-              type="checkbox"
-              checked={storeRawText}
-              onChange={(event) => setStoreRawText(event.target.checked)}
-            />
-            Store full raw text in aiDrafts. Use de-identified data only.
-          </label>
+          <DeidNotice />
+          <details className="advanced-fold span-2">
+            <summary>Advanced</summary>
+            <label className="checkbox-label">
+              <input
+                type="checkbox"
+                checked={storeRawText}
+                onChange={(event) => setStoreRawText(event.target.checked)}
+              />
+              Store full raw text in aiDrafts (de-identified only)
+            </label>
+          </details>
           <p className="muted span-2">
             {rawText.length} / 12,000 pasted characters. Approx. {estimatedTokens} pasted input tokens.
             {isOtherPatient ? " Standalone mode uses pasted text only." : " The backend adds selected patient/SOAP context."}

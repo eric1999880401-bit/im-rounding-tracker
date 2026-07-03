@@ -699,6 +699,7 @@ function PatientBoardPage({
   }, [bulkDrafts.length, bulkError, bulkLoading, bulkStatus]);
 
   async function addPatient() {
+    if (!draftPatient.age && !window.confirm("Age is blank. Create this patient without an age?")) return;
     const now = nowIso();
     await onCreatePatient({ ...draftPatient, createdAt: now, updatedAt: now, status: "active" });
     setDraftPatient(emptyPatient());
@@ -1067,6 +1068,9 @@ function PatientBoardPage({
           onChange={setDraftPatient}
           onSubmit={addPatient}
           submitLabel="Create Patient"
+          showClinicalSections={false}
+          showHistoryFields={false}
+          showBriefToggle={false}
           showTeamService={false}
           showStatus={false}
           onCancel={() => setShowForm(false)}
