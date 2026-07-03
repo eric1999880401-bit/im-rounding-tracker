@@ -126,6 +126,29 @@ function parseLabItemsFromLine(line: string, important: boolean, groupHint = "")
   const genericQualitativePattern = /(?:^|[,;])\s*([A-Za-z][A-Za-z0-9+./() -]{1,28}?)\s*(?::|=)\s*(positive|negative|pos|neg|reactive|nonreactive|detected|not detected|pending|no growth|growth[^,;\n]*)/gi;
   const uaContext = /\b(UA|urine|urinalysis)\b/i.test(groupHint) || /\b(UA|urine|urinalysis)\s*:?\b/i.test(line);
 
+  // Composite slash pairs like "BUN/Cr 33/0.63" or "AST/ALT 20/18": split the
+  // label list and the value list positionally so each lab gets its own value.
+  // Without this the generic matcher grabs "Cr 33" (the BUN number) — a
+  // dangerous misread. Only fires when every label part is a known lab and the
+  // label/value counts match, so dates ("5/13") and ratios never trigger it.
+  const slashPairPattern = /(?:^|[\s,;(])([A-Za-z][A-Za-z0-9-]*(?:\/[A-Za-z][A-Za-z0-9-]*)+)\s*[:=]?\s*([<>]?[0-9][0-9.]*%?(?:\/[<>]?[0-9][0-9.]*%?)+)/g;
+  Array.from(line.matchAll(slashPairPattern)).forEach((match) => {
+    const labelParts = match[1].split("/").map((part) => part.trim()).filter(Boolean);
+    const valueParts = match[2].split("/").map((part) => part.trim()).filter(Boolean);
+    if (labelParts.length < 2 || labelParts.length !== valueParts.length) return;
+    if (!labelParts.every((part) => findLabDictionaryItem(part))) return;
+    // Claim the composite label ("BUN/Cr") so the generic matcher does not
+    // re-emit it as a single bogus item with the first value.
+    directionalKeys.add(canonicalLabKey(match[1]));
+    labelParts.forEach((labelPart, index) => {
+      const label = normalizeLabDisplayName(labelPart);
+      const key = canonicalLabKey(label);
+      if (directionalKeys.has(key)) return;
+      directionalKeys.add(key);
+      items.push(parsedLabItem(label, valueParts[index], "", important, groupHint));
+    });
+  });
+
   Array.from(line.matchAll(tumorMarkerPattern)).forEach((match) => {
     const label = normalizeGenericLabLabel(match[1]);
     directionalKeys.add(canonicalLabKey(label));
@@ -213,7 +236,17 @@ function parseLabItemsFromLine(line: string, important: boolean, groupHint = "")
     items.push(parsedLabItem(label, normalizeLabNote(match[2]) || match[2], "", important, groupHint || "Other labs", normalizeLabNote(match[2])));
   });
 
-  return items;
+  // Drop a leftover composite "A/B" item when both parts already exist as their
+  // own split-out items (e.g. a stray "Na/K 137" alongside real Na and K).
+  return items.filter((item) => {
+    if (!item.label.includes("/")) return true;
+    const parts = item.label.split("/").map((part) => part.trim());
+    if (parts.length < 2 || !parts.every((part) => findLabDictionaryItem(part))) return true;
+    const bothSplitOut = parts.every((part) =>
+      items.some((other) => other !== item && canonicalLabKey(other.label) === canonicalLabKey(part)),
+    );
+    return !bothSplitOut;
+  });
 }
 
 function splitLabLineTitle(line: string) {
