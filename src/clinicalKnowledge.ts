@@ -726,9 +726,12 @@ function sourcePmhLine(sourceText: string) {
 function durationToBrief(value: string) {
   const lower = value.toLowerCase();
   const number = lower.match(/\b(\d+)\b/)?.[1] ?? "";
-  if (/day| d\b/.test(lower)) return `${number || "1"} d`;
-  if (/week| wk/.test(lower)) return `${number || "1"} wk`;
-  if (/month| mo/.test(lower)) return `${number || "1"} mo`;
+  const qualitative = lower.match(/\b(several|a few|few|couple of|recent)\b/)?.[1] ?? "";
+  const count = number || qualitative;
+  if (!count) return value.trim();
+  if (/day| d\b/.test(lower)) return `${count} d`;
+  if (/week| wk/.test(lower)) return `${count} wk`;
+  if (/month| mo/.test(lower)) return `${count} mo`;
   return value.trim();
 }
 
@@ -738,30 +741,56 @@ function sourceChiefComplaint(sourceText: string) {
   if (fever) return `fever up to ${fever[1]}\u00b0C x ${durationToBrief(fever[2])}`;
   const newAdmission = text.match(/\bnew admission\s+\d{1,3}\s*[MF]\s+(.+?)(?=\.|,|\bDx\b)/i);
   if (newAdmission) return newAdmission[1].trim();
-  const reason = extractAdmissionReasonClause(text);
-  return reason ? abbreviateAdmissionSummaryText(reason) : "";
+  const reason = text.match(/\b(?:because of|due to)\s+([^,.;\n]+)/i)?.[1];
+  return reason ? abbreviateAdmissionSummaryText(reason.trim()) : "";
 }
 
 function sourcePiLines(sourceText: string) {
   const text = sourceText.replace(/\s+/g, " ");
   const lines: string[] = [];
   const feverDuration = text.match(/\bfever(?:\s+up\s+to\s*\d+(?:\.\d+)?\s*(?:\u00b0|degrees?)?\s*C?)?[^.]*?\b(?:for|x)\s+([^.;,]+)/i)?.[1];
-  const vomiting = /\bvomit(?:ing)?\b[^.]*\bsince tonight\b/i.test(text);
+  const vomitingTiming = text.match(/\bvomit(?:ing)?\b[^.]*?\b(?:since|for|x)\s+([^.;,]+)/i)?.[1];
+  const vomiting = /\bvomit(?:ing)?\b/i.test(text);
   if (feverDuration || vomiting) {
-    lines.push([feverDuration ? `Fever x ${durationToBrief(feverDuration)}` : "", vomiting ? "vomiting since tonight" : ""].filter(Boolean).join(" + ") + ".");
+    lines.push(
+      [
+        feverDuration ? `Fever x ${durationToBrief(feverDuration)}` : "",
+        vomiting ? `vomiting${vomitingTiming ? ` since ${vomitingTiming.trim()}` : ""}` : "",
+      ].filter(Boolean).join(" + ") + ".",
+    );
   }
 
-  if (/\b(?:left|lt)\s+thigh\b/i.test(text) && /\bredness\b/i.test(text) && /\bswelling\b/i.test(text)) {
+  // Local skin/limb finding: extract the actual side, site, findings, duration,
+  // and pertinent negatives from the sentence. A diagnosis judgment is added
+  // only when the source itself names one — never inferred here.
+  const siteMatches = Array.from(text.matchAll(
+    /\b(left|right|lt|rt|bilateral)\.?\s+(thigh|leg|calf|knee|arm|forearm|foot|hand|flank|buttock|breast|axilla|face|neck)\b[^.]*/gi,
+  ));
+  const siteSentence = siteMatches.sort((a, b) => b[0].length - a[0].length)[0];
+  if (siteSentence && /\b(?:redness|erythema|swelling|rash|cellulitis|wound)\b/i.test(siteSentence[0])) {
+    const sentence = siteSentence[0];
+    const sideMap: Record<string, string> = { left: "Lt", lt: "Lt", right: "Rt", rt: "Rt", bilateral: "bil" };
+    const side = sideMap[siteSentence[1].toLowerCase()] ?? siteSentence[1];
+    const findings = ["redness", "swelling", "rash", "erythema", "warmth", "pain"]
+      .filter((finding) => new RegExp(`\\b${finding}\\b`, "i").test(sentence))
+      .filter((finding) => !new RegExp(`(?:no|w/o)[^.]*\\b${finding}\\b`, "i").test(sentence));
+    const duration = sentence.match(/\b(?:for|x|noted for)\s+((?:~?\s*\d+|a few|few|several|couple of)\s*(?:day|days|d\b|week|weeks|wk|month|months|mo)[s]?)/i)?.[1];
     const negatives = [
-      /\bno trauma\b|\bw\/o trauma\b/i.test(text) ? "no trauma" : "",
-      /\bno obvious wound\b|\bw\/o (?:[^.]*,\s*)?obvious wound\b/i.test(text) ? "no obvious wound" : "",
-      /\bno local tenderness\b|\bw\/o [^.]*local tenderness\b/i.test(text) ? "no local tenderness" : "",
+      /\b(?:no|w\/o)(?:\s+\w+){0,3}\s+trauma\b/i.test(sentence) ? "no trauma" : "",
+      /\b(?:no|w\/o)(?:\s+[\w,]+){0,4}\s+(?:obvious\s+)?wound\b/i.test(sentence) ? "no obvious wound" : "",
+      /\b(?:no|w\/o)(?:\s+[\w,]+){0,5}\s+(?:local\s+)?tenderness\b/i.test(sentence) ? "no local tenderness" : "",
     ].filter(Boolean);
-    lines.push(`Lt thigh redness/swelling x several days${negatives.length ? `, ${negatives.join(", ")}` : ""} \u2192 favor cellulitis.`);
+    const namedDx = text.match(/\b(?:favor|suspect(?:ed)?|c\/f|impression of)\s+((?:\w+\s+){0,2}?(?:cellulitis|dvt|deep vein thrombosis|abscess|necrotizing fasciitis|gout|erysipelas))/i)?.[1];
+    if (findings.length > 0) {
+      lines.push(
+        `${side} ${siteSentence[2].toLowerCase()} ${findings.slice(0, 3).join("/")}${duration ? ` x ${durationToBrief(duration)}` : ""}${negatives.length ? `, ${negatives.join(", ")}` : ""}${namedDx ? ` \u2192 favor ${abbreviateAdmissionSummaryText(namedDx)}` : ""}.`,
+      );
+    }
   }
 
   const giBits: string[] = [];
-  if (/\bdiarrhea\b[^.]*\bx\s*2\b|\bD\s*x\s*2\b/i.test(text)) giBits.push("D x2 after ED arrival");
+  const diarrheaCount = text.match(/\bdiarrhea\b[^.]*?\bx\s*(\d+)\b/i)?.[1] ?? text.match(/\bD\s*x\s*(\d+)\b/i)?.[1];
+  if (diarrheaCount) giBits.push(`D x${diarrheaCount}${/after ED arrival/i.test(text) ? " after ED arrival" : ""}`);
   if (/\bno oliguria\b/i.test(text)) giBits.push("No oliguria");
   if (/\babd(?:omen)?\s+soft\b/i.test(text)) {
     giBits.push(/\bno guarding\b/i.test(text) ? "Abd soft, no guarding" : "Abd soft");
@@ -822,16 +851,18 @@ function sourceImageLines(sourceText: string) {
   const lines: string[] = [];
   if (/\bCXR\b/i.test(text)) {
     const comparison = text.match(/\bsimilar to (?:exam performed in |)(\d{4}\/\d{1,2})/i)?.[1];
-    const infiltrate = /\bmild\b[^.]*\b(?:right|rt)\s+infiltrate\b/i.test(text);
-    if (infiltrate) lines.push(`CXR: mild \u2191 Rt infiltrate${comparison ? `, similar to ${comparison} film` : ""}`);
-    if (!infiltrate) {
-      const cxr = text.match(/\bCXR\s+([^.;]+)/i)?.[1]?.trim();
+    const infiltrate = text.match(/\b(mild|moderate|severe)?\s*(increased\s+)?(right|rt|left|lt|bilateral)\s+(?:lower\s+|upper\s+)?(?:lung\s+)?infiltrate/i);
+    if (infiltrate) {
+      const sideMap: Record<string, string> = { right: "Rt", rt: "Rt", left: "Lt", lt: "Lt", bilateral: "bil" };
+      const side = sideMap[infiltrate[3].toLowerCase()] ?? infiltrate[3];
+      lines.push(`CXR: ${infiltrate[1] ? `${infiltrate[1]} ` : ""}${infiltrate[2] ? "\u2191 " : ""}${side} infiltrate${comparison ? `, similar to ${comparison} film` : ""}`);
+    } else {
+      const cxr = text.match(/\bCXR\s+(?:showed\s+)?([^.;]+)/i)?.[1]?.trim();
       if (cxr) lines.push(`CXR: ${abbreviateAdmissionSummaryText(cxr)}`);
     }
   }
-  if (/\bKUB\b/i.test(text) && /\bmoderate\b[^.]*\bfecal\b/i.test(text)) {
-    lines.push("KUB: moderate fecal components");
-  }
+  const kub = text.match(/\bKUB\s+(?:showed\s+)?([^.;]+)/i)?.[1]?.trim();
+  if (kub) lines.push(`KUB: ${abbreviateAdmissionSummaryText(kub)}`);
   return lines;
 }
 
@@ -840,17 +871,23 @@ function sourceCourseLines(sourceText: string) {
   const lines: string[] = [];
   const bp = text.match(/\b(?:BP\s+down\s+to|Hypotension\s+to)\s*([0-9]{2,3}\s*\/\s*[0-9]{2,3})/i)?.[1]?.replace(/\s+/g, "");
   const ivc = text.match(/\bIVC\s*~?\s*([0-9.]+)\s*cm\b[^.]*?(>\s*50\s*%\s*variation)/i);
+  // Only echo the volume-depletion read if the source itself makes that call.
+  const volumeCall = /\bvolume depletion\b|\bhypovolemi/i.test(text);
   if (bp || ivc) {
     lines.push([
       bp ? `BP down to ${bp}.` : "",
-      ivc ? `Bedside echo: IVC ~${ivc[1]} cm c ${ivc[2].replace(/\s+/g, " ").replace(/>\s+/, ">")} \u2192 suspect volume depletion component.` : "",
+      ivc ? `Bedside echo: IVC ~${ivc[1]} cm c ${ivc[2].replace(/\s+/g, " ").replace(/>\s+/, ">")}${volumeCall ? " \u2192 suspect volume depletion component" : ""}.` : "",
     ].filter(Boolean).join(" "));
   }
-  const hydration = /\bLR hydration\b|\blactated ringer/i.test(text);
-  const curam = /\bcuram\b/i.test(text);
-  const clinda = /\bclindamycin\b/i.test(text);
-  if (hydration || curam || clinda) {
-    lines.push([hydration ? "s/p LR hydration." : "", curam || clinda ? `Started ${[curam ? "IV Curam" : "", clinda ? "clindamycin" : ""].filter(Boolean).join(" + ")}.` : ""].filter(Boolean).join(" "));
+  const fluidMatch = text.match(/\b(LR|NS|lactated ringer'?s?|normal saline|half saline)\b[^.]{0,40}\bhydration\b|\bhydration\b[^.]{0,40}\b(LR|NS)\b/i);
+  const fluidName = (fluidMatch?.[1] ?? fluidMatch?.[2] ?? "").replace(/lactated ringer'?s?/i, "LR").replace(/normal saline/i, "NS");
+  const startedDrugs = text.match(/\b(?:started|given)\s+((?:IV\s+)?[A-Z][\w/-]+(?:\s*(?:\+|plus|and)\s*[A-Za-z][\w/-]+)?)/i)?.[1]
+    ?? text.match(/\b(IV\s+[A-Z][\w/-]+(?:\s*(?:\+|plus|and)\s*[A-Za-z][\w/-]+)?)\s+(?:was|were)\s+started/i)?.[1];
+  if (fluidName || startedDrugs) {
+    lines.push([
+      fluidName ? `s/p ${fluidName} hydration.` : "",
+      startedDrugs ? `Started ${abbreviateAdmissionSummaryText(startedDrugs.replace(/\s+(?:plus|and)\s+/gi, " + "))}.` : "",
+    ].filter(Boolean).join(" "));
   }
   const abxStarted = text.match(/\b((?:ceftriaxone|azithro|azithromycin|vanco|vancomycin|cefepime|ceftazidime|pip\/tazo|zosyn|mero|meropenem|levofloxacin|ciprofloxacin)(?:\s*\/\s*|\s*\+\s*|\s+and\s+)?(?:azithro|azithromycin|vanco|vancomycin|ceftriaxone|cefepime|ceftazidime|pip\/tazo|zosyn|mero|meropenem|levofloxacin|ciprofloxacin)?)\s+started\s+after\s+B\/C/i)?.[1];
   if (abxStarted && !lines.some((line) => /started/i.test(line))) {
@@ -862,12 +899,18 @@ function sourceCourseLines(sourceText: string) {
 function sourceImpressionLines(sourceText: string, plan: GeneratedClinicalPlan) {
   const text = sourceText.replace(/\s+/g, " ");
   const lines: string[] = [];
-  const cellulitis = /\bcellulitis\b/i.test(text) || (/\b(?:left|lt)\s+thigh\b/i.test(text) && /\bredness\b/i.test(text) && /\bswelling\b/i.test(text));
-  if (/\bfever\b/i.test(text) && cellulitis) lines.push("Fever/sepsis, likely Lt thigh cellulitis");
+  impressionClausesFromSource(text).forEach((clause) => {
+    const clean = abbreviateAdmissionSummaryText(clause);
+    if (clean && !lines.some((line) => line.toLowerCase().includes(clean.toLowerCase()))) lines.push(clean);
+  });
+  const namedSkinDx = text.match(/\b(?:impression of|favor|suspect(?:ed)?|c\/f)\s+((?:\w+\s+){0,3}?(?:cellulitis|erysipelas|necrotizing fasciitis|abscess))/i)?.[1]
+    ?? (/\bcellulitis\b/i.test(text) ? "cellulitis" : "");
+  if (/\bfever\b/i.test(text) && namedSkinDx) lines.push(`Fever/sepsis, likely ${abbreviateAdmissionSummaryText(namedSkinDx)}`);
   if (/\b(?:hypotension|BP\s+down\s+to)\b/i.test(text)) {
-    lines.push(/\blactate\b/i.test(text) && /\bLR hydration\b/i.test(text)
-      ? "Hypotension, favor hypovolemia-related, lactate improved after hydration"
-      : "Hypotension, favor hypovolemia-related");
+    const lactateImproved = /\blactate\s*[0-9.]+\s*(?:mg\/dL\s*)?(?:then|to|->|\u2192)\s*[0-9.]+/i.test(text) && /\bhydration\b/i.test(text);
+    lines.push(/\bhypovolemi|volume depletion/i.test(text)
+      ? `Hypotension, favor hypovolemia-related${lactateImproved ? ", lactate improved after hydration" : ""}`
+      : "Hypotension");
   }
   if (/\bUA\b/i.test(text) && /\bWBC\s*[0-9.]+\/HPF\b/i.test(text) && /\bRBC\s*[0-9.]+\/HPF\b/i.test(text)) {
     lines.push("Pyuria/hematuria, r/o UTI");
@@ -894,6 +937,14 @@ function sourceImpressionLines(sourceText: string, plan: GeneratedClinicalPlan) 
   if (/\bAF\b|\bapixaban\b/i.test(text) && /\banticoag|bleed/i.test(text)) {
     lines.push("AF on anticoag, bleed review");
   }
+
+  // Drop a bare impression clause when a richer line already contains it
+  // ("Lt cellulitis" vs "Fever/sepsis, likely Lt cellulitis").
+  const merged = lines.filter((line, index) =>
+    !lines.some((other, otherIndex) => otherIndex !== index && other.length > line.length && other.toLowerCase().includes(line.toLowerCase())),
+  );
+  lines.length = 0;
+  lines.push(...merged);
 
   const sourceSpecific = lines.length > 0;
   const generic = plan.problemBasedAP
