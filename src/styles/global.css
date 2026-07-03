@@ -5294,4 +5294,14 @@ tbody tr:last-child td {
 
 .admission-brief-multiline {
   white-space: pre-wrap;
+  text-transform: none;
+  letter-spacing: normal;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 400;
+}
+
+.admission-expanded-brief summary {
+  letter-spacing: normal;
+  text-transform: none;
 }

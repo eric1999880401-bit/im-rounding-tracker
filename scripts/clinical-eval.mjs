@@ -138,12 +138,12 @@ function assertOneMinuteAdmissionBrief(value, label) {
 }
 
 function assertThreeMinuteAdmissionBrief(value, label) {
-  const count = admissionSentenceCount(value);
-  if (count < 3 || count > 8) {
-    throw new Error(`${label} should be a 3-8 sentence 3-min patient presentation, got ${count}: ${value}`);
+  const lines = value.split("\n").map((line) => line.trim()).filter(Boolean);
+  if (lines.length < 4 || lines.length > 16) {
+    throw new Error(`${label} should be a structured brief (4-16 lines), got ${lines.length}: ${value}`);
   }
-  if (!/[\u56e0\u80cc\u666f\u5230\u8f49\u7d93\u5f8c\u76ee\u524d\u91cd\u9ede\u4eca\u65e5\u5f85]/.test(value)) {
-    throw new Error(`${label} did not use mixed Chinese-English oral-brief connectors: ${value}`);
+  if (!/\b(?:CC|PHx)\s*:/.test(value) || !/\bImp\s*:/.test(value)) {
+    throw new Error(`${label} did not use structured brief labels: ${value}`);
   }
 }
 
@@ -492,11 +492,11 @@ try {
   if (/negative head CT wording|old CVA without new focal deficit/i.test(combined)) {
     throw new Error(`shared document formatter leaked noise-to-ignore content: ${combined}`);
   }
-  if (!/[\u76ee\u524d\u91cd\u9ede\u554f\u984c\u4f9d\u64da\u5f85\u95dc\u9375]/.test(admission) || /The patient is|Admitted\/managed|PMH\/context|Key course|Active issues|Today\/pending/i.test(admission)) {
-    throw new Error(`admission summary did not use mixed Chinese-English brief style: ${admission}`);
+  if (!/\bCC\s*:/.test(admission) || !/\bImp\s*:/.test(admission) || /The patient is|Admitted\/managed|PMH\/context|Key course|Active issues|Today\/pending/i.test(admission)) {
+    throw new Error(`admission summary did not use the structured brief labels: ${admission}`);
   }
   assertThreeMinuteAdmissionBrief(admission, "reasoning admission summary");
-  assertDocumentIncludes(admission, /\u95dc\u9375O[\s\S]*(Cr|K|SpO2|O2|Plt|Hb|Cx|CXR|CT|ERCP)/i, "reasoning admission summary should include key objective anchors");
+  assertDocumentIncludes(admission, /Key O:[\s\S]*(Cr|K|SpO2|O2|Plt|Hb|Cx|CXR|CT|ERCP)/i, "reasoning admission summary should include key objective anchors");
   assertDocumentIncludes(admission, /AKI\/hyperK|Plt-limited anticoag|aspiration risk/i, "admission summary should lead with current transfer risks");
   if (/Problem-Based A\/P|Pending \/ Disposition|\n\s*-/i.test(weekly)) {
     throw new Error(`weekly summary should be paragraph format without headings/bullets: ${weekly}`);
