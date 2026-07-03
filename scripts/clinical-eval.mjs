@@ -3202,6 +3202,49 @@ try {
   console.error(`FAIL Structured admission brief preservation: ${failures[failures.length - 1].error}`);
 }
 
+try {
+  const narrativePlan = applyClinicalKnowledgeToText(
+    [
+      "The 90-y-o female w/ PHx of T2DM w/ prior DKA, UTI, volume depletion, paroxysmal AF, and dementia was admitted via emergency department because of left thigh redness and swelling.",
+      "Left thigh redness and swelling had been noted for several days w/o trauma, obvious wound, or local tenderness.",
+      "Fever up to 38.8\u00b0C for 1 day. Hypotension to 84/45 was noted.",
+      "ED work-up showed WBC 9.6 k/\u00b5L w/ Neu 93.5%, BUN/Cr 33/0.63, glucose 169 mg/dL, serum ketone 0.5, VBG pH 7.42.",
+      "CXR showed mild increased right infiltrate, similar to exam performed in March. KUB showed moderate fecal components.",
+      "Bedside echo showed IVC ~0.5 cm w/ >50% variation, so LR hydration was given, and IV Curam plus clindamycin was started.",
+      "Under the impression of Lt cellulitis, she was admitted for further evaluation and treatment.",
+    ].join("\n"),
+  );
+  const narrativeBrief = formatRuleBasedAdmissionSummary(narrativePlan, { length: "threeMinute" });
+  const phxLine = narrativeBrief.split("\n").find((line) => line.startsWith("PHx:")) ?? "";
+  if (phxLine && /\b(?:was|is)\s+admitted\b|admitted via/i.test(phxLine)) {
+    throw new Error(`PHx line kept the admission-sentence narrative: ${phxLine}`);
+  }
+  const admittedMentions = (narrativeBrief.match(/admitted via/gi) ?? []).length;
+  if (admittedMentions > 1) {
+    throw new Error(`the admission sentence is duplicated across sections:\n${narrativeBrief}`);
+  }
+  if (/source\/Cx\/Abx|transition readiness|Abx response\/weaning/i.test(narrativeBrief)) {
+    throw new Error(`Imp section leaked canned rule-hint phrases:\n${narrativeBrief}`);
+  }
+  const planSection = narrativeBrief.split(/\nPlan:\n?/)[1] ?? "";
+  if (/\b(?:KUB|CXR|echo)\s+showed\b/i.test(planSection)) {
+    throw new Error(`Plan section contains objective findings instead of actions:\n${planSection}`);
+  }
+  const fragmentKeys = narrativeBrief
+    .split(/\n|;\s*/)
+    .map((item) => item.replace(/^(?:PHx|CC|PI|Key O|Imp|Plan):?\s*/, "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "").slice(0, 60))
+    .filter((item) => item.length > 12);
+  const duplicated = fragmentKeys.find((key, index) => fragmentKeys.indexOf(key) !== index);
+  if (duplicated) {
+    throw new Error(`a fragment appears in more than one section (${duplicated}):\n${narrativeBrief}`);
+  }
+  console.log("PASS Narrative admission note produces a clean structured brief without cross-section duplication");
+  supplementalPasses += 1;
+} catch (error) {
+  failures.push({ name: "Narrative admission brief classification", error: error instanceof Error ? error.message : String(error) });
+  console.error(`FAIL Narrative admission brief classification: ${failures[failures.length - 1].error}`);
+}
+
 await server.close();
 
 if (failures.length > 0) {

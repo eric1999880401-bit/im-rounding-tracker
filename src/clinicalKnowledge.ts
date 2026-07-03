@@ -638,6 +638,70 @@ function admissionObjectiveAnchors(plan: GeneratedClinicalPlan, maxItems: number
   );
 }
 
+
+// Narrative admission notes contain whole sentences that the keyword matcher
+// routes into several sections at once. These helpers trim each fragment to
+// the clause a section actually wants and drop repeats across sections.
+function extractPmhClause(value: string) {
+  const match = value.match(/\b(?:PHx|PMH|history)\s+of\s+(.+?)(?:\s*,?\s+(?:was|is|has been)\b.*|\s+admitted\b.*)?$/i);
+  if (!match) return value;
+  return match[1].trim().replace(/[,;\s]+$/, "");
+}
+
+function extractAdmissionReasonClause(value: string) {
+  // "Under the impression of X" is the working diagnosis; it belongs in Imp, not CC.
+  if (/\bunder the impression of\b/i.test(value)) return "";
+  const reason = value.match(/\b(?:because of|due to)\s+(.+?)(?:\s*[.;].*)?$/i);
+  if (reason) return reason[1].trim().replace(/[,;\s]+$/, "").replace(/\s+(?:was|is)\s+(?:admitted|noted).*$/i, "");
+  const admittedFor = value.match(/\badmitted[^.]*?\bfor\s+(.+)$/i);
+  if (admittedFor) {
+    const clause = admittedFor[1].trim().replace(/[,;\s]+$/, "");
+    // "admitted for further evaluation and treatment" carries no chief-complaint content.
+    return /^further\s+(?:evaluation|management|work-?up|treatment|care)/i.test(clause) ? "" : clause;
+  }
+  // A sentence that is only "…was admitted via…" carries no chief-complaint content.
+  if (/\b(?:was|is)\s+admitted\b/i.test(value) || /\badmitted\s+via\b/i.test(value)) return "";
+  return value;
+}
+
+// "Under the impression of X" clauses are the note's own working diagnoses and
+// belong at the front of Imp, ahead of rule-derived problem titles.
+function impressionClausesFromSource(sourceText: string) {
+  return Array.from(sourceText.matchAll(/\bunder the impression of\s+([^,.;\n]+)/gi)).map((match) => match[1].trim());
+}
+
+function isActionLikeFragment(value: string) {
+  return /^!?\s*(?:f\/u|follow|confirm|clarify|check|cont\b|continue|hold|repeat|recheck|arrange|consult|call|start|stop|resume|titrate|replete|order|educate|trend|wean|adjust|survey|eval|r\/o|dc\b|discharge|need|pending)/i.test(value.trim());
+}
+
+// Joins labeled sections into the structured brief, deduping fragments so the
+// same sentence never appears under two labels; empty sections are dropped.
+function assembleStructuredBrief(sections: Array<{ label: string; fragments: string[] }>, leadLine: string) {
+  const seen = new Set<string>();
+  const keep = (fragment: string) => {
+    const key = fragment.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "").slice(0, 60);
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  };
+  const lines: string[] = [];
+  if (leadLine.trim()) lines.push(leadLine.trim());
+  sections.forEach((section) => {
+    const fragments = section.fragments
+      .map((fragment) => cleanSnippetTail(abbreviateAdmissionSummaryText(fragment)))
+      .map((fragment) => fragment.replace(/(?:\s+(?:was|is|were|and|so|w\/|the|a|an|to|for|plus))+$/i, "").trim())
+      .filter(Boolean)
+      .filter(keep);
+    if (fragments.length === 0) return;
+    if (section.label === "PHx" || section.label === "CC") {
+      lines.push(`${section.label}: ${fragments.join("; ")}`);
+    } else {
+      lines.push(`${section.label}:`, fragments.join("; "));
+    }
+  });
+  return lines.join("\n");
+}
+
 export function formatRuleBasedAdmissionSummary(plan: GeneratedClinicalPlan, options: AdmissionBriefOptions = {}) {
   const limits = admissionBriefLimits(options);
   const who = admissionWhoFragment(plan.facts.sourceText);
@@ -674,7 +738,7 @@ export function formatRuleBasedAdmissionSummary(plan: GeneratedClinicalPlan, opt
   ).join("; ");
   const objective = admissionObjectiveAnchors(plan, limits.objectiveItems, limits.factLength).join("; ");
   const active = compactList(
-    plan.problemBasedAP.map((item) => admissionProblemBrief(item, options.length === "threeMinute")),
+    plan.problemBasedAP.map((item) => admissionProblemBrief(item, false)),
     limits.activeItems,
     limits.factLength,
   )
@@ -693,20 +757,24 @@ export function formatRuleBasedAdmissionSummary(plan: GeneratedClinicalPlan, opt
 
   // Structured admission brief format (age/sex, PHx:, CC:, PI:, Key O:, Imp:, Plan:)
   // matching the clinician's oral-brief template; sections without facts are omitted.
-  const piLines = [severity, treatment, response].filter(Boolean);
-  const briefLines = [
+  const splitFragments = (value: string) => value.split(/;\s*/).map((item) => item.trim()).filter(Boolean);
+  return assembleStructuredBrief(
+    [
+      { label: "PHx", fragments: splitFragments(pmh).map(extractPmhClause) },
+      {
+        label: "CC",
+        fragments: [
+          ...splitFragments(plan.facts.sourceText.match(/\b(?:because of|due to)\s+([^,.;\n]+)/i)?.[1] ?? ""),
+          ...splitFragments(diagnosis).map(extractAdmissionReasonClause),
+        ].filter(Boolean),
+      },
+      { label: "PI", fragments: [...splitFragments(severity), ...splitFragments(treatment), ...splitFragments(response)] },
+      { label: "Key O", fragments: splitFragments(objective) },
+      { label: "Imp", fragments: [...impressionClausesFromSource(plan.facts.sourceText), ...splitFragments(active)] },
+      { label: "Plan", fragments: splitFragments(pending).filter(isActionLikeFragment) },
+    ],
     who,
-    pmh ? `PHx: ${pmh}` : "",
-    diagnosis ? `CC: ${diagnosis}` : "",
-    ...(piLines.length > 0 ? ["PI:", ...piLines] : []),
-    ...(objective ? ["Key O:", objective] : []),
-    ...(active ? ["Imp:", active] : []),
-    ...(pending ? ["Plan:", pending] : []),
-  ].filter(Boolean);
-  return briefLines
-    .map((line) => cleanSnippetTail(abbreviateAdmissionSummaryText(line)))
-    .filter(Boolean)
-    .join("\n");
+  );
 }
 
 function compactSnippet(value: string, maxLength = 140) {
@@ -1000,20 +1068,19 @@ export function formatReasoningAdmissionSummary(
 
   // Structured admission brief format (age/sex, PHx:, CC:, PI:, Key O:, Imp:, Plan:)
   // matching the clinician's oral-brief template; sections without facts are omitted.
+  const splitFragments = (value: string) => value.split(/;\s*/).map((item) => item.trim()).filter(Boolean);
   const impression = [active, !active && currentLead ? currentLead : ""].filter(Boolean).join("; ");
-  const briefLines = [
+  return assembleStructuredBrief(
+    [
+      { label: "PHx", fragments: splitFragments(pmh).map(extractPmhClause) },
+      { label: "CC", fragments: splitFragments(diagnosis || currentLead).map(extractAdmissionReasonClause).filter(Boolean) },
+      { label: "PI", fragments: splitFragments(course) },
+      { label: "Key O", fragments: splitFragments(objective) },
+      { label: "Imp", fragments: splitFragments(impression) },
+      { label: "Plan", fragments: tasks.filter(isActionLikeFragment) },
+    ],
     who,
-    pmh ? `PHx: ${pmh}` : "",
-    diagnosis || currentLead ? `CC: ${diagnosis || currentLead}` : "",
-    ...(course ? ["PI:", course] : []),
-    ...(objective ? ["Key O:", objective] : []),
-    ...(impression ? ["Imp:", impression] : []),
-    ...(tasks.length > 0 ? ["Plan:", tasks.join("; ")] : []),
-  ].filter(Boolean);
-  return briefLines
-    .map((line) => cleanSnippetTail(abbreviateAdmissionSummaryText(line)))
-    .filter(Boolean)
-    .join("\n");
+  );
 }
 
 export function formatReasoningSbar(reasoning: ClinicalReasoningBundle | undefined, fallbackPlan?: GeneratedClinicalPlan) {
