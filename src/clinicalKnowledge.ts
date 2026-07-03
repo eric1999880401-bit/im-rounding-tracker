@@ -691,25 +691,22 @@ export function formatRuleBasedAdmissionSummary(plan: GeneratedClinicalPlan, opt
     limits.factLength,
   ).join("; ");
 
-  const admissionLead = diagnosis ? [who, `${admissionBriefZh.because} ${diagnosis} ${admissionBriefZh.admitted}`].filter(Boolean).join(" ") : "";
-  const courseParts = [
-    severity ? `${admissionBriefZh.arrivalOrTransfer} ${severity}` : "",
-    treatment ? `${admissionBriefZh.through} ${treatment}` : "",
-    response ? `${treatment ? admissionBriefZh.after : admissionBriefZh.inHospital} ${response}` : "",
+  // Structured admission brief format (age/sex, PHx:, CC:, PI:, Key O:, Imp:, Plan:)
+  // matching the clinician's oral-brief template; sections without facts are omitted.
+  const piLines = [severity, treatment, response].filter(Boolean);
+  const briefLines = [
+    who,
+    pmh ? `PHx: ${pmh}` : "",
+    diagnosis ? `CC: ${diagnosis}` : "",
+    ...(piLines.length > 0 ? ["PI:", ...piLines] : []),
+    ...(objective ? ["Key O:", objective] : []),
+    ...(active ? ["Imp:", active] : []),
+    ...(pending ? ["Plan:", pending] : []),
   ].filter(Boolean);
-  const activeLine = active ? `${admissionBriefZh.nowFocus} ${active}` : "";
-  const pendingLine = pending ? `${admissionBriefZh.todayPending} ${pending}` : "";
-  const activeAndPending = options.length === "threeMinute"
-    ? [activeLine, pendingLine]
-    : [[activeLine, pendingLine].filter(Boolean).join(zhSemicolon)];
-
-  return formatMixedAdmissionSummarySentences([
-    admissionLead,
-    pmh ? `${admissionBriefZh.background} ${pmh}` : "",
-    courseParts.join(zhComma),
-    objective ? `${admissionBriefZh.keyObjective} ${objective}` : "",
-    ...activeAndPending,
-  ], options);
+  return briefLines
+    .map((line) => cleanSnippetTail(abbreviateAdmissionSummaryText(line)))
+    .filter(Boolean)
+    .join("\n");
 }
 
 function compactSnippet(value: string, maxLength = 140) {

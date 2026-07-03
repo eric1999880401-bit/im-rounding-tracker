@@ -128,12 +128,12 @@ function admissionSentenceCount(value) {
 }
 
 function assertOneMinuteAdmissionBrief(value, label) {
-  const count = admissionSentenceCount(value);
-  if (count < 3 || count > 5) {
-    throw new Error(`${label} should be a 3-5 sentence 1-min oral brief, got ${count}: ${value}`);
+  const lines = value.split("\n").map((line) => line.trim()).filter(Boolean);
+  if (lines.length < 4 || lines.length > 14) {
+    throw new Error(`${label} should be a compact structured brief (4-14 lines), got ${lines.length}: ${value}`);
   }
-  if (!/[\u56e0\u80cc\u666f\u5230\u8f49\u7d93\u5f8c\u76ee\u524d\u91cd\u9ede\u4eca\u65e5\u5f85]/.test(value)) {
-    throw new Error(`${label} did not use mixed Chinese-English oral-brief connectors: ${value}`);
+  if (!/\bPHx\s*:/.test(value) || !/\bCC\s*:/.test(value)) {
+    throw new Error(`${label} did not use structured PHx:/CC: brief labels: ${value}`);
   }
 }
 
@@ -533,20 +533,21 @@ try {
   if (/monitor closely|continue current management|clinical correlation/i.test(admission)) {
     throw new Error(`rule-based new-admission summary retained filler: ${admission}`);
   }
-  if (!/[\u56e0\u80cc\u666f\u4f4f\u9662\u5230\u8f49\u76ee\u524d\u91cd\u9ede\u4eca\u65e5\u5f85]/.test(admission) || /The patient is|Admitted\/managed|PMH\/context|Key course|Active issues|Today\/pending/i.test(admission)) {
-    throw new Error(`rule-based admission summary did not use mixed Chinese-English brief style: ${admission}`);
+  if (!/\bPHx\s*:/.test(admission) || !/\bCC\s*:/.test(admission) || /The patient is|Admitted\/managed|PMH\/context|Key course|Active issues|Today\/pending/i.test(admission)) {
+    throw new Error(`rule-based admission summary did not use the structured brief labels: ${admission}`);
   }
   assertOneMinuteAdmissionBrief(admission, "rule-based admission summary");
   if (/pneumonia|oxygen requirement|blood culture|follow up|antibiotics/i.test(admission)) {
     throw new Error(`rule-based admission summary should prefer clinical abbreviations: ${admission}`);
   }
   assertDocumentIncludes(admission, /PNA|sepsis|lactate|culture|O2|renal|anticoag/i, "new admission summary should preserve admission reason, active risks, and pending work");
-  assertDocumentIncludes(admission, /\u56e0[\s\S]*\u4f4f\u9662[\s\S]*\u80cc\u666f[\s\S]*\u5230\u9662\/\u8f49\u5165\u6642[\s\S]*\u95dc\u9375O[\s\S]*\u76ee\u524d\u91cd\u9ede[\s\S]*\u4eca\u65e5\u5f85/i, "new admission summary should follow oral brief structure");
+  assertDocumentIncludes(admission, /PHx:[\s\S]*CC:[\s\S]*PI:[\s\S]*Key O:[\s\S]*Imp:/i, "new admission summary should follow the structured brief order");
   const expanded = formatRuleBasedAdmissionSummary(newAdmissionPlan, { length: "threeMinute" });
-  if (admissionSentenceCount(expanded) < admissionSentenceCount(admission) || admissionSentenceCount(expanded) > 8) {
-    throw new Error(`3-min admission brief support should preserve/expand the oral brief safely: ${expanded}`);
+  const briefLineCount = (value) => value.split("\n").filter((line) => line.trim()).length;
+  if (briefLineCount(expanded) < briefLineCount(admission) || briefLineCount(expanded) > 18) {
+    throw new Error(`3-min admission brief support should preserve/expand the brief safely: ${expanded}`);
   }
-  assertDocumentIncludes(expanded, /\u95dc\u9375O[\s\S]*(WBC|lactate|CXR|B\/C|SpO2|O2)/i, "3-min admission brief should preserve objective anchors");
+  assertDocumentIncludes(expanded, /Key O:[\s\S]*(WBC|lactate|CXR|B\/C|SpO2|O2)/i, "3-min admission brief should preserve objective anchors");
   const reviewedPreferred = getAdmissionSummaryText(
     {
       ...emptyPatient(),

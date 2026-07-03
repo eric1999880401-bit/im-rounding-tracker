@@ -5291,3 +5291,7 @@ tbody tr:last-child td {
     background: #ffffff;
   }
 }
+
+.admission-brief-multiline {
+  white-space: pre-wrap;
+}
