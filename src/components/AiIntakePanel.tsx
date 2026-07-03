@@ -1268,7 +1268,6 @@ function AiIntakePanel({ patient, selectedDate, onApplyPatient }: AiIntakePanelP
       <div className="section-heading">
         <div>
           <h2>AI Intake</h2>
-          <p className="muted">AI assists organization only; clinician must verify.</p>
         </div>
       </div>
 
@@ -1392,7 +1391,6 @@ function AiIntakePanel({ patient, selectedDate, onApplyPatient }: AiIntakePanelP
           <div className="section-heading">
             <div>
               <h3>SOAP Preview</h3>
-              <p className="muted">Edit this one note. Save writes only after explicit Apply.</p>
             </div>
             <div className="form-actions">
               <button type="button" onClick={() => void applySoapPreview()}>

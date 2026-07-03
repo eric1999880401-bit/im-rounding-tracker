@@ -59,7 +59,6 @@ function AuthPage({ onStartDemo }: AuthPageProps) {
       <form className="panel auth-card" onSubmit={handleSubmit}>
         <h1>IM Rounding Tracker</h1>
         <p className="privacy-warning">Use de-identified data only.</p>
-        <p className="muted">Login is required before any patient data is shown.</p>
 
         {mode === "signup" && (
           <label>

@@ -12,7 +12,6 @@ import RoundSoapComposer from "../components/RoundSoapComposer";
 import LabHistoryPanel from "../components/LabHistoryPanel";
 import ActiveProblemEditor from "../components/ActiveProblemEditor";
 import { buildConcisePatientClinicalUpdate } from "../clinicalPatientPolish";
-import { routePatientClinicalFields, type ClinicalFieldCleanupChange } from "../clinicalFieldRouter";
 import {
   IconAiIntake,
   IconAssessment,
@@ -271,8 +270,6 @@ function PatientDetailPage({
   const [activeTab, setActiveTab] = useState<DetailTab>("rounds");
   const [selectedDittoDate, setSelectedDittoDate] = useState("");
   const [quickVsOrder, setQuickVsOrder] = useState("");
-  const [cleanupPreview, setCleanupPreview] = useState<{ patient: Patient; changes: ClinicalFieldCleanupChange[] } | null>(null);
-  const [cleanupStatus, setCleanupStatus] = useState("");
   const [soapEditorText, setSoapEditorText] = useState(initialSoapEditorText);
   const [soapEditorDirty, setSoapEditorDirty] = useState(false);
   const [externalSoapDraft, setExternalSoapDraft] = useState({ revision: 0, text: "", status: "" });
@@ -372,8 +369,6 @@ function PatientDetailPage({
       soapEditorDirtyRef.current = false;
       setIsDirty(false);
       isDirtyRef.current = false;
-      setCleanupPreview(null);
-      setCleanupStatus("");
       setExternalSoapDraft({ revision: 0, text: "", status: "" });
     }
   }, [sourcePatient, selectedDate, selectedNote, patientNotes]);
@@ -399,7 +394,7 @@ function PatientDetailPage({
     return (
       <div className="page">
         <h2>Loading patient...</h2>
-        <p className="muted">Waiting for Firestore data. Nothing is being saved.</p>
+        <p className="muted">Loading…</p>
       </div>
     );
   }
@@ -414,8 +409,6 @@ function PatientDetailPage({
   }
 
   const currentPatient = draftPatient;
-  const cleanupSignal = routePatientClinicalFields(currentPatient);
-  const visibleCleanupChanges = cleanupPreview?.changes ?? cleanupSignal.changes;
 
   function updateDraft(nextPatient: Patient) {
     const nextPayload = { patient: nextPatient, soapEditorText: soapEditorTextRef.current };
@@ -449,7 +442,7 @@ function PatientDetailPage({
     isDirtyRef.current = true;
     setSoapEditorDirty(true);
     soapEditorDirtyRef.current = true;
-    setCleanupStatus(message);
+    setDetailRecoveryStatus(message);
   }
 
   function undoDetailDraft() {
@@ -805,40 +798,6 @@ function PatientDetailPage({
     updateDraft(buildConcisePatientClinicalUpdate(currentPatient, patientNotes, selectedDate));
   }
 
-  function previewClinicalFieldCleanup() {
-    const preview = routePatientClinicalFields(draftRef.current ?? currentPatient);
-    setCleanupPreview(preview);
-    setCleanupStatus(
-      preview.changes.length > 0
-        ? `${preview.changes.length} field(s) can be cleaned. Review below, then apply and refresh the SOAP editor.`
-        : "No obvious AI field pollution found.",
-    );
-  }
-
-  function applyClinicalFieldCleanup() {
-    if (!cleanupPreview || cleanupPreview.changes.length === 0) return;
-    const cleanedPatient = { ...cleanupPreview.patient, updatedAt: nowIso() };
-    updateDraft(cleanedPatient);
-    setExternalSoapDraft((current) => ({
-      revision: current.revision + 1,
-      text: fallbackSoapTextFromPatient(cleanedPatient, patientNotes, selectedDate),
-      status: "Cleanup applied to SOAP editor. Review, then Save reviewed SOAP.",
-    }));
-    setCleanupPreview({ patient: cleanedPatient, changes: [] });
-    setCleanupStatus("Cleaned fields applied and SOAP editor refreshed. Review the SOAP above, then Save reviewed SOAP.");
-    setActiveTab("rounds");
-    window.requestAnimationFrame(() => {
-      document.querySelector(".round-soap-composer")?.scrollIntoView({ behavior: "smooth", block: "start" });
-    });
-  }
-
-  function shortCleanupText(value: string) {
-    const text = value.trim();
-    if (!text) return "(empty)";
-    const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-    return lines.slice(0, 4).join("\n") + (lines.length > 4 ? "\n..." : "");
-  }
-
   function renderSoapHistory() {
     return (
       <section className="panel soap-history">
@@ -855,7 +814,7 @@ function PatientDetailPage({
           )}
           {renderDittoControls()}
         </div>
-        {patientNotes.length === 0 && <p className="muted">No saved daily SOAP history yet. Legacy patient SOAP fields are still preserved.</p>}
+        {patientNotes.length === 0 && <p className="muted">No daily SOAP history yet.</p>}
         {patientNotes.map((note) => (
           <details key={note.date} open={note.date === selectedDate}>
             <summary>{note.date}</summary>
@@ -890,7 +849,6 @@ function PatientDetailPage({
         <div className="section-heading">
           <div>
             <h2>SOAP</h2>
-            <p className="muted">Board, Details, and Print read this reviewed SOAP. Paste stays local until Generate; Save is explicit.</p>
           </div>
           <span className="muted">{selectedDate}</span>
         </div>
@@ -1039,7 +997,6 @@ function PatientDetailPage({
             <div className="section-heading">
               <div>
                 <h2 id="admission-prompt-title">New admission needs Admission Brief</h2>
-                <p className="muted">Paste the de-identified admission note here first. Review the generated summary, then save explicitly.</p>
               </div>
               <button type="button" className="secondary" onClick={dismissAdmissionPrompt}>
                 Skip for now
@@ -1086,51 +1043,6 @@ function PatientDetailPage({
 
       {activeTab === "rounds" && renderRoundsMode()}
 
-      {(visibleCleanupChanges.length > 0 || cleanupStatus) && (
-        <details className="panel ai-cleanup-panel">
-          <summary>Clean AI Draft preview</summary>
-          <div className="section-heading">
-            <div>
-              <h3>Clean AI Draft</h3>
-              <p className="muted">Preview-only cleanup for V/S-in-S, report-in-PE, rule labels, generic A/P, and noisy AI tasks.</p>
-            </div>
-            <div className="form-actions">
-              <button type="button" className="secondary" onClick={previewClinicalFieldCleanup}>
-                Preview cleanup
-              </button>
-              <button type="button" disabled={!cleanupPreview || cleanupPreview.changes.length === 0} onClick={applyClinicalFieldCleanup}>
-                Apply + refresh SOAP
-              </button>
-            </div>
-          </div>
-          {cleanupStatus && <p className="status-message">{cleanupStatus}</p>}
-          {!cleanupPreview && visibleCleanupChanges.length > 0 && (
-            <p className="muted">{visibleCleanupChanges.length} AI-draft field cleanup(s) detected. Preview to compare before applying to the SOAP editor.</p>
-          )}
-          {cleanupPreview && visibleCleanupChanges.length > 0 && (
-            <div className="cleanup-change-grid">
-              {visibleCleanupChanges.map((change) => (
-                <article className="cleanup-change-card" key={`${change.field}-${change.reason}`}>
-                  <div className="cleanup-change-header">
-                    <strong>{change.label}</strong>
-                    <span>{change.reason}</span>
-                  </div>
-                  <div className="cleanup-before-after">
-                    <div>
-                      <span>Current</span>
-                      <pre>{shortCleanupText(change.before)}</pre>
-                    </div>
-                    <div>
-                      <span>Cleaned</span>
-                      <pre>{shortCleanupText(change.after)}</pre>
-                    </div>
-                  </div>
-                </article>
-              ))}
-            </div>
-          )}
-        </details>
-      )}
 
       <details className="panel detail-more-section">
         <summary>Advanced / legacy fields</summary>

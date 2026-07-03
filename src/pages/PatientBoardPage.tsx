@@ -1351,7 +1351,6 @@ function PatientBoardPage({
         <div className="section-heading">
           <div>
             <h3>Board Overview</h3>
-            <p className="muted">Census, active updates, and discharge preparation.</p>
           </div>
           <span className="muted">{activePatients.length} active</span>
         </div>

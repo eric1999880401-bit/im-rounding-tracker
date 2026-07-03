@@ -186,7 +186,7 @@ function DailyNoteForm({
                 onBlur={commitOnBlur}
                 onCompositionStart={onCompositionStart}
                 onCompositionEnd={handleCompositionEnd}
-                placeholder="Example: unstable BP; high fall risk. Everything here displays as important."
+                placeholder="Example: unstable BP; high fall risk"
               />
             </label>
             <label className="span-2">

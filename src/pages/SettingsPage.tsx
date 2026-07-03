@@ -220,7 +220,6 @@ function SettingsPage({ preferences, userName, onChange, onRefreshAiStyleProfile
         <div className="section-heading">
           <div>
             <h3>Rounding layout</h3>
-            <p className="muted">Board, SOAP preview, and Print use these display preferences. This does not change patient data.</p>
           </div>
         </div>
 
@@ -318,13 +317,12 @@ function SettingsPage({ preferences, userName, onChange, onRefreshAiStyleProfile
         <div className="section-heading">
           <div>
             <h3>Keyword highlights</h3>
-            <p className="muted">Personal rules mark matching words in Board, SOAP preview, and Print. They never edit or save SOAP text.</p>
           </div>
           <button type="button" className="secondary" onClick={addKeywordRule}>Add rule</button>
         </div>
 
         {keywordRules.length === 0 ? (
-          <p className="muted">No keyword rule yet. Try Teicoplanin, Cr, INR, culture, or discharge.</p>
+          <p className="muted">No keyword rule yet.</p>
         ) : (
           <div className="keyword-rule-list">
             {keywordRules.map((rule) => (
@@ -386,7 +384,6 @@ function SettingsPage({ preferences, userName, onChange, onRefreshAiStyleProfile
         <div className="section-heading">
           <div>
             <h3>Preview sample</h3>
-            <p className="muted">Fake SOAP preview for layout, keyword highlights, and lab reference display.</p>
           </div>
         </div>
         <div className={`settings-print-preview print-page density-${roundingLayout.printDensity} print-font-${roundingLayout.printFontSize} print-line-${roundingLayout.printLineSpacing} print-padding-${roundingLayout.printPadding}`}>
@@ -399,7 +396,6 @@ function SettingsPage({ preferences, userName, onChange, onRefreshAiStyleProfile
         <div className="section-heading">
           <div>
             <h3>AI style profile</h3>
-            <p className="muted">Abstracts your reviewed SOAP style. It does not store old SOAP text or raw pasted notes.</p>
           </div>
           <button type="button" className="secondary" onClick={onRefreshAiStyleProfile}>
             Refresh style
@@ -415,7 +411,7 @@ function SettingsPage({ preferences, userName, onChange, onRefreshAiStyleProfile
             <span className="muted">Density hint only: ~{preferences.aiStyleProfile.typicalApProblemCount} problems / {preferences.aiStyleProfile.typicalApLineLimit} line</span>
           </div>
         ) : (
-          <p className="muted">No style profile yet. Save a few reviewed SOAP notes, then refresh.</p>
+          <p className="muted">No style profile yet — save reviewed SOAPs first.</p>
         )}
       </section>
     </div>

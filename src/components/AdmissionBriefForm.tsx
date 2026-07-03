@@ -188,13 +188,11 @@ function AdmissionBriefForm({
   return (
     <section className="panel">
       <h2>Admission Brief / Initial Presentation</h2>
-      <p className="muted">Clinician-reviewed admission data. Daily SOAP remains separate.</p>
       <div className="form-grid">
         <div className="span-2 admission-auto-summary">
           <div className="section-heading">
             <div>
               <h3>Paste Admission Note</h3>
-              <p className="muted">After de-identification is confirmed, pasting here generates an admission summary draft automatically.</p>
             </div>
             <button
               type="button"
@@ -218,7 +216,7 @@ function AdmissionBriefForm({
             value={admissionNoteSource}
             onChange={(event) => setAdmissionNoteSource(event.target.value)}
             onPaste={handleAdmissionNotePaste}
-            placeholder="Paste de-identified admission note / H&P here. Do not paste name, full MRN, ID, birthday, phone, address, or identifiable image details."
+            placeholder="Paste de-identified admission note / H&P"
           />
           {generationError && <p className="error-message">{generationError}</p>}
           {generationStatus && <p className="status-message">{generationStatus}</p>}
@@ -226,7 +224,7 @@ function AdmissionBriefForm({
 
         <label className="span-2">
           Admission Summary
-          <span className="field-hint">You can paste a full admission note here too; it will be converted into a short summary after de-identification is confirmed.</span>
+          
           <ColorMarkupTextarea
             value={displayedAdmissionSummary}
             onChange={(value) => updateField("admissionBriefFreeText", value)}
