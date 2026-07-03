@@ -153,9 +153,9 @@ function sanitizeAdmissionSummaryText(value: string, rawText: string) {
     .split(/(?<=[\u3002.!?\uFF01\uFF1F])\s+|(?<=\u3002)/)
     .map((line) => compactLine(line.replace(/[.;\u3002!?\uFF01\uFF1F\s]+$/g, ""), 150))
     .filter(Boolean)
-    .slice(0, 6);
+    .slice(0, 10);
   const joined = sentences.map((line) => (/[\u3002.!?\uFF01\uFF1F]$/.test(line) ? line : `${line}\u3002`)).join("");
-  return compactLine(joined, 820);
+  return compactLine(joined, 1000);
 }
 
 function sanitizeVitals(vitals: Vital[], rawText: string) {

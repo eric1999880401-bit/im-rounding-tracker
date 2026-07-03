@@ -193,17 +193,19 @@ export const admissionSummaryZh = {
 };
 
 export const admissionSummaryStyleBullets = [
-  "Admission summary/oral brief style: follow the standard 3-min patient presentation used at IM morning rounds, in 6-8 short mixed Chinese-English clinical sentences, not an English paragraph, full H&P, or copied admission note.",
+  "Admission summary/oral brief style: a telegraphic bedside case brief the resident reads aloud to the attending (VS) — compressed clinical fragments with symbols and standard abbreviations, not full prose sentences, not an English paragraph, and not a copied admission note.",
+  "Compress with symbols: '→' for progression/intervention/response (e.g. 'melena → ER', 'PPI drip + 2U PRBC → Hb 6.9→8.5'), '+' to join co-existing findings, value→value for trends (Cr 1.4→2.1), parentheses for dates/doses. Only symbols that stay unambiguous when spoken.",
   "Use abbreviation-forward inpatient IM style: s/p, c/f, r/o, f/u, cont, Abx, Cx, B/C, U/C, Sputum Cx, PNA, UTI, AKI/CKD, RF, HF, AF, CAD, DM, HTN, COPD, O2/SpO2, NC/RA, CXR/CT/MRI/U/S, EGD, DC, OPD.",
-  `Keep Dx/PMH, organisms, drug names, procedures, image studies, lab values, devices, and consult services in English; use Chinese only for connective clinical judgment such as ${admissionSummaryZh.because}, ${admissionSummaryZh.background}, ${admissionSummaryZh.arrivalOrTransfer}, ${admissionSummaryZh.through}, ${admissionSummaryZh.after}, ${admissionSummaryZh.nowFocus}, ${admissionSummaryZh.todayPending}.`,
-  "3-min presentation order without headings: 1) one-liner identification: age/sex + key PMH context + chief concern/reason for admission, 2) focused HPI in chronological order with pertinent positives AND pertinent negatives, 3) relevant PMH/high-risk meds/allergy only, 4) key objective anchors: V/S + O2, focused PE findings, then 2-4 key labs/micro/image/procedure results with exact values/dates, 5) one summary statement that synthesizes who the patient is and the leading diagnosis, 6) problem-based assessment ranked by acuity, 7) plan: today's actions, pending work, consults, disposition/contingency.",
-  `Sentence skeleton: [age/sex if known] ${admissionSummaryZh.because} [reason/Dx] ${admissionSummaryZh.admitted}. ${admissionSummaryZh.background} [PMH/context]. ${admissionSummaryZh.arrivalOrTransfer} [severity/HPI chronology + pertinent positives/negatives], ${admissionSummaryZh.through} [ED/ICU/transfer treatment] ${admissionSummaryZh.after} [response]. Key O [V/S/O2 + focused PE + 2-4 key labs/micro/image/procedure]. ${admissionSummaryZh.nowFocus} [summary statement + ranked active assessment], ${admissionSummaryZh.todayPending} [pending/plan/dispo].`,
-  "If a 1-min ultra-short brief is explicitly requested, compress the same order into 3-5 sentences without dropping the one-liner, key objective anchors, or active assessment/plan.",
-  "For a very simple patient, 4-5 sentences is acceptable; complex admission/transfer should use 6-8 concise source-grounded sentences.",
-  "Use the phrase Key O for objective anchors and include 3-5 key V/S/O2, lab/micro, image, procedure, or response anchors. Do not output mojibake or placeholder symbols.",
-  "Prioritize life-threatening or admission-defining problems first; include exact values/dates when they change assessment or plan.",
+  `Keep Dx/PMH, organisms, drug names, procedures, image studies, lab values, devices, and consult services in English; use Chinese only for short connective judgment such as ${admissionSummaryZh.because}, ${admissionSummaryZh.background}, ${admissionSummaryZh.arrivalOrTransfer}, ${admissionSummaryZh.through}, ${admissionSummaryZh.after}, ${admissionSummaryZh.nowFocus}, ${admissionSummaryZh.todayPending}.`,
+  `Order without headings: 1) one-liner: age/sex + key PMH + ${admissionSummaryZh.because} [chief problem] ${admissionSummaryZh.admitted}; 2) dated course as short fragments in chronological order: symptom/event → ED/ward workup → key treatment → response, with pertinent positives/negatives; 3) Key O: 2-4 anchors only — V/S + O2, key labs with values/trends, key image/micro/procedure results with dates; 4) ${admissionSummaryZh.nowFocus} [ranked active problems + trajectory], ${admissionSummaryZh.todayPending} [today/pending/dispo].`,
+  "Every fragment must be sayable in a bedside handoff — if it cannot be spoken naturally, simplify it. Whole brief should be readable aloud in about 60-90 seconds.",
+  "For a simple admission use 4-6 fragments; complex admission/transfer may use up to 8-10 short fragments. Prefer dropping stable/normal data over squeezing it in.",
+  "If a 1-min ultra-short brief is explicitly requested, compress the same order into 3-5 fragments without dropping the one-liner, key objective anchors, or active assessment/plan.",
+  "Use the phrase Key O for objective anchors and include 3-5 key V/S/O2, lab/micro, image, procedure, or response anchors. Do not output mojibake or placeholder characters.",
+  "Prioritize life-threatening or admission-defining problems first; include exact values/dates only when they change assessment or plan.",
   "Omit full ROS, full PMH, unrelated remote history, stable normal data, copied full lab panels, and routine medication lists.",
-  "Do not write 'The patient is', full admission-note prose, copied full lab panels, routine normal data, or generic filler.",
+  "Do not write 'The patient is', full admission-note prose, or generic filler.",
+  `Example shape (fake data, follow the format not the content): '78M, HTN/DM/CKD3b, ${admissionSummaryZh.because} UGIB ${admissionSummaryZh.admitted}. 5/12 tarry stool + dizziness → ER, BP 92/60 → IVF. Key O: Hb 6.9→8.5 (2U PRBC), BUN/Cr 45/1.8; EGD 5/13 DU + visible vessel s/p clipping. ${admissionSummaryZh.nowFocus} UGIB s/p hemostasis, stable; ${admissionSummaryZh.todayPending} f/u Hb q8h, cont PPI, r/o resume DOAC need.'`,
 ];
 
 export function documentInstructions(documentType: DocumentType) {
@@ -233,12 +235,12 @@ export function documentInstructions(documentType: DocumentType) {
     ],
     admissionSummary: [
       ...admissionSummaryStyleBullets,
-      "Create a 3-min oral patient presentation ready to read aloud at attending rounds and paste into the rounding list.",
+      "Create a telegraphic oral patient brief ready to read aloud to the attending at rounds and paste into the rounding list.",
       "Write like a senior IM resident presenting at morning rounds: diagnosis-oriented, clinically selective, abbreviation-forward, and mixed Chinese-English.",
       "Follow the 3-min presentation order: one-liner identification, chronological focused HPI with pertinent positives/negatives, relevant PMH/meds/allergy, key V/S + focused PE, key labs/micro/images, summary statement, problem-based assessment, today/pending/disposition plan.",
       "Emphasize why admitted, important PMH/context, key positive/negative findings, active problems, major prior course, today's important changes, initial/current treatment, and pending/disposition decisions.",
       "Exclude trivial daily stable updates unless they affect management, safety, discharge, or handoff.",
-      "Keep the default 3-min compact brief to 6-8 short sentences for complex patients; simple patients may be 4-5 sentences, still telegraphic and oral-ready.",
+      "Keep the default compact brief to 8-10 short fragments for complex patients; simple patients may be 4-6 fragments, always telegraphic and oral-ready.",
       "Use conciseSummary as the best one-paragraph presentation.",
     ],
     dischargeHospitalCourse: [
