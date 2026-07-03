@@ -13,6 +13,7 @@ import {
   safeClinicalLinePreservingMarks,
   splitHighlightLines,
   stripColorMarkup,
+  todayKey,
 } from "./utils";
 
 type DigestMode = "board" | "rounds";
@@ -1176,4 +1177,59 @@ export function getRoundingDigest(
     attendingSummary,
     snapshot,
   };
+}
+
+export type PatientHeadlineTone = "critical" | "warning" | "discharge" | "normal";
+
+export interface PatientHeadline {
+  text: string;
+  tone: PatientHeadlineTone;
+}
+
+function daysUntil(dateKey: string) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) return Number.POSITIVE_INFINITY;
+  const target = Date.parse(`${dateKey}T00:00:00`);
+  const today = Date.parse(`${todayKey()}T00:00:00`);
+  if (Number.isNaN(target) || Number.isNaN(today)) return Number.POSITIVE_INFINITY;
+  return Math.round((target - today) / 86400000);
+}
+
+// The single most decision-relevant line for this patient today, for the card
+// headline strip. Deterministic priority: active red flag > urgent task >
+// critical/abnormal lab > discharge due today/tomorrow > top active problem.
+export function getPatientHeadline(
+  patient: Patient,
+  notes: DailyNote[] = [],
+  options: DigestOptions = {},
+): PatientHeadline | null {
+  const digest = getRoundingDigest(patient, notes, options);
+
+  const redFlag = clinicalItems(digest.redFlags)[0];
+  if (redFlag) return { text: shortDigestText(redFlag, 78), tone: "critical" };
+
+  const urgentTask = patient.tasks.find(
+    (task) => !task.done && (task.priority === "urgent" || task.text.trim().startsWith("!")),
+  );
+  if (urgentTask) return { text: shortDigestText(urgentTask.text.replace(/^!+/, "").trim(), 78), tone: "critical" };
+
+  const criticalLab = digest.snapshot.objective.labSignals.find((signal) => signal.severity === "critical");
+  if (criticalLab) return { text: `Lab: ${shortDigestText(criticalLab.display, 68)}`, tone: "critical" };
+
+  const dischargeDays = daysUntil(patient.dischargeTargetDate);
+  if (dischargeDays <= 1) {
+    const barrier = clinicalItems(digest.discharge)[0];
+    const when = dischargeDays <= 0 ? "today" : "tomorrow";
+    return { text: barrier ? `DC ${when}: ${shortDigestText(barrier, 60)}` : `DC ${when}`, tone: "discharge" };
+  }
+
+  const abnormalLab = digest.snapshot.objective.labSignals.find((signal) => signal.important);
+  if (abnormalLab) return { text: `Lab: ${shortDigestText(abnormalLab.display, 68)}`, tone: "warning" };
+
+  const topProblem = digest.snapshot.apProblems[0];
+  if (topProblem) return { text: shortDigestText(topProblem, 78), tone: "normal" };
+
+  const pendingTask = patient.tasks.find((task) => !task.done);
+  if (pendingTask) return { text: shortDigestText(pendingTask.text.replace(/^!+/, "").trim(), 78), tone: "normal" };
+
+  return null;
 }

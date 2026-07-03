@@ -23,6 +23,7 @@ const { formatClinicalDocumentDraft } = await server.ssrLoadModule("/src/clinica
 const {
   emptyDailyNote,
   emptyPatient,
+  emptyTask,
   getAdmissionSummaryText,
   getLabFocusSummary,
   getPatientDisplaySummary,
@@ -36,7 +37,8 @@ const {
   createId,
   dailyNoteMatchesSavedSnapshot,
 } = await server.ssrLoadModule("/src/utils.ts");
-const { getRoundingDigest } = await server.ssrLoadModule("/src/roundingDigest.ts");
+const { getRoundingDigest, getPatientHeadline } = await server.ssrLoadModule("/src/roundingDigest.ts");
+const { buildCarriedForwardKeys, isCarriedForwardLine } = await server.ssrLoadModule("/src/soapLineDelta.ts");
 const {
   aiSoapDraftToSoapDraft,
   formatSoapDraft,
@@ -3302,6 +3304,92 @@ try {
 } catch (error) {
   failures.push({ name: "Different-patient admission brief", error: error instanceof Error ? error.message : String(error) });
   console.error(`FAIL Different-patient admission brief: ${failures[failures.length - 1].error}`);
+}
+
+try {
+  // --- Headline priority: red flag beats everything ---
+  const redFlagPatient = {
+    ...emptyPatient(),
+    bed: "A1",
+    primaryDiagnosis: "Sepsis",
+    importantRedFlags: "Septic shock, lactate 4.2, call if SBP <90",
+    tasks: [{ ...emptyTask(), text: "f/u B/C", priority: "normal" }],
+  };
+  const redHeadline = getPatientHeadline(redFlagPatient, [], { mode: "board" });
+  if (!redHeadline || redHeadline.tone !== "critical" || !/shock|lactate|SBP/i.test(redHeadline.text)) {
+    throw new Error(`red-flag headline wrong: ${JSON.stringify(redHeadline)}`);
+  }
+
+  // --- Headline: urgent task when no red flag ---
+  const urgentTaskPatient = {
+    ...emptyPatient(),
+    bed: "A2",
+    primaryDiagnosis: "PNA",
+    tasks: [
+      { ...emptyTask(), text: "cont ceftriaxone", priority: "normal" },
+      { ...emptyTask(), text: "! call family re: code status", priority: "urgent" },
+    ],
+  };
+  const taskHeadline = getPatientHeadline(urgentTaskPatient, [], { mode: "board" });
+  if (!taskHeadline || taskHeadline.tone !== "critical" || !/code status/i.test(taskHeadline.text) || /^!/.test(taskHeadline.text)) {
+    throw new Error(`urgent-task headline wrong: ${JSON.stringify(taskHeadline)}`);
+  }
+
+  // --- Headline: discharge due today ---
+  const dischargePatient = {
+    ...emptyPatient(),
+    bed: "A3",
+    primaryDiagnosis: "CAP resolving",
+    dischargeTargetDate: todayKey(),
+    tasks: [{ ...emptyTask(), text: "arrange OPD", priority: "normal" }],
+  };
+  const dcHeadline = getPatientHeadline(dischargePatient, [], { mode: "board" });
+  if (!dcHeadline || dcHeadline.tone !== "discharge" || !/DC today/i.test(dcHeadline.text)) {
+    throw new Error(`discharge headline wrong: ${JSON.stringify(dcHeadline)}`);
+  }
+
+  // --- Carried-forward detection: unchanged line dims, changed value stays ---
+  const priorSoap = [
+    "Dx: AKI on CKD",
+    "O:",
+    "Lab: Cr 1.4, K 4.2",
+    "A/P:",
+    "# HTN, stable",
+    "- cont Exforge 1 tab QD",
+  ].join("\n");
+  const carried = buildCarriedForwardKeys(
+    [{ ...emptyDailyNote("2026-07-01"), soapText: priorSoap }],
+    "2026-07-02",
+  );
+  if (carried.size === 0) {
+    throw new Error("carried-forward key set was empty for a valid prior note");
+  }
+  if (!isCarriedForwardLine("- cont Exforge 1 tab QD", carried)) {
+    throw new Error("unchanged chronic line was not detected as carried forward");
+  }
+  if (!isCarriedForwardLine("# HTN, stable", carried)) {
+    throw new Error("unchanged problem title was not detected as carried forward");
+  }
+  if (isCarriedForwardLine("Lab: Cr 2.1, K 5.3", carried)) {
+    throw new Error("a CHANGED lab value was wrongly marked carried forward (would be dimmed)");
+  }
+  if (isCarriedForwardLine("- new task: start insulin", carried)) {
+    throw new Error("a brand-new line was wrongly marked carried forward");
+  }
+  // A bang added today must not defeat the content match (same content = still carried).
+  if (!isCarriedForwardLine("! cont Exforge 1 tab QD", carried)) {
+    throw new Error("leading bang broke the carried-forward content match");
+  }
+  // No prior note -> nothing dimmed.
+  const emptyCarried = buildCarriedForwardKeys([], "2026-07-02");
+  if (emptyCarried.size !== 0 || isCarriedForwardLine("anything", emptyCarried)) {
+    throw new Error("first-note case should dim nothing");
+  }
+  console.log("PASS Rounding headline priority and carried-forward change detection");
+  supplementalPasses += 1;
+} catch (error) {
+  failures.push({ name: "Headline + carried-forward delta", error: error instanceof Error ? error.message : String(error) });
+  console.error(`FAIL Headline + carried-forward delta: ${failures[failures.length - 1].error}`);
 }
 
 await server.close();

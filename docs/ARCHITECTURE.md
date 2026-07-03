@@ -35,6 +35,8 @@ paste / Firestore data
 | `aiPostprocess/genericFiller.ts` | single filler word-list + detectors (sync with functions) |
 | `aiPostprocess/planConcretizer.ts` | vague follow-up/intervention → concrete rewrite (sync with functions) |
 | `aiDraftSanitizer.ts` | only entry point for raw AI drafts |
+| `roundingDigest.ts` | `getRoundingDigest` (list projection) + `getPatientHeadline` (one-line per-card headline) |
+| `soapLineDelta.ts` | carried-forward detection: dims lines unchanged since the prior daily note so today's changes stand out |
 | `soapDraft.ts`, `soapDeltaGuardrails.ts` | SOAP text model + reviewed-baseline protection (highest risk; move, don't rewrite) |
 | `firebase/` | auth + Firestore + callable wrappers |
 | `pages/`, `components/` | rendering; pages are lazy-loaded routes |
