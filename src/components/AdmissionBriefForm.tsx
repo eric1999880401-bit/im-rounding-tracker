@@ -27,7 +27,6 @@ function AdmissionBriefForm({
   const [generatingSummary, setGeneratingSummary] = useState(false);
   const [generationStatus, setGenerationStatus] = useState("");
   const [generationError, setGenerationError] = useState("");
-  const [expandedAdmissionBrief, setExpandedAdmissionBrief] = useState("");
 
   function updateField<K extends keyof Patient>(field: K, value: Patient[K]) {
     onChange({ ...patient, [field]: value, updatedAt: new Date().toISOString() });
@@ -75,11 +74,6 @@ function AdmissionBriefForm({
     // 3-minute oral presentation format is the default admission summary output.
     const summary = formatRuleBasedAdmissionSummary(plan, { length: "threeMinute" }) || formatRuleBasedAdmissionSummary(plan);
     return summary || compactAdmissionLine(sourceText) || sourceText.replace(/\s+/g, " ").trim().slice(0, 500);
-  }
-
-  function buildExpandedAdmissionBrief(sourceText: string) {
-    const plan = applyClinicalKnowledgeToText(sourceText);
-    return formatRuleBasedAdmissionSummary(plan, { length: "threeMinute" }) || buildLocalAdmissionSummary(sourceText);
   }
 
   function buildAdmissionPatch(sourceText: string, summary: string): Patient {
@@ -132,7 +126,6 @@ function AdmissionBriefForm({
     try {
       if (isDemoMode) {
         const summary = buildLocalAdmissionSummary(text);
-        setExpandedAdmissionBrief(buildExpandedAdmissionBrief(text));
         onChange(buildAdmissionPatch(text, summary));
         setGenerationStatus("Demo admission summary generated locally. Review, edit, then Save.");
       } else {
@@ -144,13 +137,11 @@ function AdmissionBriefForm({
           storeRawText: false,
         });
         const summary = formatClinicalDocumentDraft(result.draft);
-        setExpandedAdmissionBrief(buildExpandedAdmissionBrief(text));
         onChange(buildAdmissionPatch(text, summary));
         setGenerationStatus(`Admission summary generated. Review, edit, then Save. Draft: ${result.draftId}`);
       }
     } catch (error) {
       const fallbackSummary = buildLocalAdmissionSummary(text);
-      setExpandedAdmissionBrief(buildExpandedAdmissionBrief(text));
       onChange(buildAdmissionPatch(text, fallbackSummary));
       setGenerationError(`${getErrorMessage(error)} Local 3-min oral brief was generated for review.`);
     } finally {
@@ -243,12 +234,6 @@ function AdmissionBriefForm({
             onPaste={handleAdmissionSummaryPaste}
             placeholder="AI-generated or clinician-written short admission summary for rounds."
           />
-          {expandedAdmissionBrief && (
-            <details className="admission-expanded-brief">
-              <summary>3-min expanded oral brief</summary>
-              <p className="admission-brief-multiline">{expandedAdmissionBrief}</p>
-            </details>
-          )}
         </label>
       </div>
     </section>
