@@ -10,7 +10,8 @@
     "clinical:e2e": "node scripts/clinical-e2e.mjs",
     "clinical:ai-smoke": "node scripts/live-ai-smoke.mjs",
     "preview": "vite preview",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "cleanup:patients": "node scripts/cleanup-patients.mjs"
   },
   "dependencies": {
     "firebase": "^12.12.1",
