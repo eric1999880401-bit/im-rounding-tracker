@@ -3248,7 +3248,7 @@ try {
   assertDocumentIncludes(narrativeBrief, /ED Lab:[\s\S]*Serum ketone 0\.5, VBG pH 7\.42[\s\S]*7\.38[\s\S]*no DKA/i, "C15-style admission brief should preserve ketone/VBG/no-DKA line");
   assertDocumentIncludes(narrativeBrief, /Image:[\s\S]*CXR:[\s\S]*KUB:/i, "C15-style admission brief should split image findings");
   assertDocumentIncludes(narrativeBrief, /ED Course:[\s\S]*IVC ~0\.5 cm[\s\S]*Started IV Curam \+ clindamycin/i, "C15-style admission brief should preserve ED course and treatment");
-  assertDocumentIncludes(narrativeBrief, /Imp:[\s\S]*1\. Fever\/sepsis, likely Lt thigh cellulitis[\s\S]*5\. T2DM, no DKA this time/i, "C15-style admission brief should use numbered source-grounded Imp");
+  assertDocumentIncludes(narrativeBrief, /Imp:[\s\S]*1\. Fever\/sepsis, likely Lt (?:thigh )?cellulitis[\s\S]*\d\. T2DM, no DKA this time/i, "C15-style admission brief should use numbered source-grounded Imp");
   if (/\*\*/.test(narrativeBrief) || /Key O:|Plan:|DKA\/HHS|AKI\/electrolyte|PNA\/O2|source\/Cx\/Abx|transition readiness|Abx response\/weaning/i.test(plainNarrativeBrief)) {
     throw new Error(`C15-style admission brief leaked old labels or canned rule titles:\n${narrativeBrief}`);
   }
@@ -3273,6 +3273,35 @@ try {
 } catch (error) {
   failures.push({ name: "Narrative admission brief classification", error: error instanceof Error ? error.message : String(error) });
   console.error(`FAIL Narrative admission brief classification: ${failures[failures.length - 1].error}`);
+}
+
+try {
+  const dvtPlan = applyClinicalKnowledgeToText(
+    [
+      "The 68-y-o male w/ PHx of lung cancer s/p chemotherapy and HTN was admitted via emergency department because of left leg swelling.",
+      "Left leg swelling and pain had been noted for 2 weeks, no redness, no fever.",
+      "ED work-up showed WBC 7.2 k/\u00b5L, D-dimer 4.8, Cr 1.1.",
+      "Venous doppler showed left femoral vein thrombosis.",
+      "Under the impression of left leg DVT, he was admitted for anticoagulation.",
+    ].join("\n"),
+  );
+  const dvtBrief = formatRuleBasedAdmissionSummary(dvtPlan, { length: "threeMinute" });
+  if (/cellulitis/i.test(dvtBrief)) {
+    throw new Error(`a non-cellulitis patient was stamped with cellulitis:\n${dvtBrief}`);
+  }
+  if (/curam|clindamycin|LR hydration|D x2|no DKA/i.test(dvtBrief)) {
+    throw new Error(`C15-case content leaked into a different patient's brief:\n${dvtBrief}`);
+  }
+  assertDocumentIncludes(dvtBrief, /^68M$/m, "different-patient brief should start with its own age/sex");
+  assertDocumentIncludes(dvtBrief, /PHx:\s*lung cancer s\/p chemotherapy, HTN/i, "different-patient brief should extract its own PHx");
+  assertDocumentIncludes(dvtBrief, /CC:\s*left leg swelling/i, "different-patient brief should extract its own CC");
+  assertDocumentIncludes(dvtBrief, /favor left leg DVT/i, "source-named DVT judgment should be preserved");
+  assertDocumentIncludes(dvtBrief, /Imp:[\s\S]*1\. left leg DVT/i, "Imp should lead with the source impression");
+  console.log("PASS Different-patient admission brief stays source-grounded (no C15 overfitting)");
+  supplementalPasses += 1;
+} catch (error) {
+  failures.push({ name: "Different-patient admission brief", error: error instanceof Error ? error.message : String(error) });
+  console.error(`FAIL Different-patient admission brief: ${failures[failures.length - 1].error}`);
 }
 
 await server.close();
