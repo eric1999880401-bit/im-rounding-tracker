@@ -64,6 +64,22 @@ export function normalizeClinicalDisplayText(value: string) {
     .trim();
 }
 
+// Display-only compaction applied at render time (never to stored/editor text):
+// tighten common verbose phrases into symbols/shorthand so the scanning list
+// reads faster. Kept out of normalizeClinicalDisplayText because that function
+// also canonicalizes the SOAP editor's saved text.
+export function compactDisplaySymbols(value: string) {
+  return String(value ?? "")
+    .replace(/\bsimilar to (?:the )?prior (?:exam|film|study|imaging|image)\b/gi, "~prior")
+    .replace(/\bsimilar to (\d{4}\/\d{1,2})(?:\/\d{1,2})? (?:exam|film|study|imaging)\b/gi, "~$1")
+    .replace(/\belevations?\b/gi, "\u2191")
+    .replace(/\belevated\b/gi, "\u2191")
+    // "impr" not an arrow: \u2197 next to a symptom ("diarrhea \u2197") reads as worsening.
+    .replace(/\bimprov(?:ing|ed|ement)\b/gi, "impr")
+    .replace(/\s+and\s+/gi, " + ")
+    .replace(/\s{2,}/g, " ");
+}
+
 export function normalizeClinicalDisplayTextPreservingMarks(value: string) {
   const marks: string[] = [];
   const tokenized = String(value ?? "").replace(/\[\[(red|orange|yellow|blue|green|purple)(?:-(highlight|text))?:([\s\S]*?)\]\]/gi, (_, color: string, style: string, inner: string) => {
