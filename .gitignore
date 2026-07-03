@@ -11,3 +11,4 @@ vite.config.d.ts
 firebase-debug.log
 firebase-debug.*.log
 .firebase/
+*.log
