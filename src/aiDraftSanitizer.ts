@@ -2,6 +2,7 @@ import type { AiClinicalSourceType, AiSoapDraft } from "./types";
 import { compactMedicalAbbreviations } from "./medicalAbbreviations";
 import { concretizeVagueFollowUps } from "./aiPostprocess/planConcretizer";
 import { containsGenericFiller, hasConcreteTrigger, isEntirelyGenericFiller, stripInlineFiller } from "./aiPostprocess/genericFiller";
+import { looksLikeStructuredAdmissionBrief } from "./clinicalTextFormat";
 
 type Vital = AiSoapDraft["objective"]["vitals"][number];
 type Lab = AiSoapDraft["objective"]["labs"][number];
@@ -141,6 +142,14 @@ function sanitizeGeneratedText(value: string, rawText: string, maxLines = 8) {
 }
 
 function sanitizeAdmissionSummaryText(value: string, rawText: string) {
+  const normalized = normalizeText(value);
+  if (looksLikeStructuredAdmissionBrief(normalized)) {
+    const lines = normalized
+      .split("\n")
+      .map((line) => (line.trim() ? compactLine(stripInlineFiller(line), 180) : ""))
+      .filter((line, index, array) => line || (index > 0 && array[index - 1]));
+    return lines.slice(0, 28).join("\n").trim();
+  }
   const compact = stripInlineFiller(
     sanitizeGeneratedText(value, rawText, 8)
       .replace(/\n+/g, " ")

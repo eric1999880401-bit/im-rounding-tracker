@@ -13,6 +13,7 @@ import type {
 import { specificAntibioticPlan } from "./clinicalFieldRouter";
 import { compactMedicalAbbreviations } from "./medicalAbbreviations";
 import { removeGenericFiller } from "./aiPostprocess/genericFiller";
+import { looksLikeStructuredAdmissionBrief } from "./clinicalTextFormat";
 
 import { clinicalKnowledgePacks, sourceRefs } from "./clinicalRules/references";
 import {
@@ -400,7 +401,9 @@ export function applyClinicalKnowledgeToAiSoapDraft(draft: AiSoapDraft, rawText:
     assessmentPlan: dedupeRuleObjects(assessmentPlan, "problemTitle"),
     thinkingPrompts,
     oneLiner: formatReasoningOneLiner(reasoning) || draft.oneLiner,
-    admissionSummary: formatReasoningAdmissionSummary(reasoning, plan, { length: "threeMinute" }) || draft.admissionSummary || formatRuleBasedAdmissionSummary(plan, { length: "threeMinute" }),
+    admissionSummary: looksLikeStructuredAdmissionBrief(draft.admissionSummary)
+      ? draft.admissionSummary
+      : formatReasoningAdmissionSummary(reasoning, plan, { length: "threeMinute" }) || draft.admissionSummary || formatRuleBasedAdmissionSummary(plan, { length: "threeMinute" }),
     isbarHandoff: formatReasoningSbar(reasoning, plan) || draft.isbarHandoff || formatRuleBasedSbar(plan),
   };
 }

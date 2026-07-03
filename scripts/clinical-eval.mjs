@@ -3129,6 +3129,78 @@ try {
   console.error(`FAIL PMH synonym dedupe: ${failures[failures.length - 1].error}`);
 }
 
+try {
+  const { looksLikeStructuredAdmissionBrief } = await server.ssrLoadModule("/src/clinicalTextFormat.ts");
+  const structuredBrief = [
+    "73F",
+    "PHx: dementia, HTN, recent H. pylori infx s/p EGD",
+    "CC: painful dermatomal rash x recent days",
+    "PI:",
+    "RUQ pain radiating ant abd → back x ~2 wks, appetite fair, bowel habit N.",
+    "Denied fever/dizziness/HA/neck pain/dyspnea.",
+    "ED PE:",
+    "Erythematous painful rash below bil breasts, involving bil T5 dermatome, plus lesions over Lt axilla + RLE.",
+    "Lab 07-01:",
+    "WBC 6.3k, Neu 66.4%, Hb 13.9, PLT 197k",
+    "→ no leukocytosis, no sig. inflammatory marker elevation",
+    "Imp:",
+    "Suspect multidermatomal/disseminated HZ / VZV infx",
+  ].join("\n");
+  if (!looksLikeStructuredAdmissionBrief(structuredBrief)) {
+    throw new Error("structured brief detector did not recognize the reference format");
+  }
+  const emptyDraftShell = {
+    oneLiner: "",
+    admissionSummary: structuredBrief,
+    isbarHandoff: "",
+    clinicalReasoning: {
+      currentClinicalState: "Suspected disseminated VZV on acyclovir.",
+      primaryRisk: "Disseminated VZV infection-control and progression risk",
+      whyThisMatters: [{ fact: "multidermatomal rash", source: "PI", implication: "dissemination risk" }],
+      activeProblemsRanked: [
+        {
+          problem: "Suspected disseminated zoster/varicella",
+          status: "under treatment",
+          whyImportant: "Dissemination changes isolation and antiviral plan.",
+          evidence: ["bil T5 dermatome + Lt axilla + RLE rash"],
+          todayPlan: ["cont acyclovir 250 mg q8h (7/2-)"],
+          callThresholds: ["new fever or rapid rash progression"],
+        },
+      ],
+      resolvedOrLessImportant: [],
+      missingDataNeeded: [],
+      noiseToIgnore: [],
+    },
+    subjective: { chiefConcern: "", symptoms: [], overnightEvents: [], importantSymptoms: [], importantOvernightEvents: [] },
+    objective: { vitals: [], bloodSugars: [], physicalExam: [], labs: [], images: [] },
+    assessmentPlan: [],
+    redFlags: [],
+    tasks: [],
+    dischargeIssues: [],
+    thinkingPrompts: [],
+    uncertainty: [],
+  };
+  const sanitizedBriefDraft = sanitizeAiSoapDraftForReview(emptyDraftShell, "de-identified rash admission text", "mixed");
+  if (!/\nPHx:/.test(sanitizedBriefDraft.admissionSummary) || !/\nImp:/.test(sanitizedBriefDraft.admissionSummary)) {
+    throw new Error(`sanitizer flattened the structured brief:\n${sanitizedBriefDraft.admissionSummary}`);
+  }
+  if (sanitizedBriefDraft.admissionSummary.split("\n").length < 10) {
+    throw new Error(`sanitizer dropped structured brief lines:\n${sanitizedBriefDraft.admissionSummary}`);
+  }
+  const appliedBriefDraft = applyClinicalKnowledgeToAiSoapDraft(emptyDraftShell, "");
+  if (!appliedBriefDraft.admissionSummary.startsWith("73F")) {
+    throw new Error(`reasoning rebuild replaced the structured brief:\n${appliedBriefDraft.admissionSummary}`);
+  }
+  if (/目前重點|關鍵O|今日待/.test(appliedBriefDraft.admissionSummary)) {
+    throw new Error(`structured brief was contaminated with reasoning-template labels:\n${appliedBriefDraft.admissionSummary}`);
+  }
+  console.log("PASS Structured admission brief (PHx/CC/PI/Lab/Imp) survives sanitizer and reasoning override");
+  supplementalPasses += 1;
+} catch (error) {
+  failures.push({ name: "Structured admission brief preservation", error: error instanceof Error ? error.message : String(error) });
+  console.error(`FAIL Structured admission brief preservation: ${failures[failures.length - 1].error}`);
+}
+
 await server.close();
 
 if (failures.length > 0) {
