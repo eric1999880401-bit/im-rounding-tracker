@@ -143,6 +143,44 @@ export const vagueFollowUpRewrites: Array<[RegExp, string]> = [
   [/\b(?:optimize|improve|ensure)\s+(?:the\s+)?glycemic\s+control\b/gi, "adjust insulin per fingerstick glucose (AC/HS)"],
 ];
 
+
+// Collapses duplicated discharge-pending lines in the DC: section of a SOAP
+// draft. The model tends to restate "meds/OPD/cert pending" in several
+// phrasings; keep one line, preferring the checklist form with □ boxes.
+export function collapseDischargePendingLines(soapText: string) {
+  const lines = soapText.split("\n");
+  let inDc = false;
+  let keptPendingIndex = -1;
+  const dropIndexes = new Set<number>();
+  lines.forEach((line, index) => {
+    if (/^DC\s*:/i.test(line.trim())) {
+      inDc = true;
+      return;
+    }
+    if (inDc && /^[A-Za-z/\u85e5\u56d1]+\s*:/.test(line.trim()) && !line.trim().startsWith("-") && !line.trim().startsWith("!")) {
+      inDc = false;
+    }
+    if (!inDc) return;
+    const clean = line.toLowerCase();
+    const tokens = ["med", "opd", "cert"].filter((token) => clean.includes(token));
+    if (tokens.length < 2) return;
+    if (keptPendingIndex === -1) {
+      keptPendingIndex = index;
+      return;
+    }
+    const keptHasBoxes = lines[keptPendingIndex].includes("\u25a1");
+    const currentHasBoxes = line.includes("\u25a1");
+    if (currentHasBoxes && !keptHasBoxes) {
+      dropIndexes.add(keptPendingIndex);
+      keptPendingIndex = index;
+    } else {
+      dropIndexes.add(index);
+    }
+  });
+  if (dropIndexes.size === 0) return soapText;
+  return lines.filter((_, index) => !dropIndexes.has(index)).join("\n");
+}
+
 export function concretizeVagueFollowUps(value: string) {
   return vagueFollowUpRewrites.reduce((text, [pattern, replacement]) => text.replace(pattern, replacement), value);
 }
@@ -167,6 +205,70 @@ export function isGenericClinicalFiller(value: string) {
     "no acute issue",
     "stable condition",
   ].some((phrase) => clean === phrase || clean.includes(phrase));
+}
+
+
+// Collapses duplicate PMH entries where the same disease appears as both the
+// full name and its abbreviation (e.g. "diabetes mellitus" + "DM").
+// Keep in sync with src/aiPostprocess/diseaseDedupe.ts in the web app.
+const diseaseSynonyms: Array<[RegExp, string]> = [
+  [/^(?:type\s*(?:2|ii)\s*)?diabetes(?:\s+mellitus)?(?:\s*type\s*(?:2|ii))?$|^t2dm$|^dm$|^dm\s*type\s*(?:2|ii)$/i, "dm"],
+  [/^hypertension$|^htn$/i, "htn"],
+  [/^hyperlipidemia$|^dyslipidemia$|^hld$/i, "hld"],
+  [/^coronary artery disease$|^cad$/i, "cad"],
+  [/^atrial fibrillation$|^af$|^a-?fib$/i, "af"],
+  [/^chronic obstructive pulmonary disease$|^copd$/i, "copd"],
+  [/^(?:congestive\s+)?heart failure$|^chf$|^hf$/i, "hf"],
+  [/^chronic kidney disease(?:\s*,?\s*stage\s*[\w]+)?$|^ckd\s*[\w]*$/i, "ckd"],
+  [/^end[-\s]stage renal disease$|^esrd$/i, "esrd"],
+  [/^gastroesophageal reflux disease$|^gerd$/i, "gerd"],
+  [/^benign prostatic hyperplasia$|^bph$/i, "bph"],
+  [/^(?:old\s+)?(?:cerebrovascular accident|cva|stroke)$/i, "cva"],
+  [/^transient ischemic attack$|^tia$/i, "tia"],
+  [/^hypertensive cardiovascular disease$|^hcvd$/i, "hcvd"],
+  [/^hepatitis b(?:\s+carrier)?$|^hbv(?:\s+carrier)?$/i, "hbv"],
+  [/^hepatitis c$|^hcv$/i, "hcv"],
+];
+
+function diseaseKey(item: string) {
+  const clean = item.trim().replace(/^and\s+/i, "").replace(/[.\u3002;\uff1b]+$/, "");
+  for (const [pattern, key] of diseaseSynonyms) {
+    if (pattern.test(clean)) return key;
+  }
+  return "";
+}
+
+function preferredDiseaseDuplicate(a: string, b: string) {
+  const aInfo = /[\d()]/.test(a);
+  const bInfo = /[\d()]/.test(b);
+  if (aInfo !== bInfo) return aInfo ? a : b;
+  return a.length <= b.length ? a : b;
+}
+
+export function dedupeDiseaseText(value: string) {
+  if (!value.trim()) return value;
+  const tokens = value
+    .split(/\r?\n/)
+    .flatMap((line) => line.split(/[,\uff0c\u3001;\uff1b]/))
+    .map((token) => token.trim().replace(/^and\s+/i, ""))
+    .filter(Boolean);
+  const kept: string[] = [];
+  const byKey = new Map<string, number>();
+  tokens.forEach((item) => {
+    const key = diseaseKey(item);
+    if (!key) {
+      kept.push(item);
+      return;
+    }
+    const existingIndex = byKey.get(key);
+    if (existingIndex === undefined) {
+      byKey.set(key, kept.length);
+      kept.push(item);
+      return;
+    }
+    kept[existingIndex] = preferredDiseaseDuplicate(kept[existingIndex], item);
+  });
+  return kept.join(", ");
 }
 
 export function cleanClinicalLines(value: unknown, maxLines = 10, maxChars = 1400) {
@@ -296,7 +398,7 @@ export function sanitizeImportDraft(
     labText: cleanClinicalLines(item.labText, 10, 1200),
     imageText: cleanClinicalLines(item.imageText, 8, 1000),
     admissionSummary: cleanClinicalLines(item.admissionSummary, 3, 420),
-    underlyingDiseases: cleanClinicalLines(item.underlyingDiseases, 8, 700),
+    underlyingDiseases: dedupeDiseaseText(cleanClinicalLines(item.underlyingDiseases, 8, 700)),
     activeProblems: cleanClinicalLines(item.activeProblems, 8, 900),
     hospitalCourseHighlights: cleanClinicalLines(item.hospitalCourseHighlights, 8, 900),
     importantRedFlags: cleanClinicalLines(item.importantRedFlags, 6, 700),

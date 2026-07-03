@@ -3089,6 +3089,46 @@ try {
   console.error(`FAIL Vague follow-up concretizer: ${failures[failures.length - 1].error}`);
 }
 
+try {
+  const { dedupeDiseaseItems, dedupeDiseaseText } = await server.ssrLoadModule("/src/aiPostprocess/diseaseDedupe.ts");
+  const deduped = dedupeDiseaseItems([
+    "diabetes mellitus",
+    "hypertension",
+    "hyperlipidemia",
+    "left-sided hearing loss status post intratympanic steroid injection (2016/07/15)",
+    "hypertensive cardiovascular disease",
+    "HTN",
+    "DM",
+    "HLD",
+  ]);
+  const joined = deduped.join(" | ");
+  if (deduped.length !== 5) {
+    throw new Error(`PMH synonym dedupe kept ${deduped.length} items instead of 5:\n${joined}`);
+  }
+  if (!/^DM \| HTN \| HLD \|/.test(joined)) {
+    throw new Error(`PMH dedupe should keep the shorter abbreviation forms:\n${joined}`);
+  }
+  if (!/hearing loss status post/.test(joined) || !/hypertensive cardiovascular disease/i.test(joined)) {
+    throw new Error(`PMH dedupe dropped a distinct disease:\n${joined}`);
+  }
+  const strokeSafe = dedupeDiseaseItems([
+    "acute cerebral infarction involving the left M2 territory status post intravenous thrombolysis with tPA in 2020",
+    "old CVA",
+  ]);
+  if (strokeSafe.length !== 2) {
+    throw new Error(`detailed stroke history must not collapse into bare CVA:\n${strokeSafe.join(" | ")}`);
+  }
+  const textForm = dedupeDiseaseText("diabetes mellitus, hypertension, hyperlipidemia, HTN, DM, and HLD");
+  if (textForm !== "DM, HTN, HLD") {
+    throw new Error(`PMH text dedupe produced: ${textForm}`);
+  }
+  console.log("PASS PMH synonym dedupe collapses full-name/abbreviation duplicates without losing distinct diseases");
+  supplementalPasses += 1;
+} catch (error) {
+  failures.push({ name: "PMH synonym dedupe", error: error instanceof Error ? error.message : String(error) });
+  console.error(`FAIL PMH synonym dedupe: ${failures[failures.length - 1].error}`);
+}
+
 await server.close();
 
 if (failures.length > 0) {

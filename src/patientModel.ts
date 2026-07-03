@@ -17,6 +17,7 @@ import type {
 import { createId, nowIso, todayKey, normalizeDateKey, formatDateLabel } from "./dates";
 import { getAdmissionSummaryText, textToItems, plainClinicalText, safeClinicalLine, compactClinicalText, summarizeItems, splitHighlightLines, stripColorMarkup, importantLines, cleanClinicalTail } from "./clinicalTextFormat";
 import { labSummary, parseLabText, getLabFocusSummary, keyLabItems } from "./labParsing";
+import { dedupeDiseaseItems } from "./aiPostprocess/diseaseDedupe";
 
 export function getActivePatients(patients: Patient[]) {
   return patients.filter((patient) => patient.status === "active");
@@ -24,9 +25,11 @@ export function getActivePatients(patients: Patient[]) {
 
 
 export function getUnderlyingDiseaseItems(patient: Patient) {
-  return patient.underlyingDiseaseItems.length > 0
-    ? patient.underlyingDiseaseItems
-    : textToItems(patient.underlyingDiseases);
+  return dedupeDiseaseItems(
+    patient.underlyingDiseaseItems.length > 0
+      ? patient.underlyingDiseaseItems
+      : textToItems(patient.underlyingDiseases),
+  );
 }
 
 export function getActiveProblemItems(patient: Patient) {
