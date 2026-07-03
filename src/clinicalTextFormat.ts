@@ -206,5 +206,6 @@ export function compactClinicalText(value: string, maxLines = 2, fallback = "-")
 // (age/sex line + labeled PHx/CC/PI sections). Used to stop downstream
 // formatters from rebuilding or flattening a brief that is already correct.
 export function looksLikeStructuredAdmissionBrief(value: string) {
-  return /\bPHx\s*:/i.test(value) && /\bCC\s*:/i.test(value) && /\b(?:PI|HPI)\s*:/i.test(value);
+  const plain = stripColorMarkup(value).replace(/\*\*/g, "");
+  return /\bPHx\s*:/i.test(plain) && /\bCC\s*:/i.test(plain) && /\b(?:PI|HPI)\s*:/i.test(plain);
 }

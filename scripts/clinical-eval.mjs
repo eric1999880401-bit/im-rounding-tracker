@@ -129,8 +129,8 @@ function admissionSentenceCount(value) {
 
 function assertOneMinuteAdmissionBrief(value, label) {
   const lines = value.split("\n").map((line) => line.trim()).filter(Boolean);
-  if (lines.length < 4 || lines.length > 14) {
-    throw new Error(`${label} should be a compact structured brief (4-14 lines), got ${lines.length}: ${value}`);
+  if (lines.length < 4 || lines.length > 20) {
+    throw new Error(`${label} should be a compact structured brief (4-20 lines), got ${lines.length}: ${value}`);
   }
   if (!/\bPHx\s*:/.test(value) || !/\bCC\s*:/.test(value)) {
     throw new Error(`${label} did not use structured PHx:/CC: brief labels: ${value}`);
@@ -139,8 +139,8 @@ function assertOneMinuteAdmissionBrief(value, label) {
 
 function assertThreeMinuteAdmissionBrief(value, label) {
   const lines = value.split("\n").map((line) => line.trim()).filter(Boolean);
-  if (lines.length < 4 || lines.length > 16) {
-    throw new Error(`${label} should be a structured brief (4-16 lines), got ${lines.length}: ${value}`);
+  if (lines.length < 4 || lines.length > 28) {
+    throw new Error(`${label} should be a structured brief (4-28 lines), got ${lines.length}: ${value}`);
   }
   if (!/\b(?:CC|PHx)\s*:/.test(value) || !/\bImp\s*:/.test(value)) {
     throw new Error(`${label} did not use structured brief labels: ${value}`);
@@ -496,7 +496,7 @@ try {
     throw new Error(`admission summary did not use the structured brief labels: ${admission}`);
   }
   assertThreeMinuteAdmissionBrief(admission, "reasoning admission summary");
-  assertDocumentIncludes(admission, /Key O:[\s\S]*(Cr|K|SpO2|O2|Plt|Hb|Cx|CXR|CT|ERCP)/i, "reasoning admission summary should include key objective anchors");
+  assertDocumentIncludes(admission, /ED Lab:[\s\S]*(Cr|K|SpO2|O2|Plt|Hb|Cx|CXR|CT|ERCP)/i, "reasoning admission summary should include key objective anchors");
   assertDocumentIncludes(admission, /AKI\/hyperK|Plt-limited anticoag|aspiration risk/i, "admission summary should lead with current transfer risks");
   if (/Problem-Based A\/P|Pending \/ Disposition|\n\s*-/i.test(weekly)) {
     throw new Error(`weekly summary should be paragraph format without headings/bullets: ${weekly}`);
@@ -541,13 +541,14 @@ try {
     throw new Error(`rule-based admission summary should prefer clinical abbreviations: ${admission}`);
   }
   assertDocumentIncludes(admission, /PNA|sepsis|lactate|culture|O2|renal|anticoag/i, "new admission summary should preserve admission reason, active risks, and pending work");
-  assertDocumentIncludes(admission, /PHx:[\s\S]*CC:[\s\S]*PI:[\s\S]*Key O:[\s\S]*Imp:/i, "new admission summary should follow the structured brief order");
+  assertDocumentIncludes(admission, /PHx:[\s\S]*CC:[\s\S]*PI:[\s\S]*ED Lab:[\s\S]*(?:Image:[\s\S]*)?Imp:/i, "new admission summary should follow the structured brief order");
   const expanded = formatRuleBasedAdmissionSummary(newAdmissionPlan, { length: "threeMinute" });
   const briefLineCount = (value) => value.split("\n").filter((line) => line.trim()).length;
   if (briefLineCount(expanded) < briefLineCount(admission) || briefLineCount(expanded) > 18) {
     throw new Error(`3-min admission brief support should preserve/expand the brief safely: ${expanded}`);
   }
-  assertDocumentIncludes(expanded, /Key O:[\s\S]*(WBC|lactate|CXR|B\/C|SpO2|O2)/i, "3-min admission brief should preserve objective anchors");
+  assertDocumentIncludes(expanded, /ED Lab:[\s\S]*(WBC|lactate|SpO2|O2)/i, "3-min admission brief should preserve objective anchors");
+  assertDocumentIncludes(expanded, /Image:[\s\S]*CXR/i, "3-min admission brief should preserve image anchors");
   const reviewedPreferred = getAdmissionSummaryText(
     {
       ...emptyPatient(),
@@ -3207,24 +3208,34 @@ try {
     [
       "The 90-y-o female w/ PHx of T2DM w/ prior DKA, UTI, volume depletion, paroxysmal AF, and dementia was admitted via emergency department because of left thigh redness and swelling.",
       "Left thigh redness and swelling had been noted for several days w/o trauma, obvious wound, or local tenderness.",
-      "Fever up to 38.8\u00b0C for 1 day. Hypotension to 84/45 was noted.",
-      "ED work-up showed WBC 9.6 k/\u00b5L w/ Neu 93.5%, BUN/Cr 33/0.63, glucose 169 mg/dL, serum ketone 0.5, VBG pH 7.42.",
-      "CXR showed mild increased right infiltrate, similar to exam performed in March. KUB showed moderate fecal components.",
+      "Fever up to 38.8\u00b0C for 1 day. Vomiting since tonight. Hypotension to 84/45 was noted.",
+      "Diarrhea x2 after ED arrival. No oliguria. Abd soft, no guarding.",
+      "ED work-up showed WBC 9.6 k/\u00b5L w/ Neu 93.5%, BUN/Cr 33/0.63, glucose 169 mg/dL, serum ketone 0.5, VBG pH 7.42 then 7.38, lactate 26.9 then 20.6 mg/dL.",
+      "UA: WBC 26/HPF, RBC 18/HPF, LE +/-, nitrite negative. Stool WBC/RBC/OB all negative.",
+      "CXR showed mild increased right infiltrate, similar to exam performed in 2026/03. KUB showed moderate fecal components.",
       "Bedside echo showed IVC ~0.5 cm w/ >50% variation, so LR hydration was given, and IV Curam plus clindamycin was started.",
       "Under the impression of Lt cellulitis, she was admitted for further evaluation and treatment.",
     ].join("\n"),
   );
   const narrativeBrief = formatRuleBasedAdmissionSummary(narrativePlan, { length: "threeMinute" });
-  const phxLine = narrativeBrief.split("\n").find((line) => line.startsWith("PHx:")) ?? "";
+  const plainNarrativeBrief = narrativeBrief.replace(/\*\*/g, "");
+  const phxLine = plainNarrativeBrief.split("\n").find((line) => line.startsWith("PHx:")) ?? "";
   if (phxLine && /\b(?:was|is)\s+admitted\b|admitted via/i.test(phxLine)) {
     throw new Error(`PHx line kept the admission-sentence narrative: ${phxLine}`);
+  }
+  assertDocumentIncludes(narrativeBrief, /^90F$/m, "C15-style admission brief should start with age/sex");
+  assertDocumentIncludes(narrativeBrief, /PHx:\s*T2DM c prior DKA, prior UTI, volume depletion, pAF, dementia/i, "C15-style admission brief should preserve concise PHx");
+  assertDocumentIncludes(narrativeBrief, /CC:\s*fever up to 38\.8.C x 1 d/i, "C15-style admission brief should keep fever as CC");
+  assertDocumentIncludes(narrativeBrief, /ED Lab:[\s\S]*Serum ketone 0\.5, VBG pH 7\.42[\s\S]*7\.38[\s\S]*no DKA/i, "C15-style admission brief should preserve ketone/VBG/no-DKA line");
+  assertDocumentIncludes(narrativeBrief, /Image:[\s\S]*CXR:[\s\S]*KUB:/i, "C15-style admission brief should split image findings");
+  assertDocumentIncludes(narrativeBrief, /ED Course:[\s\S]*IVC ~0\.5 cm[\s\S]*Started IV Curam \+ clindamycin/i, "C15-style admission brief should preserve ED course and treatment");
+  assertDocumentIncludes(narrativeBrief, /Imp:[\s\S]*1\. Fever\/sepsis, likely Lt thigh cellulitis[\s\S]*5\. T2DM, no DKA this time/i, "C15-style admission brief should use numbered source-grounded Imp");
+  if (/\*\*/.test(narrativeBrief) || /Key O:|Plan:|DKA\/HHS|AKI\/electrolyte|PNA\/O2|source\/Cx\/Abx|transition readiness|Abx response\/weaning/i.test(plainNarrativeBrief)) {
+    throw new Error(`C15-style admission brief leaked old labels or canned rule titles:\n${narrativeBrief}`);
   }
   const admittedMentions = (narrativeBrief.match(/admitted via/gi) ?? []).length;
   if (admittedMentions > 1) {
     throw new Error(`the admission sentence is duplicated across sections:\n${narrativeBrief}`);
-  }
-  if (/source\/Cx\/Abx|transition readiness|Abx response\/weaning/i.test(narrativeBrief)) {
-    throw new Error(`Imp section leaked canned rule-hint phrases:\n${narrativeBrief}`);
   }
   const planSection = narrativeBrief.split(/\nPlan:\n?/)[1] ?? "";
   if (/\b(?:KUB|CXR|echo)\s+showed\b/i.test(planSection)) {
@@ -3232,7 +3243,7 @@ try {
   }
   const fragmentKeys = narrativeBrief
     .split(/\n|;\s*/)
-    .map((item) => item.replace(/^(?:PHx|CC|PI|Key O|Imp|Plan):?\s*/, "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "").slice(0, 60))
+    .map((item) => item.replace(/\*\*/g, "").replace(/^(?:PHx|CC|PI|ED Lab|Image|ED Course|Imp|Plan):?\s*/, "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "").slice(0, 60))
     .filter((item) => item.length > 12);
   const duplicated = fragmentKeys.find((key, index) => fragmentKeys.indexOf(key) !== index);
   if (duplicated) {

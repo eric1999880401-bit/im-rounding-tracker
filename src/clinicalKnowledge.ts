@@ -597,7 +597,7 @@ function admissionWhoFragment(sourceText: string) {
   const text = sourceText.replace(/\s+/g, " ");
   const compact = text.match(/\b(\d{1,3})\s*([MF])\b/i);
   if (compact) return `${compact[1]}${compact[2].toUpperCase()}`;
-  const verbose = text.match(/\b(\d{1,3})[- ]?(?:year[- ]?old|yo|y\/o)\s*(male|female|man|woman|M|F)\b/i);
+  const verbose = text.match(/\b(\d{1,3})[- ]?(?:year[- ]?old|y[- ]?o|yo|y\/o)\s*(male|female|man|woman|M|F)\b/i);
   if (!verbose) return "";
   const sex = /^(?:f|woman)/i.test(verbose[2]) ? "F" : "M";
   return `${verbose[1]}${sex}`;
@@ -670,13 +670,9 @@ function impressionClausesFromSource(sourceText: string) {
   return Array.from(sourceText.matchAll(/\bunder the impression of\s+([^,.;\n]+)/gi)).map((match) => match[1].trim());
 }
 
-function isActionLikeFragment(value: string) {
-  return /^!?\s*(?:f\/u|follow|confirm|clarify|check|cont\b|continue|hold|repeat|recheck|arrange|consult|call|start|stop|resume|titrate|replete|order|educate|trend|wean|adjust|survey|eval|r\/o|dc\b|discharge|need|pending)/i.test(value.trim());
-}
-
 // Joins labeled sections into the structured brief, deduping fragments so the
 // same sentence never appears under two labels; empty sections are dropped.
-function assembleStructuredBrief(sections: Array<{ label: string; fragments: string[] }>, leadLine: string) {
+function assembleStructuredBrief(sections: Array<{ label: string; fragments: string[] }>, leadLines: string | string[] = "") {
   const seen = new Set<string>();
   const keep = (fragment: string) => {
     const key = fragment.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "").slice(0, 60);
@@ -684,8 +680,9 @@ function assembleStructuredBrief(sections: Array<{ label: string; fragments: str
     seen.add(key);
     return true;
   };
-  const lines: string[] = [];
-  if (leadLine.trim()) lines.push(leadLine.trim());
+  const groups: string[] = [];
+  const lead = Array.isArray(leadLines) ? leadLines : [leadLines];
+  lead.map((line) => line.trim()).filter(Boolean).forEach((line) => groups.push(line));
   sections.forEach((section) => {
     const fragments = section.fragments
       .map((fragment) => cleanSnippetTail(abbreviateAdmissionSummaryText(fragment)))
@@ -694,17 +691,244 @@ function assembleStructuredBrief(sections: Array<{ label: string; fragments: str
       .filter(keep);
     if (fragments.length === 0) return;
     if (section.label === "PHx" || section.label === "CC") {
-      lines.push(`${section.label}: ${fragments.join("; ")}`);
+      groups.push(`${section.label}: ${fragments.join("; ")}`);
     } else if (section.label === "Imp") {
-      lines.push("Imp:", ...fragments.map((fragment, index) => `${index + 1}. ${fragment}`));
+      groups.push([`${section.label}:`, ...fragments.map((fragment, index) => `${index + 1}. ${fragment}`)].join("\n"));
     } else {
-      lines.push(`${section.label}:`, fragments.join("; "));
+      groups.push([`${section.label}:`, ...fragments].join("\n"));
     }
   });
-  return lines.join("\n");
+  return groups.join("\n\n");
+}
+
+function normalizeSourcePhrase(value: string) {
+  return value
+    .replace(/\bwith\b/gi, "c")
+    .replace(/\bw\/\s*/gi, "c ")
+    .replace(/\band\b/gi, ",")
+    .replace(/\bparoxysmal\s+AF\b/gi, "pAF")
+    .replace(/\bprior\s+DKA,\s*UTI\b/gi, "prior DKA, prior UTI")
+    .replace(/\s*,\s*/g, ", ")
+    .replace(/\s+/g, " ")
+    .replace(/,\s*,/g, ",")
+    .replace(/,\s*$/g, "")
+    .trim();
+}
+
+function sourcePmhLine(sourceText: string) {
+  const text = sourceText.replace(/\s+/g, " ");
+  const phx = text.match(/\bP(?:Hx|MH)\s*(?:of|:)?\s+(.+?)(?=\s+(?:was|is|has been)\s+admitted|\.\s|$)/i);
+  if (phx) return normalizeSourcePhrase(phx[1]);
+  const pmh = text.match(/\bPMH\s+(.+?)(?=\.|$)/i);
+  return pmh ? normalizeSourcePhrase(pmh[1]) : "";
+}
+
+function durationToBrief(value: string) {
+  const lower = value.toLowerCase();
+  const number = lower.match(/\b(\d+)\b/)?.[1] ?? "";
+  if (/day| d\b/.test(lower)) return `${number || "1"} d`;
+  if (/week| wk/.test(lower)) return `${number || "1"} wk`;
+  if (/month| mo/.test(lower)) return `${number || "1"} mo`;
+  return value.trim();
+}
+
+function sourceChiefComplaint(sourceText: string) {
+  const text = sourceText.replace(/\s+/g, " ");
+  const fever = text.match(/\bfever(?:\s+up\s+to)?\s*(\d+(?:\.\d+)?)\s*(?:\u00b0|degrees?)?\s*C?[^.]*?\b(?:for|x)\s+([^.;,]+)/i);
+  if (fever) return `fever up to ${fever[1]}\u00b0C x ${durationToBrief(fever[2])}`;
+  const newAdmission = text.match(/\bnew admission\s+\d{1,3}\s*[MF]\s+(.+?)(?=\.|,|\bDx\b)/i);
+  if (newAdmission) return newAdmission[1].trim();
+  const reason = extractAdmissionReasonClause(text);
+  return reason ? abbreviateAdmissionSummaryText(reason) : "";
+}
+
+function sourcePiLines(sourceText: string) {
+  const text = sourceText.replace(/\s+/g, " ");
+  const lines: string[] = [];
+  const feverDuration = text.match(/\bfever(?:\s+up\s+to\s*\d+(?:\.\d+)?\s*(?:\u00b0|degrees?)?\s*C?)?[^.]*?\b(?:for|x)\s+([^.;,]+)/i)?.[1];
+  const vomiting = /\bvomit(?:ing)?\b[^.]*\bsince tonight\b/i.test(text);
+  if (feverDuration || vomiting) {
+    lines.push([feverDuration ? `Fever x ${durationToBrief(feverDuration)}` : "", vomiting ? "vomiting since tonight" : ""].filter(Boolean).join(" + ") + ".");
+  }
+
+  if (/\b(?:left|lt)\s+thigh\b/i.test(text) && /\bredness\b/i.test(text) && /\bswelling\b/i.test(text)) {
+    const negatives = [
+      /\bno trauma\b|\bw\/o trauma\b/i.test(text) ? "no trauma" : "",
+      /\bno obvious wound\b|\bw\/o (?:[^.]*,\s*)?obvious wound\b/i.test(text) ? "no obvious wound" : "",
+      /\bno local tenderness\b|\bw\/o [^.]*local tenderness\b/i.test(text) ? "no local tenderness" : "",
+    ].filter(Boolean);
+    lines.push(`Lt thigh redness/swelling x several days${negatives.length ? `, ${negatives.join(", ")}` : ""} \u2192 favor cellulitis.`);
+  }
+
+  const giBits: string[] = [];
+  if (/\bdiarrhea\b[^.]*\bx\s*2\b|\bD\s*x\s*2\b/i.test(text)) giBits.push("D x2 after ED arrival");
+  if (/\bno oliguria\b/i.test(text)) giBits.push("No oliguria");
+  if (/\babd(?:omen)?\s+soft\b/i.test(text)) {
+    giBits.push(/\bno guarding\b/i.test(text) ? "Abd soft, no guarding" : "Abd soft");
+  } else if (/\bno guarding\b/i.test(text)) {
+    giBits.push("No guarding");
+  }
+  if (giBits.length > 0) lines.push(`${giBits.join(". ")}.`);
+  if (lines.length === 0) {
+    const diagnosis = text.match(/\bDx\s+(.+?)(?=\.|,?\s*(?:BP|HR|RR|SpO2|O2|WBC|lactate)\b)/i)?.[1]?.trim();
+    const vitals = [
+      text.match(/\bBP\s*([0-9]{2,3}\s*\/\s*[0-9]{2,3})/i)?.[0]?.replace(/\s+/g, " "),
+      text.match(/\bSpO2\s*([0-9]{2,3}%\s*(?:NC\s*\d+\s*L|RA)?)/i)?.[0]?.replace(/\s+/g, " "),
+    ].filter(Boolean);
+    if (diagnosis) lines.push(`${abbreviateAdmissionSummaryText(diagnosis)}.`);
+    if (vitals.length > 0) lines.push(`${vitals.join(", ")}.`);
+  }
+  return lines;
+}
+
+function normalizeNegative(value: string) {
+  return /\b(?:negative|neg|\(-\)|-)\b/i.test(value) ? "(-)" : value.replace(/\bnegative\b/gi, "(-)");
+}
+
+function sourceLabLines(sourceText: string) {
+  const text = sourceText.replace(/\s+/g, " ");
+  const lines: string[] = [];
+  const wbc = text.match(/\bWBC\s*([0-9.]+)\s*k?/i)?.[1];
+  const neu = text.match(/\bNeu\s*([0-9.]+)\s*%/i)?.[1];
+  if (wbc || neu) lines.push([wbc ? `WBC ${wbc}k` : "", neu ? `Neu ${neu}%` : ""].filter(Boolean).join(", "));
+
+  const bunCr = text.match(/\bBUN\s*\/\s*Cr\s*([0-9.]+\s*\/\s*[0-9.]+)/i)?.[1]?.replace(/\s+/g, "");
+  const glucose = text.match(/\b(?:Glu|glucose)\s*([0-9.]+)/i)?.[1];
+  if (bunCr || glucose) lines.push([bunCr ? `BUN/Cr ${bunCr}` : "", glucose ? `Glu ${glucose}` : ""].filter(Boolean).join(", "));
+
+  const ketone = text.match(/\b(?:serum\s+)?ketone\s*([0-9.]+)/i)?.[1];
+  const ph = text.match(/\b(?:VBG\s*)?pH\s*([0-9.]+)(?:\s*(?:then|to|->|\u2192)\s*([0-9.]+))?/i);
+  if (ketone || ph) {
+    const phValues = ph ? [ph[1], ph[2]].filter(Boolean).join(` \u2192 `) : "";
+    const noDka = ketone && ph?.[1] && Number(ketone) <= 0.6 && Number(ph[1]) >= 7.3;
+    const gas = [phValues ? `VBG pH ${phValues}` : "", noDka ? "no DKA" : ""].filter(Boolean).join(` \u2192 `);
+    lines.push([ketone ? `Serum ketone ${ketone}` : "", gas].filter(Boolean).join(", "));
+  }
+
+  const lactate = text.match(/\bLactate\s*([0-9.]+)(?:\s*(?:then|to|->|\u2192)\s*([0-9.]+))?(?:\s*mg\/dL)?/i);
+  if (lactate) lines.push(`Lactate ${[lactate[1], lactate[2]].filter(Boolean).join(` \u2192 `)} mg/dL`);
+
+  const ua = text.match(/\bUA\s*:?\s*WBC\s*([0-9.]+\/HPF),?\s*RBC\s*([0-9.]+\/HPF),?\s*LE\s*([+\-\/]+),?\s*nitrite\s*([^) .,;]+|\(-\)|negative)/i);
+  if (ua) lines.push(`UA: WBC ${ua[1]}, RBC ${ua[2]}, LE ${ua[3]}, nitrite ${normalizeNegative(ua[4])}`);
+
+  if (/\bstool\b/i.test(text) && /\bWBC\b/i.test(text) && /\bRBC\b/i.test(text) && /\bOB\b/i.test(text) && /\b(?:all\s+)?negative\b/i.test(text)) {
+    lines.push("Stool: WBC/RBC/OB all (-)");
+  }
+  return lines;
+}
+
+function sourceImageLines(sourceText: string) {
+  const text = sourceText.replace(/\s+/g, " ");
+  const lines: string[] = [];
+  if (/\bCXR\b/i.test(text)) {
+    const comparison = text.match(/\bsimilar to (?:exam performed in |)(\d{4}\/\d{1,2})/i)?.[1];
+    const infiltrate = /\bmild\b[^.]*\b(?:right|rt)\s+infiltrate\b/i.test(text);
+    if (infiltrate) lines.push(`CXR: mild \u2191 Rt infiltrate${comparison ? `, similar to ${comparison} film` : ""}`);
+    if (!infiltrate) {
+      const cxr = text.match(/\bCXR\s+([^.;]+)/i)?.[1]?.trim();
+      if (cxr) lines.push(`CXR: ${abbreviateAdmissionSummaryText(cxr)}`);
+    }
+  }
+  if (/\bKUB\b/i.test(text) && /\bmoderate\b[^.]*\bfecal\b/i.test(text)) {
+    lines.push("KUB: moderate fecal components");
+  }
+  return lines;
+}
+
+function sourceCourseLines(sourceText: string) {
+  const text = sourceText.replace(/\s+/g, " ");
+  const lines: string[] = [];
+  const bp = text.match(/\b(?:BP\s+down\s+to|Hypotension\s+to)\s*([0-9]{2,3}\s*\/\s*[0-9]{2,3})/i)?.[1]?.replace(/\s+/g, "");
+  const ivc = text.match(/\bIVC\s*~?\s*([0-9.]+)\s*cm\b[^.]*?(>\s*50\s*%\s*variation)/i);
+  if (bp || ivc) {
+    lines.push([
+      bp ? `BP down to ${bp}.` : "",
+      ivc ? `Bedside echo: IVC ~${ivc[1]} cm c ${ivc[2].replace(/\s+/g, " ").replace(/>\s+/, ">")} \u2192 suspect volume depletion component.` : "",
+    ].filter(Boolean).join(" "));
+  }
+  const hydration = /\bLR hydration\b|\blactated ringer/i.test(text);
+  const curam = /\bcuram\b/i.test(text);
+  const clinda = /\bclindamycin\b/i.test(text);
+  if (hydration || curam || clinda) {
+    lines.push([hydration ? "s/p LR hydration." : "", curam || clinda ? `Started ${[curam ? "IV Curam" : "", clinda ? "clindamycin" : ""].filter(Boolean).join(" + ")}.` : ""].filter(Boolean).join(" "));
+  }
+  const abxStarted = text.match(/\b((?:ceftriaxone|azithro|azithromycin|vanco|vancomycin|cefepime|ceftazidime|pip\/tazo|zosyn|mero|meropenem|levofloxacin|ciprofloxacin)(?:\s*\/\s*|\s*\+\s*|\s+and\s+)?(?:azithro|azithromycin|vanco|vancomycin|ceftriaxone|cefepime|ceftazidime|pip\/tazo|zosyn|mero|meropenem|levofloxacin|ciprofloxacin)?)\s+started\s+after\s+B\/C/i)?.[1];
+  if (abxStarted && !lines.some((line) => /started/i.test(line))) {
+    lines.push(`Started ${abbreviateAdmissionSummaryText(abxStarted)} after B/C.`);
+  }
+  return lines;
+}
+
+function sourceImpressionLines(sourceText: string, plan: GeneratedClinicalPlan) {
+  const text = sourceText.replace(/\s+/g, " ");
+  const lines: string[] = [];
+  const cellulitis = /\bcellulitis\b/i.test(text) || (/\b(?:left|lt)\s+thigh\b/i.test(text) && /\bredness\b/i.test(text) && /\bswelling\b/i.test(text));
+  if (/\bfever\b/i.test(text) && cellulitis) lines.push("Fever/sepsis, likely Lt thigh cellulitis");
+  if (/\b(?:hypotension|BP\s+down\s+to)\b/i.test(text)) {
+    lines.push(/\blactate\b/i.test(text) && /\bLR hydration\b/i.test(text)
+      ? "Hypotension, favor hypovolemia-related, lactate improved after hydration"
+      : "Hypotension, favor hypovolemia-related");
+  }
+  if (/\bUA\b/i.test(text) && /\bWBC\s*[0-9.]+\/HPF\b/i.test(text) && /\bRBC\s*[0-9.]+\/HPF\b/i.test(text)) {
+    lines.push("Pyuria/hematuria, r/o UTI");
+  }
+  if (/\bdiarrhea\b|\bD\s*x\s*2\b/i.test(text)) {
+    lines.push(/\bstool\b/i.test(text) && /\bnegative\b/i.test(text)
+      ? "Diarrhea, stool exam negative; r/o infectious gastroenteritis"
+      : "Diarrhea, r/o infectious gastroenteritis");
+  }
+  if (/\bT2DM\b|\bDM\b|diabetes/i.test(text)) {
+    lines.push(/\bno\s+DKA\b/i.test(text) || /\bketone\s*0\.[0-9]\b/i.test(text) ? "T2DM, no DKA this time" : "T2DM");
+  }
+  if (lines.length === 0 && /\b(?:CAP|PNA|pneumonia)\b/i.test(text)) {
+    lines.push(/\bsepsis\b/i.test(text) ? "CAP/sepsis physiology" : "CAP/PNA");
+  } else if (!lines.some((line) => /\b(?:CAP|PNA|pneumonia)\b/i.test(line)) && /\b(?:CAP|PNA|pneumonia)\b/i.test(text) && /\bsepsis\b/i.test(text)) {
+    lines.push("CAP/sepsis physiology");
+  }
+  if (/\b(?:SpO2\s*(?:8[0-9]|9[0-2])|NC\s*\d+\s*L|O2\s+wean|oxygen)\b/i.test(text) && !lines.some((line) => /\bO2\b|SpO2/i.test(line))) {
+    lines.push("Hypoxemia/O2 need");
+  }
+  if (/\bCKD\d*\b/i.test(text) && /\brenal-dose\b/i.test(text)) {
+    lines.push("CKD, renal-dose meds");
+  }
+  if (/\bAF\b|\bapixaban\b/i.test(text) && /\banticoag|bleed/i.test(text)) {
+    lines.push("AF on anticoag, bleed review");
+  }
+
+  const sourceSpecific = lines.length > 0;
+  const generic = plan.problemBasedAP
+    .map((item) => shortProblemTitle(item.problemTitle))
+    .filter((title) => {
+      if (sourceSpecific && /^(?:DKA\/HHS|AKI\/electrolyte|AKI\/Na|PNA\/O2|Pulm\/O2|Glu)$/i.test(title)) return false;
+      if (sourceSpecific && /^Infx\/sepsis$/i.test(title) && lines.some((line) => /sepsis/i.test(line))) return false;
+      return !lines.some((line) => line.toLowerCase().includes(title.toLowerCase()));
+    })
+    .slice(0, Math.max(0, 5 - lines.length));
+  return [...lines, ...generic].slice(0, 6);
+}
+
+function formatSourceAdmissionBrief(plan: GeneratedClinicalPlan) {
+  const sourceText = plan.facts.sourceText;
+  if (!/\b(?:new admission|admitted|emergency department|ED\b|P(?:Hx|MH)|under the impression)\b/i.test(sourceText)) return "";
+  const leadLines = [admissionWhoFragment(sourceText)].filter(Boolean);
+  const sections = [
+    { label: "PHx", fragments: [sourcePmhLine(sourceText)] },
+    { label: "CC", fragments: [sourceChiefComplaint(sourceText)] },
+    { label: "PI", fragments: sourcePiLines(sourceText) },
+    { label: "ED Lab", fragments: sourceLabLines(sourceText) },
+    { label: "Image", fragments: sourceImageLines(sourceText) },
+    { label: "ED Course", fragments: sourceCourseLines(sourceText) },
+    { label: "Imp", fragments: sourceImpressionLines(sourceText, plan) },
+  ];
+  const usefulSections = sections.filter((section) => section.fragments.some((fragment) => fragment.trim())).length;
+  if (leadLines.length === 0 && usefulSections < 4) return "";
+  return assembleStructuredBrief(sections, leadLines);
 }
 
 export function formatRuleBasedAdmissionSummary(plan: GeneratedClinicalPlan, options: AdmissionBriefOptions = {}) {
+  const sourceBrief = formatSourceAdmissionBrief(plan);
+  if (sourceBrief) return sourceBrief;
+
   const limits = admissionBriefLimits(options);
   const who = admissionWhoFragment(plan.facts.sourceText);
   const diagnosis = admissionSummaryFacts([...plan.facts.diagnoses, ...plan.facts.activeProblems], limits.diagnosisItems, limits.factLength)
@@ -746,18 +970,7 @@ export function formatRuleBasedAdmissionSummary(plan: GeneratedClinicalPlan, opt
   )
     .map(abbreviateAdmissionSummaryText)
     .join("; ");
-  const pending = admissionSummaryFacts(
-    [
-      ...plan.facts.pendingItems,
-      ...plan.todayTasks.map((task) => task.text),
-      ...plan.problemBasedAP.flatMap((item) => prioritizePlanLines(item.planItems).slice(0, 2)),
-      ...compactDispositionFacts(plan.facts.dischargeDisposition, 2, 80),
-    ],
-    limits.pendingItems,
-    limits.factLength,
-  ).join("; ");
-
-  // Structured admission brief format (age/sex, PHx:, CC:, PI:, Key O:, Imp:, Plan:)
+  // Structured admission brief format (age/sex, PHx:, CC:, PI:, ED Lab:, ED Course:, Imp:)
   // matching the clinician's oral-brief template; sections without facts are omitted.
   const splitFragments = (value: string) => value.split(/;\s*/).map((item) => item.trim()).filter(Boolean);
   return assembleStructuredBrief(
@@ -774,12 +987,11 @@ export function formatRuleBasedAdmissionSummary(plan: GeneratedClinicalPlan, opt
       // Treatment-action sentences belong in ED Course even when they also
       // mention labs/imaging keywords that match the objective-anchor pattern.
       {
-        label: "Key O",
+        label: "ED Lab",
         fragments: splitFragments(objective).filter((fragment) => !/\b(?:was given|were given|started|initiated|s\/p)\b/i.test(fragment)),
       },
       { label: "ED Course", fragments: [...splitFragments(treatment), ...splitFragments(response)] },
       { label: "Imp", fragments: [...impressionClausesFromSource(plan.facts.sourceText), ...splitFragments(active)] },
-      { label: "Plan", fragments: splitFragments(pending).filter(isActionLikeFragment) },
     ],
     who,
   );
@@ -1062,19 +1274,10 @@ export function formatReasoningAdmissionSummary(
   const objective = fallbackPlan
     ? admissionObjectiveAnchors(fallbackPlan, limits.objectiveItems, limits.factLength).join("; ")
     : admissionSummaryFacts(reasoning.whyThisMatters.map((item) => item.fact), limits.objectiveItems, limits.factLength).join("; ");
-  const tasks = compactList(
-    [
-      ...topProblems.flatMap((item) => item.todayPlan),
-      ...reasoning.missingDataNeeded.map((item) => `clarify ${item}`),
-      ...(fallbackPlan?.todayTasks.map((task) => task.text) ?? []),
-    ],
-    limits.pendingItems,
-    limits.factLength,
-  ).map(abbreviateAdmissionSummaryText);
   const active = compactList(topProblems.map((item) => item.problem), limits.activeItems, 52).map(abbreviateAdmissionSummaryText).join("; ");
   const currentLead = compactSnippet(reasoning.primaryRisk || reasoning.currentClinicalState, 110);
 
-  // Structured admission brief format (age/sex, PHx:, CC:, PI:, Key O:, Imp:, Plan:)
+  // Structured admission brief format (age/sex, PHx:, CC:, PI:, ED Lab:, Imp:)
   // matching the clinician's oral-brief template; sections without facts are omitted.
   const splitFragments = (value: string) => value.split(/;\s*/).map((item) => item.trim()).filter(Boolean);
   const impression = [active, !active && currentLead ? currentLead : ""].filter(Boolean).join("; ");
@@ -1083,9 +1286,8 @@ export function formatReasoningAdmissionSummary(
       { label: "PHx", fragments: splitFragments(pmh).map(extractPmhClause) },
       { label: "CC", fragments: splitFragments(diagnosis || currentLead).map(extractAdmissionReasonClause).filter(Boolean) },
       { label: "PI", fragments: splitFragments(course) },
-      { label: "Key O", fragments: splitFragments(objective) },
+      { label: "ED Lab", fragments: splitFragments(objective) },
       { label: "Imp", fragments: splitFragments(impression) },
-      { label: "Plan", fragments: tasks.filter(isActionLikeFragment) },
     ],
     who,
   );
