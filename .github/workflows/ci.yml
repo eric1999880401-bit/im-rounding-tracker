@@ -40,3 +40,6 @@ jobs:
 
       - name: Clinical eval
         run: npm run clinical:eval
+
+      - name: Lint (size guard, warnings only)
+        run: npm run lint

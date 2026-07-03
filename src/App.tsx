@@ -1,16 +1,17 @@
 import { Navigate, Route, Routes } from "react-router-dom";
-import { useEffect, useState } from "react";
+import { Suspense, lazy, useEffect, useState } from "react";
 import type { DailyNote, DailyNotesByPatient, MiscTask, Patient, PhonebookContact, StudyTopic, UserPreferences } from "./types";
 import AppLayout from "./components/AppLayout";
-import PatientBoardPage from "./pages/PatientBoardPage";
-import PatientDetailPage from "./pages/PatientDetailPage";
-import TodayTasksPage from "./pages/TodayTasksPage";
-import ArchivePage from "./pages/ArchivePage";
-import PrintRoundingListPage from "./pages/PrintRoundingListPage";
-import SettingsPage from "./pages/SettingsPage";
-import UtilitiesPage from "./pages/UtilitiesPage";
-import AiDocumentsPage from "./pages/AiDocumentsPage";
 import AuthPage from "./pages/AuthPage";
+
+const PatientBoardPage = lazy(() => import("./pages/PatientBoardPage"));
+const PatientDetailPage = lazy(() => import("./pages/PatientDetailPage"));
+const TodayTasksPage = lazy(() => import("./pages/TodayTasksPage"));
+const ArchivePage = lazy(() => import("./pages/ArchivePage"));
+const PrintRoundingListPage = lazy(() => import("./pages/PrintRoundingListPage"));
+const SettingsPage = lazy(() => import("./pages/SettingsPage"));
+const UtilitiesPage = lazy(() => import("./pages/UtilitiesPage"));
+const AiDocumentsPage = lazy(() => import("./pages/AiDocumentsPage"));
 import { getUserName, signOutCurrentUser, useAuthUser } from "./firebase/auth";
 import { createPatient, deletePatient, saveDailyNote, subscribeToDailyNotes, subscribeToPatients, updatePatient } from "./firebase/patientService";
 import {
@@ -322,6 +323,7 @@ function App() {
 
   return (
     <I18nProvider language={preferences.language}>
+      <Suspense fallback={<div className="page">Loading…</div>}>
       <Routes>
         <Route
           element={
@@ -426,6 +428,7 @@ function App() {
         />
         </Route>
       </Routes>
+      </Suspense>
     </I18nProvider>
   );
 }

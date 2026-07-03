@@ -77,23 +77,23 @@ import sites are unchanged. Delete the shim in a follow-up codemod commit.
   concretizer map so web and functions stop drifting (currently duplicated with
   sync comments on both sides).
 
-## Phase 4 — Component and bundle slimming
+## Phase 4 — Component and bundle slimming — DONE (core)
 
-- Route-level `React.lazy` code splitting for pages (board, print, settings, AI docs)
-  to get the main chunk under ~500 kB.
-- Split `PatientBoardPage.tsx` and `AiIntakePanel.tsx` into subcomponents + hooks
-  (state logic into `useXxx` hooks, rendering into small components).
-- Split `clinicalKnowledge.ts` by clinical domain into `src/clinicalRules/`
-  (renal.ts, infection.ts, cardio.ts, respiratory.ts, gi.ts, endocrine.ts, onc.ts,
-  neuro.ts) implementing one shared rule interface; keep the fact extractor and the
-  digest projection as separate modules.
+- DONE: pages are lazy-loaded routes and Firebase SDK is a separate vendor chunk;
+  main chunk went from 1,071 kB to 418 kB and the Vite size warning is gone.
+- DONE: `clinicalKnowledge.ts` (1,996 lines) split into
+  `clinicalRules/references.ts`, `clinicalRules/ruleHelpers.ts`,
+  `clinicalRules/domainRules.ts` (8 domain blocks), with assembly/formatting
+  remaining in `clinicalKnowledge.ts` (1,178 lines).
+- Remaining: split `PatientBoardPage.tsx` and `AiIntakePanel.tsx` into
+  subcomponents + hooks; `npm run lint` lists the 13 files still over 600 lines.
 
-## Phase 5 — Keep it from re-accumulating
+## Phase 5 — Keep it from re-accumulating — DONE (core)
 
-- Add ESLint (with `max-lines` warning ~600 and `import/no-cycle`) and Prettier.
-- Add `docs/ARCHITECTURE.md` mapping the pipeline: paste → parse/classify →
-  rules/AI → sanitize/concretize → draft/guardrails → render/print, and which module
-  owns each stage. New code must name its stage.
+- DONE: ESLint with a warning-only `max-lines` (600) size guard, wired into CI.
+- DONE: `docs/ARCHITECTURE.md` maps the pipeline stages and module ownership.
+- Remaining: consider Prettier and `import/no-cycle` if churn justifies them;
+  delete the `utils.ts` shim after codemodding the 37 import sites.
 
 ## Explicit non-goals
 
