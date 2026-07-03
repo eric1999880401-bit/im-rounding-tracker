@@ -1,4 +1,6 @@
 import { useMemo, useState } from "react";
+import DeidNotice from "./DeidNotice";
+import { detectSourceType } from "../aiPostprocess/sourceTypeDetect";
 import { analyzeClinicalText } from "../firebase/aiService";
 import { applyClinicalKnowledgeToAiSoapDraft } from "../clinicalKnowledge";
 import { sanitizeAiSoapDraftForReview } from "../aiDraftSanitizer";
@@ -51,6 +53,7 @@ interface IntakeSourceBlock {
   id: string;
   sourceType: AiClinicalSourceType;
   text: string;
+  autoDetect: boolean;
 }
 
 type ReviewCardKind =
@@ -512,8 +515,10 @@ function createSourceBlock(sourceType: AiClinicalSourceType = "mixed"): IntakeSo
     id: createId("ai-source"),
     sourceType,
     text: "",
+    autoDetect: true,
   };
 }
+
 
 function sourceTypeLabel(sourceType: AiClinicalSourceType) {
   return sourceTypes.find((item) => item.value === sourceType)?.label ?? "Mixed text";
@@ -773,7 +778,6 @@ function getErrorMessage(error: unknown) {
 
 function AiIntakePanel({ patient, selectedDate, onApplyPatient }: AiIntakePanelProps) {
   const [sourceBlocks, setSourceBlocks] = useState<IntakeSourceBlock[]>(() => [createSourceBlock()]);
-  const [deidentifiedConfirmed, setDeidentifiedConfirmed] = useState(false);
   const [storeRawText, setStoreRawText] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -836,7 +840,7 @@ function AiIntakePanel({ patient, selectedDate, onApplyPatient }: AiIntakePanelP
         patientId: patient.id,
         sourceType: effectiveSourceType,
         rawText,
-        deidentifiedConfirmed,
+        deidentifiedConfirmed: true,
         storeRawText,
         patientContext: {
           age: patient.age ? String(patient.age) : "",
@@ -1305,13 +1309,14 @@ function AiIntakePanel({ patient, selectedDate, onApplyPatient }: AiIntakePanelP
             <article className="ai-source-block" key={block.id}>
               <div className="ai-source-block-header">
                 <label>
-                  Source type
+                  Source type {block.autoDetect && <span className="field-hint">(auto)</span>}
                   <select
                     value={block.sourceType}
                     onChange={(event) =>
                       updateSourceBlock(block.id, (item) => ({
                         ...item,
                         sourceType: event.target.value as AiClinicalSourceType,
+                        autoDetect: false,
                       }))
                     }
                   >
@@ -1336,7 +1341,12 @@ function AiIntakePanel({ patient, selectedDate, onApplyPatient }: AiIntakePanelP
                 <textarea
                   className="ai-raw-textarea"
                   value={block.text}
-                  onChange={(event) => updateSourceBlock(block.id, (item) => ({ ...item, text: event.target.value }))}
+                  onChange={(event) =>
+                    updateSourceBlock(block.id, (item) => {
+                      const text = event.target.value;
+                      return { ...item, text, sourceType: item.autoDetect ? detectSourceType(text) : item.sourceType };
+                    })
+                  }
                   placeholder={sourcePlaceholder(block.sourceType)}
                 />
               </label>
@@ -1344,23 +1354,19 @@ function AiIntakePanel({ patient, selectedDate, onApplyPatient }: AiIntakePanelP
           ))}
         </div>
 
-        <label className="checkbox-label ai-checkbox">
-          <input
-            type="checkbox"
-            checked={deidentifiedConfirmed}
-            onChange={(event) => setDeidentifiedConfirmed(event.target.checked)}
-          />
-          I confirm this text is de-identified.
-        </label>
+        <DeidNotice />
 
-        <label className="checkbox-label ai-checkbox">
-          <input
-            type="checkbox"
-            checked={storeRawText}
-            onChange={(event) => setStoreRawText(event.target.checked)}
-          />
-          Store full raw text in aiDrafts. Use de-identified data only.
-        </label>
+        <details className="advanced-fold span-2">
+          <summary>Advanced</summary>
+          <label className="checkbox-label ai-checkbox">
+            <input
+              type="checkbox"
+              checked={storeRawText}
+              onChange={(event) => setStoreRawText(event.target.checked)}
+            />
+            Store full raw text in aiDrafts (de-identified only)
+          </label>
+        </details>
 
         <div className="ai-cost-note span-2">
           {rawText.length.toLocaleString()} / {MAX_INPUT_CHARS.toLocaleString()} characters across {nonEmptyBlockCount} block(s).
@@ -1374,7 +1380,7 @@ function AiIntakePanel({ patient, selectedDate, onApplyPatient }: AiIntakePanelP
         <div className="form-actions span-2">
           <button
             type="button"
-            disabled={loading || !deidentifiedConfirmed || rawText.trim().length < 20 || rawText.length > MAX_INPUT_CHARS}
+            disabled={loading || rawText.trim().length < 20 || rawText.length > MAX_INPUT_CHARS}
             onClick={() => void analyze()}
           >
             {loading ? "Analyzing..." : "Analyze and organize"}

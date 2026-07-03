@@ -1073,6 +1073,7 @@ function PatientDetailPage({
               onSubmit={() => commitDraft()}
               submitLabel="Save Basic Info"
               showClinicalSections={false}
+              showHistoryFields={true}
               showTeamService={false}
               showStatus={false}
               onFieldBlur={handleFieldBlur}

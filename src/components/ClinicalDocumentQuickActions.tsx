@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import DeidNotice from "./DeidNotice";
 import {
   applyClinicalKnowledgeToText,
   formatRuleBasedSbar,
@@ -119,7 +120,6 @@ function ClinicalDocumentQuickActions({
   selectedDate,
   onSavePatient,
 }: ClinicalDocumentQuickActionsProps) {
-  const [deidentifiedConfirmed, setDeidentifiedConfirmed] = useState(false);
   const [loadingType, setLoadingType] = useState<QuickDocumentType | "">("");
   const [draft, setDraft] = useState<AiDocumentDraft | null>(null);
   const [editableText, setEditableText] = useState("");
@@ -136,11 +136,6 @@ function ClinicalDocumentQuickActions({
   async function generateDraft(documentType: QuickDocumentType) {
     setError("");
     setStatusMessage("");
-
-    if (!deidentifiedConfirmed) {
-      setError("Confirm selected patient notes are de-identified before AI generation.");
-      return;
-    }
 
     setLoadingType(documentType);
     try {
@@ -249,14 +244,7 @@ function ClinicalDocumentQuickActions({
         </div>
       </div>
 
-      <label className="checkbox-label ai-checkbox">
-        <input
-          type="checkbox"
-          checked={deidentifiedConfirmed}
-          onChange={(event) => setDeidentifiedConfirmed(event.target.checked)}
-        />
-        I confirm this patient's selected notes are de-identified before AI generation.
-      </label>
+      <DeidNotice />
 
       <div className="clinical-doc-action-grid">
         <button

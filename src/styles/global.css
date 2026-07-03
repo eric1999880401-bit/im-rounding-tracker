@@ -345,6 +345,28 @@ label {
   text-transform: none;
 }
 
+.deid-notice {
+  color: var(--warning-text, #8a5300);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.35;
+  margin: 2px 0;
+}
+
+.advanced-fold > summary {
+  color: var(--text-subtle);
+  cursor: pointer;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: normal;
+  list-style: revert;
+  text-transform: none;
+}
+
+.advanced-fold {
+  margin: 2px 0;
+}
+
 input,
 select,
 textarea {

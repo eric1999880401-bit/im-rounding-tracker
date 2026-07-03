@@ -10,6 +10,8 @@ interface PatientFormProps {
   onSubmit: () => void;
   submitLabel: string;
   showClinicalSections?: boolean;
+  showHistoryFields?: boolean;
+  showBriefToggle?: boolean;
   showTeamService?: boolean;
   showStatus?: boolean;
   onCancel?: () => void;
@@ -24,6 +26,8 @@ function PatientForm({
   onSubmit,
   submitLabel,
   showClinicalSections = true,
+  showHistoryFields = true,
+  showBriefToggle = true,
   showTeamService = true,
   showStatus = true,
   onCancel,
@@ -92,11 +96,12 @@ function PatientForm({
       </label>
 
       <label>
-        {t("field.ageSex")}
+        Age
         <input
           type="number"
           min="0"
-          value={patient.age}
+          value={patient.age ? patient.age : ""}
+          placeholder="—"
           onChange={(event) => updateField("age", Number(event.target.value))}
           onBlur={commitOnBlur}
         />
@@ -174,17 +179,19 @@ function PatientForm({
         {t("print.newAdmission")}
       </label>
 
-      <label className="checkbox-label">
-        <input
-          type="checkbox"
-          checked={patient.showAdmissionBriefOnPrint}
-          onChange={(event) => updateField("showAdmissionBriefOnPrint", event.target.checked)}
-          onBlur={commitOnBlur}
-        />
-        {t("action.includeBrief")}
-      </label>
+      {showBriefToggle && (
+        <label className="checkbox-label">
+          <input
+            type="checkbox"
+            checked={patient.showAdmissionBriefOnPrint}
+            onChange={(event) => updateField("showAdmissionBriefOnPrint", event.target.checked)}
+            onBlur={commitOnBlur}
+          />
+          {t("action.includeBrief")}
+        </label>
+      )}
 
-      {showClinicalSections && (
+      {showHistoryFields && (
         <>
           <label className="span-2">
             {t("field.pmh")}
@@ -208,19 +215,21 @@ function PatientForm({
               onCompositionEnd={handleCompositionEnd}
             />
           </label>
-
-          <div className="span-2">
-            <ActiveProblemEditor
-              legacyText={patient.activeProblems}
-              items={patient.activeProblemStructuredItems}
-              onLegacyTextChange={updateActiveProblems}
-              onItemsChange={(items) => updateField("activeProblemStructuredItems", items)}
-              onFieldBlur={commitOnBlur}
-              onCompositionStart={onCompositionStart}
-              onCompositionEnd={handleCompositionEnd}
-            />
-          </div>
         </>
+      )}
+
+      {showClinicalSections && (
+        <div className="span-2">
+          <ActiveProblemEditor
+            legacyText={patient.activeProblems}
+            items={patient.activeProblemStructuredItems}
+            onLegacyTextChange={updateActiveProblems}
+            onItemsChange={(items) => updateField("activeProblemStructuredItems", items)}
+            onFieldBlur={commitOnBlur}
+            onCompositionStart={onCompositionStart}
+            onCompositionEnd={handleCompositionEnd}
+          />
+        </div>
       )}
 
       <div className="form-actions span-2">

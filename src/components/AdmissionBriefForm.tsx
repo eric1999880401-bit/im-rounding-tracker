@@ -5,6 +5,7 @@ import { generateClinicalDocument } from "../firebase/aiService";
 import { stripMarkdownEmphasis } from "../utils";
 import type { Patient } from "../types";
 import ColorMarkupTextarea from "./ColorMarkupTextarea";
+import DeidNotice from "./DeidNotice";
 
 interface AdmissionBriefFormProps {
   patient: Patient;
@@ -24,7 +25,6 @@ function AdmissionBriefForm({
   onCompositionEnd,
 }: AdmissionBriefFormProps) {
   const [admissionNoteSource, setAdmissionNoteSource] = useState("");
-  const [deidentifiedConfirmed, setDeidentifiedConfirmed] = useState(false);
   const [generatingSummary, setGeneratingSummary] = useState(false);
   const [generationStatus, setGenerationStatus] = useState("");
   const [generationError, setGenerationError] = useState("");
@@ -114,11 +114,6 @@ function AdmissionBriefForm({
     setGenerationError("");
     setGenerationStatus("");
 
-    if (!deidentifiedConfirmed) {
-      setGenerationError("Confirm the pasted admission note is de-identified before AI generation.");
-      return;
-    }
-
     if (text.length < 40) {
       setGenerationError("Paste a longer de-identified admission note before generating a summary.");
       return;
@@ -159,8 +154,7 @@ function AdmissionBriefForm({
 
   function handleAdmissionNotePaste(event: ClipboardEvent<HTMLTextAreaElement>) {
     const pastedText = event.clipboardData.getData("text");
-    // Without de-identification confirmation the paste must still land in the textarea normally.
-    if (!pastedText.trim() || !deidentifiedConfirmed) return;
+    if (!pastedText.trim()) return;
     event.preventDefault();
     setAdmissionNoteSource(pastedText);
     window.setTimeout(() => {
@@ -171,11 +165,6 @@ function AdmissionBriefForm({
   function handleAdmissionSummaryPaste(event: ClipboardEvent<HTMLTextAreaElement>) {
     const pastedText = event.clipboardData.getData("text");
     if (!shouldTreatPasteAsAdmissionNote(pastedText)) return;
-    if (!deidentifiedConfirmed) {
-      setGenerationStatus("");
-      setGenerationError("Confirm de-identification, then click Generate summary to convert this admission note.");
-      return;
-    }
     event.preventDefault();
     setAdmissionNoteSource(pastedText);
     setGenerationStatus("");
@@ -203,14 +192,7 @@ function AdmissionBriefForm({
               {generatingSummary ? "Generating..." : "Generate summary"}
             </button>
           </div>
-          <label className="checkbox-label ai-checkbox">
-            <input
-              type="checkbox"
-              checked={deidentifiedConfirmed}
-              onChange={(event) => setDeidentifiedConfirmed(event.target.checked)}
-            />
-            I confirm the pasted admission note is de-identified.
-          </label>
+          <DeidNotice />
           <textarea
             className="admission-note-paste"
             value={admissionNoteSource}

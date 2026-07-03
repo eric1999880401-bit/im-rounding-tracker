@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import type { AiClinicalSourceType, DailyNote, KeywordHighlightRule, Patient, RoundingLayoutPreferences, UserAiStyleProfile } from "../types";
 import { generateRoundSoap } from "../firebase/aiService";
+import { readComposerPref, writeComposerPref } from "../composerPreferences";
 import { ClinicalText } from "./ClinicalText";
 import {
   formatSoapTextForEditorStyle,
@@ -64,6 +65,13 @@ interface RoundSoapComposerProps {
 
 type WorkflowMode = "dailyUpdate" | "newSoap" | "transferHandoff";
 type RoundSoapQualityMode = "fast" | "balanced" | "highAccuracy";
+
+// First SOAP for a patient with no reviewed history is a New SOAP; once any
+// reviewed note exists, default to Daily update. Transfer stays a manual pick.
+function deriveInitialWorkflowMode(dailyNotes: DailyNote[]): WorkflowMode {
+  const hasReviewedHistory = dailyNotes.some((note) => note.soapText?.trim() && note.soapStatus === "reviewed");
+  return hasReviewedHistory ? "dailyUpdate" : "newSoap";
+}
 
 const workflowModes: Array<{ value: WorkflowMode; label: string; helper: string; sourceType: AiClinicalSourceType }> = [
   {
@@ -220,14 +228,26 @@ function RoundSoapComposer({
   onDirtyChange,
 }: RoundSoapComposerProps) {
   const canonical = getCanonicalSoapText(patient, dailyNotes, selectedDate);
-  const [workflowMode, setWorkflowMode] = useState<WorkflowMode>("dailyUpdate");
+  const [workflowMode, setWorkflowMode] = useState<WorkflowMode>(() => deriveInitialWorkflowMode(dailyNotes));
   const [dailyFields, setDailyFields] = useState<DailyUpdateFields>(emptyDailyFields);
   const [newSoapFields, setNewSoapFields] = useState<NewSoapFields>(emptyNewSoapFields);
   const [transferFields, setTransferFields] = useState<TransferSoapFields>(emptyTransferFields);
   const [confirmed, setConfirmed] = useState(false);
-  const [soapFormat, setSoapFormat] = useState<SoapEditorFormat>("standard");
+  const [soapFormat, setSoapFormatState] = useState<SoapEditorFormat>(() =>
+    readComposerPref("soapFormat", ["standard", "plain", "compact"] as const, "standard"),
+  );
   const [previewMode, setPreviewMode] = useState<"soap" | "print">("soap");
-  const [qualityMode, setQualityMode] = useState<RoundSoapQualityMode>("balanced");
+  const [qualityMode, setQualityModeState] = useState<RoundSoapQualityMode>(() =>
+    readComposerPref("qualityMode", ["fast", "balanced", "highAccuracy"] as const, "balanced"),
+  );
+  const setSoapFormat = (value: SoapEditorFormat) => {
+    setSoapFormatState(value);
+    writeComposerPref("soapFormat", value);
+  };
+  const setQualityMode = (value: RoundSoapQualityMode) => {
+    setQualityModeState(value);
+    writeComposerPref("qualityMode", value);
+  };
   const [editorDraft, setEditorDraft] = useState(() => parseSoapTextToEditorDraft(canonical.text));
   const [editorHistory, setEditorHistory] = useState<UndoRedoHistory<ReturnType<typeof parseSoapTextToEditorDraft>>>(() =>
     createUndoRedoHistory(parseSoapTextToEditorDraft(canonical.text)),
