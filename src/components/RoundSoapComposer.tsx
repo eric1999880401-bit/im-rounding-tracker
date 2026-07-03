@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { AiClinicalSourceType, DailyNote, KeywordHighlightRule, Patient, RoundingLayoutPreferences, UserAiStyleProfile } from "../types";
 import { generateRoundSoap } from "../firebase/aiService";
 import { readComposerPref, writeComposerPref } from "../composerPreferences";
+import DeidNotice from "./DeidNotice";
 import { ClinicalText } from "./ClinicalText";
 import {
   formatSoapTextForEditorStyle,
@@ -26,13 +27,9 @@ import {
 } from "../soapDeltaGuardrails";
 import { normalizeAiSoapText } from "../aiSoapContract";
 import {
-  canRedo,
-  canUndo,
   createUndoRedoHistory,
   pushUndoRedoEdit,
-  redoEdit,
   replaceUndoRedoPresent,
-  undoEdit,
   type UndoRedoHistory,
 } from "../editHistory";
 import {
@@ -232,7 +229,6 @@ function RoundSoapComposer({
   const [dailyFields, setDailyFields] = useState<DailyUpdateFields>(emptyDailyFields);
   const [newSoapFields, setNewSoapFields] = useState<NewSoapFields>(emptyNewSoapFields);
   const [transferFields, setTransferFields] = useState<TransferSoapFields>(emptyTransferFields);
-  const [confirmed, setConfirmed] = useState(false);
   const [soapFormat, setSoapFormatState] = useState<SoapEditorFormat>(() =>
     readComposerPref("soapFormat", ["standard", "plain", "compact"] as const, "standard"),
   );
@@ -278,9 +274,24 @@ function RoundSoapComposer({
     editorHistoryRef.current = editorHistory;
   }, [editorHistory]);
 
+  const hasUnsavedEdits = dirty || Object.values(pendingOrderSources).some(Boolean);
+
   useEffect(() => {
-    onDirtyChange?.(dirty || Object.values(pendingOrderSources).some(Boolean));
-  }, [dirty, onDirtyChange, pendingOrderSources]);
+    onDirtyChange?.(hasUnsavedEdits);
+  }, [hasUnsavedEdits, onDirtyChange]);
+
+  // Warn before a tab close / reload / navigating away while SOAP edits are
+  // unsaved. In-app navigation already has the session recovery draft as a net;
+  // this covers tab close, where sessionStorage is lost.
+  useEffect(() => {
+    if (!hasUnsavedEdits) return;
+    const handler = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [hasUnsavedEdits]);
 
   useEffect(() => {
     const savedDraft = readRecoveryDraft<{ soapText: string }>(recoveryStorage, recoveryScope);
@@ -367,37 +378,6 @@ function RoundSoapComposer({
     setDeltaReview(null);
   }
 
-  function undoEditorDraft() {
-    const result = undoEdit(editorHistoryRef.current);
-    if (!result.changed) return;
-    editorHistoryRef.current = result.history;
-    setEditorHistory(result.history);
-    restoreEditorDraftFromHistory(result.history.present);
-    setStatus("Undo applied to local SOAP draft. Save reviewed SOAP to write Firestore.");
-  }
-
-  function redoEditorDraft() {
-    const result = redoEdit(editorHistoryRef.current);
-    if (!result.changed) return;
-    editorHistoryRef.current = result.history;
-    setEditorHistory(result.history);
-    restoreEditorDraftFromHistory(result.history.present);
-    setStatus("Redo applied to local SOAP draft. Save reviewed SOAP to write Firestore.");
-  }
-
-  function handleEditorKeyDown(event: KeyboardEvent<HTMLElement>) {
-    const isUndo = (event.ctrlKey || event.metaKey) && !event.shiftKey && event.key.toLowerCase() === "z";
-    const isRedo =
-      (event.ctrlKey || event.metaKey) &&
-      (event.key.toLowerCase() === "y" || (event.shiftKey && event.key.toLowerCase() === "z"));
-    if ((!isUndo && !isRedo) || isComposingRef.current) return;
-    const target = event.target as HTMLElement | null;
-    const editableTarget = target?.closest("textarea,input,[contenteditable='true']");
-    if (editableTarget && !target?.closest(".structured-soap-editor")) return;
-    event.preventDefault();
-    if (isUndo) undoEditorDraft();
-    else redoEditorDraft();
-  }
 
   const workflow = workflowModes.find((item) => item.value === workflowMode) ?? workflowModes[0];
 
@@ -531,11 +511,6 @@ function RoundSoapComposer({
     setStatus("");
     setWarnings([]);
     setDeltaReview(null);
-
-    if (!confirmed) {
-      setError("Confirm the pasted text is de-identified before generating SOAP.");
-      return;
-    }
 
     if (rawText.length < 10) {
       setError("Add source text into at least one guided field first.");
@@ -695,7 +670,7 @@ function RoundSoapComposer({
   const recoverySavedLabel = recoveryTimeLabel(recoverySavedAt);
 
   return (
-    <section className={compact ? "round-soap-composer compact-round-soap-composer" : "round-soap-composer"} onKeyDownCapture={handleEditorKeyDown}>
+    <section className={compact ? "round-soap-composer compact-round-soap-composer" : "round-soap-composer"}>
       <div className="round-soap-toolbar">
         <div>
           <h3>Update SOAP</h3>
@@ -726,12 +701,6 @@ function RoundSoapComposer({
             <option value="balanced">Balanced</option>
             <option value="highAccuracy">High accuracy</option>
           </select>
-          <button type="button" className="secondary" disabled={!canUndo(editorHistory)} onClick={undoEditorDraft} title="Ctrl+Z">
-            Undo
-          </button>
-          <button type="button" className="secondary" disabled={!canRedo(editorHistory)} onClick={redoEditorDraft} title="Ctrl+Y / Ctrl+Shift+Z">
-            Redo
-          </button>
           <button type="button" className="secondary" onClick={() => {
             pendingSavedSoapRef.current = null;
             const nextDraft = parseSoapTextToEditorDraft(canonical.text);
@@ -1069,11 +1038,8 @@ function RoundSoapComposer({
         onApply={applyMedicationOrderSummaries}
       />
 
+      <DeidNotice />
       <div className="round-soap-generate-row">
-        <label className="checkbox-label">
-          <input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} />
-          Text is de-identified.
-        </label>
         <button type="button" disabled={loading || !composeRawText()} onClick={() => void handleGenerate()}>
           {loading ? "Working..." : "Generate SOAP"}
         </button>

@@ -3413,6 +3413,33 @@ try {
   console.error(`FAIL Source-type auto-detect: ${failures[failures.length - 1].error}`);
 }
 
+try {
+  const slashItems = parseLabText("BUN/Cr 33/0.63, Na/K 137/3.8, AST/ALT 20/18");
+  const find = (name) => slashItems.find((item) => item.label === name);
+  if (find("Cr")?.value !== "0.63") {
+    throw new Error(`Cr must be 0.63 from BUN/Cr 33/0.63, got ${find("Cr")?.value} (Cr 33 is the dangerous misread)`);
+  }
+  if (find("BUN")?.value !== "33") throw new Error(`BUN must be 33, got ${find("BUN")?.value}`);
+  if (find("Na")?.value !== "137" || find("K")?.value !== "3.8") throw new Error("Na/K slash pair mis-split");
+  if (find("AST")?.value !== "20" || find("ALT")?.value !== "18") throw new Error("AST/ALT slash pair mis-split");
+  if (slashItems.some((item) => item.label.includes("/"))) {
+    throw new Error(`a composite label leaked as a single item: ${slashItems.map((i) => i.label).join(", ")}`);
+  }
+  const bp = parseLabText("BP 118/69, P 91");
+  if (bp.some((item) => ["BUN", "Cr", "Na", "K"].includes(item.label))) {
+    throw new Error("blood pressure was wrongly parsed as a lab slash pair");
+  }
+  const trend = parseLabText("Cr 1.4 -> 2.1");
+  if (trend.find((item) => item.label === "Cr")?.value !== "2.1") {
+    throw new Error("a real Cr trend was broken by the slash-pair change");
+  }
+  console.log("PASS Composite slash labs split positionally (BUN/Cr 33/0.63 -> BUN 33, Cr 0.63)");
+  supplementalPasses += 1;
+} catch (error) {
+  failures.push({ name: "Slash-pair lab parsing", error: error instanceof Error ? error.message : String(error) });
+  console.error(`FAIL Slash-pair lab parsing: ${failures[failures.length - 1].error}`);
+}
+
 await server.close();
 
 if (failures.length > 0) {
