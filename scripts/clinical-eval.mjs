@@ -3010,6 +3010,70 @@ try {
   console.error(`FAIL CXR/A&P replace + color mark + bang regression: ${failures[failures.length - 1].error}`);
 }
 
+try {
+  const { concretizeVagueFollowUps } = await server.ssrLoadModule("/src/planConcretizer.ts");
+  const vagueDraft = sanitizeAiSoapDraftForReview(
+    {
+      oneLiner: "AKI on CKD under workup",
+      admissionSummary: "",
+      isbarHandoff: "",
+      clinicalReasoning: {
+        currentClinicalState: "",
+        primaryRisk: "",
+        whyThisMatters: [],
+        activeProblemsRanked: [],
+        resolvedOrLessImportant: [],
+        missingDataNeeded: [],
+        noiseToIgnore: [],
+      },
+      subjective: { chiefConcern: "", symptoms: [], overnightEvents: [], importantSymptoms: [], importantOvernightEvents: [] },
+      objective: { vitals: [], bloodSugars: [], physicalExam: [], labs: [], images: [] },
+      assessmentPlan: [
+        {
+          problemTitle: "AKI on CKD",
+          assessmentSummary: "Cr 2.1 from 1.4, oliguric",
+          evidenceOrCourseItems: ["Cr 2.1 from 1.4"],
+          planItems: ["review renal function", "monitor electrolytes daily", "hold ACEi"],
+          isImportant: true,
+        },
+      ],
+      redFlags: [],
+      tasks: [
+        { text: "check liver function tests", category: "lab", dueDate: "" },
+        { text: "f/u B/C result", category: "lab", dueDate: "" },
+      ],
+      dischargeIssues: [],
+      thinkingPrompts: [],
+      uncertainty: [],
+    },
+    "AKI Cr 2.1 from 1.4, oliguric, on lisinopril. LFT pending. Blood culture pending.",
+    "mixed",
+  );
+  const planText = vagueDraft.assessmentPlan.map((item) => item.planItems.join("\n")).join("\n");
+  const taskText = vagueDraft.tasks.map((task) => task.text).join("\n");
+  if (!/f\/u BUN\/Cr, K/.test(planText)) {
+    throw new Error(`vague 'review renal function' was not concretized to f/u BUN/Cr, K:\n${planText}`);
+  }
+  if (!/f\/u Na\/K\/Ca\/Mg\/P daily/.test(planText)) {
+    throw new Error(`vague 'monitor electrolytes' was not concretized:\n${planText}`);
+  }
+  if (!/hold ACEi/.test(planText)) {
+    throw new Error(`already-concrete plan item was altered:\n${planText}`);
+  }
+  if (!/f\/u AST\/ALT\/T-bil, INR/.test(taskText) || !/f\/u B\/C result/.test(taskText)) {
+    throw new Error(`vague liver task was not concretized or concrete task was altered:\n${taskText}`);
+  }
+  const untouched = concretizeVagueFollowUps("renal function improving, Cr 1.2 from 2.1");
+  if (untouched !== "renal function improving, Cr 1.2 from 2.1") {
+    throw new Error(`descriptive assessment text was wrongly rewritten: ${untouched}`);
+  }
+  console.log("PASS Vague follow-up phrases become concrete lab follow-ups (f/u BUN/Cr instead of review renal function)");
+  supplementalPasses += 1;
+} catch (error) {
+  failures.push({ name: "Vague follow-up concretizer", error: error instanceof Error ? error.message : String(error) });
+  console.error(`FAIL Vague follow-up concretizer: ${failures[failures.length - 1].error}`);
+}
+
 await server.close();
 
 if (failures.length > 0) {

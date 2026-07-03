@@ -1,5 +1,6 @@
 import type { AiClinicalSourceType, AiSoapDraft } from "./types";
 import { compactMedicalAbbreviations } from "./medicalAbbreviations";
+import { concretizeVagueFollowUps } from "./planConcretizer";
 
 type Vital = AiSoapDraft["objective"]["vitals"][number];
 type Lab = AiSoapDraft["objective"]["labs"][number];
@@ -33,7 +34,7 @@ function abbreviate(value: string) {
 }
 
 function compactLine(value: unknown, maxChars = 180) {
-  const clean = abbreviate(normalizeText(value).replace(/\s+/g, " ").trim());
+  const clean = concretizeVagueFollowUps(abbreviate(normalizeText(value).replace(/\s+/g, " ").trim()));
   if (clean.length <= maxChars) return clean;
   const firstClause = clean.split(/[;\n]/)[0]?.trim() || clean;
   if (firstClause.length <= maxChars) return firstClause;

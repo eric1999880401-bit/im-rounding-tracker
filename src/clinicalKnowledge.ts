@@ -956,7 +956,7 @@ function applyHemeOncRules(plan: GeneratedClinicalPlan, text: string) {
       : `Immunosuppressed or leukopenic host${wbcText ? `, WBC ${wbcText}` : ""}${anc ? `, ANC ${anc}` : ""}; verify fever status, ANC/WBC recovery, infection source and Abx/isolation threshold.`,
     [...plan.facts.immunocompromisedSignals, ...plan.facts.pendingItems],
     tlsSignal
-      ? ["trend K/Phos/Ca/UA/Cr", "verify hydration/urate-lowering plan", "review renal/I/O status", "contact heme/onc if worsening"]
+      ? ["trend K/Phos/Ca/UA/Cr", "verify hydration/urate-lowering plan", "f/u BUN/Cr + I/O, urine output", "contact heme/onc if worsening"]
       : thrombocytopeniaSignal
         ? ["trend Plt/Hb", "check bleeding/procedure plan", "review anticoag/antiplatelet hold-resume", "clarify transfusion threshold if needed"]
       : hasCancerWorkup
@@ -1642,8 +1642,8 @@ function sbarRecommendationLine(value: string) {
   if (!looksLikeMedicationOrderLine(clean)) return clean;
   if (/\b(?:abx|antibiotic|cef|vanco|teico|mero|tazo|zosyn|levo|cipro)\b/i.test(clean)) return "Clarify Abx duration, culture follow-up, and source control.";
   if (/\b(?:heparin|apixaban|warfarin|anticoag|antiplatelet|aspirin|clopidogrel)\b/i.test(clean)) return "Clarify anticoag/AP hold-resume plan and bleeding/procedure threshold.";
-  if (/\b(?:insulin|glucose|sugar)\b/i.test(clean)) return "Clarify glucose monitoring and insulin adjustment parameters.";
-  if (/\b(?:lasix|furosemide|diuretic|ivf|fluid)\b/i.test(clean)) return "Clarify volume plan, I/O target, and renal/electrolyte follow-up.";
+  if (/\b(?:insulin|glucose|sugar)\b/i.test(clean)) return "Clarify fingerstick glucose schedule (AC/HS or q6h) and insulin adjustment parameters.";
+  if (/\b(?:lasix|furosemide|diuretic|ivf|fluid)\b/i.test(clean)) return "Clarify volume plan and I/O target; f/u BUN/Cr, Na/K.";
   return "";
 }
 

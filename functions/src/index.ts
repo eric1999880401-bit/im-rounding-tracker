@@ -632,6 +632,31 @@ function findTargetPatientForBatch(targetPatientId: unknown, existingPatients: E
   return existingPatients.find((patient) => patient.id === targetId);
 }
 
+const planSpecificityPromptRules = [
+  "- Plan/task specificity: every follow-up, monitoring, or review line must name the exact lab test, study, drug, or threshold, never a bare organ system or vague verb.",
+  "- Examples: write 'f/u BUN/Cr, K' not 'review renal function'; 'f/u Na/K/Ca/Mg/P' not 'monitor electrolytes'; 'f/u CBC (Hb/WBC/Plt)' not 'trend blood counts'; 'f/u AST/ALT/T-bil, INR' not 'review liver function'; 'f/u SpO2/O2 demand, ABG if worsening' not 'monitor respiratory status'; 'f/u fever curve, WBC/CRP, B/C result' not 'follow infection status'.",
+  "- Include timing/frequency when the source supports it, e.g. 'f/u CBC q6h', 'repeat K after 40 mEq KCl', 'CXR tomorrow after diuresis'.",
+  "- Naming the standard follow-up test for a problem already in the note is required specificity, not invention. Do not invent new treatments, doses, or workups the source does not support.",
+];
+
+const vagueFollowUpVerbs = "(?:review|monitor|check|follow|trend|assess|watch|evaluate|track)";
+
+const vagueFollowUpRewrites: Array<[RegExp, string]> = [
+  [new RegExp(`\\b${vagueFollowUpVerbs}\\s+(?:the\\s+)?(?:renal|kidney)\\s+function(?:\\s+tests?)?\\b`, "gi"), "f/u BUN/Cr, K"],
+  [new RegExp(`\\b${vagueFollowUpVerbs}\\s+(?:the\\s+)?(?:liver|hepatic)\\s+function(?:\\s+tests?)?\\b`, "gi"), "f/u AST/ALT/T-bil, INR"],
+  [new RegExp(`\\b${vagueFollowUpVerbs}\\s+(?:the\\s+)?electrolytes?\\b`, "gi"), "f/u Na/K/Ca/Mg/P"],
+  [new RegExp(`\\b${vagueFollowUpVerbs}\\s+(?:the\\s+)?blood\\s+counts?\\b`, "gi"), "f/u CBC (Hb/WBC/Plt)"],
+  [new RegExp(`\\b${vagueFollowUpVerbs}\\s+(?:the\\s+)?(?:blood\\s+sugars?|glycemic\\s+control)\\b`, "gi"), "f/u fingerstick glucose (AC/HS)"],
+  [new RegExp(`\\b${vagueFollowUpVerbs}\\s+(?:the\\s+)?coagulation(?:\\s+profile)?\\b`, "gi"), "f/u PT/INR, aPTT"],
+  [new RegExp(`\\b${vagueFollowUpVerbs}\\s+(?:the\\s+)?thyroid\\s+function(?:\\s+tests?)?\\b`, "gi"), "f/u TSH, fT4"],
+  [new RegExp(`\\b${vagueFollowUpVerbs}\\s+(?:the\\s+)?(?:inflammatory|infection)\\s+markers?\\b`, "gi"), "f/u WBC/CRP"],
+  [new RegExp(`\\b${vagueFollowUpVerbs}\\s+(?:the\\s+)?(?:oxygenation|respiratory)\\s+status\\b`, "gi"), "f/u SpO2/O2 demand, ABG if worsening"],
+];
+
+function concretizeVagueFollowUps(value: string) {
+  return vagueFollowUpRewrites.reduce((text, [pattern, replacement]) => text.replace(pattern, replacement), value);
+}
+
 function isGenericClinicalFiller(value: string) {
   const clean = value.toLowerCase().replace(/\s+/g, " ").trim();
   if (!clean) return true;
@@ -657,7 +682,7 @@ function isGenericClinicalFiller(value: string) {
 function cleanClinicalLines(value: unknown, maxLines = 10, maxChars = 1400) {
   return truncateString(value, maxChars * 2)
     .split(/\r?\n|;(?=\s*[A-Z#]|\s*[\u4e00-\u9fff])/)
-    .map((line) => line.replace(/\s+/g, " ").trim())
+    .map((line) => concretizeVagueFollowUps(line.replace(/\s+/g, " ").trim()))
     .filter((line) => !isGenericClinicalFiller(line))
     .slice(0, maxLines)
     .join("\n")
@@ -666,7 +691,7 @@ function cleanClinicalLines(value: unknown, maxLines = 10, maxChars = 1400) {
 
 function cleanClinicalArray(value: unknown, maxItems = 8, maxCharsPerItem = 180) {
   return asStringArray(value)
-    .map((item) => item.replace(/\s+/g, " ").trim().slice(0, maxCharsPerItem))
+    .map((item) => concretizeVagueFollowUps(item.replace(/\s+/g, " ").trim()).slice(0, maxCharsPerItem))
     .filter((item) => !isGenericClinicalFiller(item))
     .slice(0, maxItems);
 }
@@ -970,6 +995,7 @@ function makeBatchImportPrompt(
     "Quality rules:",
     "- Keep fragments short and clinically useful. Avoid copied full lab panels, copied PMH paragraphs, duplicated diagnoses, and boilerplate.",
     "- Do not write generic filler such as monitor closely, continue current management, clinical correlation, or stable condition unless paired with a concrete trigger or action.",
+    ...planSpecificityPromptRules,
     "- Do not repeat patient names, full MRNs, birthdays, phone numbers, addresses, or identifiable details.",
     "",
     "Pasted de-identified text:",
@@ -1066,6 +1092,7 @@ function makePrompt(sourceType: SourceType, rawText: string, patientContext: Rec
     "- admissionSummary: write the same 3-min patient presentation style: one-liner admission reason, chronological focused HPI with pertinent positives/negatives, key PMH/context, objective anchors (V/S, PE, key labs/micro/images), active assessment, today/pending/dispo. Leave empty only if the pasted text has no admission/course context.",
     "- isbarHandoff: concise SBAR with headings exactly Situation, Background, Assessment, Recommendation. Include red flags, pending tasks, contingency/call parameters, and disposition. Leave empty only if there is too little patient context.",
     "- Remove boilerplate and generic phrases like monitor closely, continue current management, clinical correlation, and stable condition unless tied to a concrete trigger, action, or call threshold.",
+    ...planSpecificityPromptRules,
     "- For vitals/lab/image-only source types, do not fabricate admissionSummary or isbarHandoff from isolated data; leave those fields empty unless the pasted text includes enough broader context.",
     "",
   ].join("\n");
@@ -1253,6 +1280,7 @@ function documentInstructions(documentType: DocumentType) {
     "clinicalReasoning.noiseToIgnore should name stable normals, duplicated history, and boilerplate that should not enter the final note.",
     "Final document text must be a concise projection of clinicalReasoning, not generic AI prose.",
     "Use concise inpatient IM style with common unambiguous medical abbreviations.",
+    "Every follow-up or monitoring statement must name the exact test, study, or parameter: write 'f/u BUN/Cr, K' instead of 'review renal function', 'f/u CBC (Hb/Plt)' instead of 'trend blood counts', 'f/u AST/ALT/T-bil, INR' instead of 'review liver function'.",
     "Do not invent missing data; mark absent or unclear details in uncertainty.",
     "Preserve dates, lab values, units, medication names, image findings, and pending items exactly when available.",
     "Use de-identified content only; do not repeat names, full MRNs, IDs, birthday, phone, address, or identifiable image details.",
@@ -1418,6 +1446,7 @@ function makeRoundSoapPrompt(params: {
     "- Ignore text explicitly labeled as old duplicate, copy-noise, random noise, or 'ignore'. Do not carry that wording into SOAP.",
     "- Keep language concise, physician-style, and defensible. No rule labels, no dashboard tags, no code-like parser labels.",
     "- Do not write generic tasks such as monitor closely, review VTE risk, trend TLS labs unless the source supports the exact issue.",
+    ...planSpecificityPromptRules,
     "- Preserve exact lab values, dates, antibiotics, cultures, image study names/dates, procedures, consults, and pending items.",
     "- If lab parser/category would conflict with pasted lab line, trust pasted text and warn instead of rewriting values.",
     "- If source says shock/hypotension resolved or latest BP stable, do not create active shock red flag/A/P.",
@@ -1703,7 +1732,7 @@ export const generateRoundSoap = onCall(
     }
 
     const parsed = asPlainObject(parsedDraft);
-    const soapText = truncateString(parsed.soapText, 14000).trim();
+    const soapText = concretizeVagueFollowUps(truncateString(parsed.soapText, 14000).trim());
     if (!soapText) {
       throw new HttpsError("data-loss", "OpenAI returned an empty SOAP draft. Retry generation; no patient data was saved.");
     }
