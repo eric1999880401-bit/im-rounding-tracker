@@ -986,7 +986,6 @@ export function formatReasoningAdmissionSummary(
   const objective = fallbackPlan
     ? admissionObjectiveAnchors(fallbackPlan, limits.objectiveItems, limits.factLength).join("; ")
     : admissionSummaryFacts(reasoning.whyThisMatters.map((item) => item.fact), limits.objectiveItems, limits.factLength).join("; ");
-  const evidence = admissionSummaryFacts(reasoning.whyThisMatters.map((item) => `${item.fact} -> ${item.implication}`), 2, limits.factLength);
   const tasks = compactList(
     [
       ...topProblems.flatMap((item) => item.todayPlan),
@@ -997,24 +996,24 @@ export function formatReasoningAdmissionSummary(
     limits.factLength,
   ).map(abbreviateAdmissionSummaryText);
   const active = compactList(topProblems.map((item) => item.problem), limits.activeItems, 52).map(abbreviateAdmissionSummaryText).join("; ");
-  const admissionLead = diagnosis
-    ? [who, `${admissionBriefZh.because} ${diagnosis} ${admissionBriefZh.admitted}`].filter(Boolean).join(" ")
-    : "";
   const currentLead = compactSnippet(reasoning.primaryRisk || reasoning.currentClinicalState, 110);
-  const activeLine = active ? `${admissionBriefZh.problems} ${active}` : "";
-  const evidenceLine = evidence.length > 0 ? `${admissionBriefZh.evidence} ${evidence.join("; ")}` : "";
-  const focusLine = [admissionLead && currentLead ? `${admissionBriefZh.nowFocus} ${currentLead}` : "", activeLine, evidenceLine].filter(Boolean).join(zhSemicolon);
-  const pendingLine = tasks.length > 0 ? `${admissionBriefZh.todayPending} ${tasks.join("; ")}` : "";
-  const focusAndPending = options.length === "threeMinute"
-    ? [focusLine, pendingLine]
-    : [[focusLine, pendingLine].filter(Boolean).join(zhSemicolon)];
-  return formatMixedAdmissionSummarySentences([
-    admissionLead || (currentLead ? `${admissionBriefZh.nowFocus} ${currentLead}` : ""),
-    pmh ? `${admissionBriefZh.background} ${pmh}` : "",
-    course ? `${admissionBriefZh.arrivalOrTransfer} ${course}` : "",
-    objective ? `${admissionBriefZh.keyObjective} ${objective}` : "",
-    ...focusAndPending,
-  ], options);
+
+  // Structured admission brief format (age/sex, PHx:, CC:, PI:, Key O:, Imp:, Plan:)
+  // matching the clinician's oral-brief template; sections without facts are omitted.
+  const impression = [active, !active && currentLead ? currentLead : ""].filter(Boolean).join("; ");
+  const briefLines = [
+    who,
+    pmh ? `PHx: ${pmh}` : "",
+    diagnosis || currentLead ? `CC: ${diagnosis || currentLead}` : "",
+    ...(course ? ["PI:", course] : []),
+    ...(objective ? ["Key O:", objective] : []),
+    ...(impression ? ["Imp:", impression] : []),
+    ...(tasks.length > 0 ? ["Plan:", tasks.join("; ")] : []),
+  ].filter(Boolean);
+  return briefLines
+    .map((line) => cleanSnippetTail(abbreviateAdmissionSummaryText(line)))
+    .filter(Boolean)
+    .join("\n");
 }
 
 export function formatReasoningSbar(reasoning: ClinicalReasoningBundle | undefined, fallbackPlan?: GeneratedClinicalPlan) {
