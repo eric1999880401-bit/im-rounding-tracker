@@ -3033,13 +3033,14 @@ try {
           problemTitle: "AKI on CKD",
           assessmentSummary: "Cr 2.1 from 1.4, oliguric",
           evidenceOrCourseItems: ["Cr 2.1 from 1.4"],
-          planItems: ["review renal function", "monitor electrolytes daily", "hold ACEi"],
+          planItems: ["review renal function", "hold ACEi", "IV hydration", "correct electrolyte imbalance"],
           isImportant: true,
         },
       ],
       redFlags: [],
       tasks: [
         { text: "check liver function tests", category: "lab", dueDate: "" },
+        { text: "monitor electrolytes daily", category: "lab", dueDate: "" },
         { text: "f/u B/C result", category: "lab", dueDate: "" },
       ],
       dischargeIssues: [],
@@ -3054,11 +3055,25 @@ try {
   if (!/f\/u BUN\/Cr, K/.test(planText)) {
     throw new Error(`vague 'review renal function' was not concretized to f/u BUN/Cr, K:\n${planText}`);
   }
-  if (!/f\/u Na\/K\/Ca\/Mg\/P daily/.test(planText)) {
-    throw new Error(`vague 'monitor electrolytes' was not concretized:\n${planText}`);
+  if (!/f\/u Na\/K\/Ca\/Mg\/P daily/.test(taskText)) {
+    throw new Error(`vague 'monitor electrolytes' was not concretized:\n${taskText}`);
   }
   if (!/hold ACEi/.test(planText)) {
     throw new Error(`already-concrete plan item was altered:\n${planText}`);
+  }
+  if (!/IVF — clarify type\/rate; recheck BP, UO/.test(planText)) {
+    throw new Error(`vague 'IV hydration' was not concretized to an executable IVF line:\n${planText}`);
+  }
+  if (!/replete K\/Mg\/Ca as indicated; recheck lytes after repletion/.test(planText)) {
+    throw new Error(`vague 'correct electrolyte imbalance' was not concretized:\n${planText}`);
+  }
+  const tlsUntouched = concretizeVagueFollowUps("verify hydration/urate-lowering plan");
+  if (tlsUntouched !== "verify hydration/urate-lowering plan") {
+    throw new Error(`legit hydration mention was wrongly rewritten: ${tlsUntouched}`);
+  }
+  const bareHydration = concretizeVagueFollowUps("- hydration");
+  if (!/IVF — clarify type\/rate/.test(bareHydration)) {
+    throw new Error(`bare 'hydration' plan line was not concretized: ${bareHydration}`);
   }
   if (!/f\/u AST\/ALT\/T-bil, INR/.test(taskText) || !/f\/u B\/C result/.test(taskText)) {
     throw new Error(`vague liver task was not concretized or concrete task was altered:\n${taskText}`);

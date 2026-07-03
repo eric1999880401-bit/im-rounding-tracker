@@ -636,6 +636,9 @@ const planSpecificityPromptRules = [
   "- Plan/task specificity: every follow-up, monitoring, or review line must name the exact lab test, study, drug, or threshold, never a bare organ system or vague verb.",
   "- Examples: write 'f/u BUN/Cr, K' not 'review renal function'; 'f/u Na/K/Ca/Mg/P' not 'monitor electrolytes'; 'f/u CBC (Hb/WBC/Plt)' not 'trend blood counts'; 'f/u AST/ALT/T-bil, INR' not 'review liver function'; 'f/u SpO2/O2 demand, ABG if worsening' not 'monitor respiratory status'; 'f/u fever curve, WBC/CRP, B/C result' not 'follow infection status'.",
   "- Include timing/frequency when the source supports it, e.g. 'f/u CBC q6h', 'repeat K after 40 mEq KCl', 'CXR tomorrow after diuresis'.",
+  "- Intervention specificity: treatment lines must be executable, not bare nouns. Preserve drug/fluid name, route, dose/rate, and duration whenever the source provides them.",
+  "- If the source names only a vague intervention, stay grounded but concrete by naming the decision parameter and the response check: write 'IVF — clarify type/rate; recheck BP, UO' not 'hydration'; 'replete K/Mg, recheck lytes after repletion' not 'correct electrolytes'; 'titrate analgesics, reassess pain score' not 'optimize pain control'.",
+  "- For hypotension, state the concrete response and escalation, e.g. 'IVF bolus per BP/UO response; recheck BP; vasopressor/ICU if MAP <65 despite fluids' instead of 'hydration' or 'BP support'. Do not add such thresholds when the source already sets different targets (e.g. stroke permissive HTN).",
   "- Naming the standard follow-up test for a problem already in the note is required specificity, not invention. Do not invent new treatments, doses, or workups the source does not support.",
 ];
 
@@ -651,6 +654,15 @@ const vagueFollowUpRewrites: Array<[RegExp, string]> = [
   [new RegExp(`\\b${vagueFollowUpVerbs}\\s+(?:the\\s+)?thyroid\\s+function(?:\\s+tests?)?\\b`, "gi"), "f/u TSH, fT4"],
   [new RegExp(`\\b${vagueFollowUpVerbs}\\s+(?:the\\s+)?(?:inflammatory|infection)\\s+markers?\\b`, "gi"), "f/u WBC/CRP"],
   [new RegExp(`\\b${vagueFollowUpVerbs}\\s+(?:the\\s+)?(?:oxygenation|respiratory)\\s+status\\b`, "gi"), "f/u SpO2/O2 demand, ABG if worsening"],
+  // Interventions: convert bare treatment nouns into executable wording with a
+  // decision parameter and response check. Never adds doses or new drugs.
+  [/\b(?:iv|ivf|aggressive|adequate|maintain|give|encourage|keep)\s+hydration\b(?:\s+(?:therapy|status))?/gi, "IVF — clarify type/rate; recheck BP, UO"],
+  [/\bhydration\s+therapy\b/gi, "IVF — clarify type/rate; recheck BP, UO"],
+  [/^(\s*[-*!]?\s*)hydration\s*$/gim, "$1IVF — clarify type/rate; recheck BP, UO"],
+  [/\bcorrect(?:ion\s+of)?\s+(?:the\s+)?electrolyte(?:\s+(?:imbalances?|abnormalit(?:y|ies)|derangements?))?s?\b/gi, "replete K/Mg/Ca as indicated; recheck lytes after repletion"],
+  [/\b(?:optimize|improve|ensure|provide)\s+(?:adequate\s+)?pain\s+(?:control|management)\b/gi, "titrate analgesics; reassess pain score"],
+  [/\b(?:optimize|manage|address)\s+(?:the\s+)?volume\s+status\b/gi, "adjust IVF/diuretic per exam; check I/O, daily weight"],
+  [/\b(?:optimize|improve|ensure)\s+(?:the\s+)?glycemic\s+control\b/gi, "adjust insulin per fingerstick glucose (AC/HS)"],
 ];
 
 function concretizeVagueFollowUps(value: string) {

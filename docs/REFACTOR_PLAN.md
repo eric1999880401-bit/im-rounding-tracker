@@ -37,26 +37,28 @@ a regression case.
 - Hygiene: `vite-dev.log` was tracked in git (removed); `OVERNIGHT_LOG.md` (35 kB)
   is still tracked — keep only if it is intentional working memory.
 
-## Phase 0 — Safety net first (do before moving any code)
+## Phase 0 — Safety net first (do before moving any code) — DONE
 
 1. Keep `npm run clinical:eval` green as the gate for every phase.
-2. Add a CI workflow that runs `npm run build`, `npm --prefix functions run build`,
-   and `npm run clinical:eval` on every PR (deploy.yml only covers deploys today).
+2. DONE: `.github/workflows/ci.yml` runs both builds and `clinical:eval` on every
+   PR and non-main branch push.
 3. Optional: adopt vitest and move eval helpers into importable unit tests so
    failures point at a module instead of a script section.
 
-## Phase 1 — Split `src/utils.ts` (mechanical, no logic changes)
+## Phase 1 — Split `src/utils.ts` (mechanical, no logic changes) — DONE
 
-Extract by responsibility, keeping `utils.ts` as a re-export shim so the 37 import
-sites don't change in the same PR; delete the shim in a follow-up codemod commit.
+Extracted by responsibility; `utils.ts` is now a pure re-export shim so the 37
+import sites are unchanged. Delete the shim in a follow-up codemod commit.
 
-- `src/labParsing.ts`: parseLabText, parseLabReports, labSummary, formatLabItem and
-  their private helpers (~800 lines).
-- `src/dailyNoteModel.ts`: emptyDailyNote, dailyNoteFromPatient, patientForDate,
-  patientWithDailyNote, snapshot comparison helpers.
+- `src/dates.ts`: createId/nowIso/todayKey/date parsing helpers.
 - `src/clinicalTextFormat.ts`: safeClinicalLine, splitHighlightLines,
-  stripColorMarkup, compactClinicalText.
-- Leave only createId/nowIso/date helpers in `utils.ts`, or dissolve it entirely.
+  stripColorMarkup, compactClinicalText, getAdmissionSummaryText.
+- `src/labParsing.ts`: parseLabText, parseLabReports, labSummary, lab focus /
+  interpretation summaries (~980 lines).
+- `src/patientModel.ts`: patient/daily-note model helpers, display summary,
+  sorting, empty-model factories.
+- Import direction: dates → clinicalTextFormat → labParsing → patientModel
+  (no cycles).
 
 ## Phase 2 — One AI post-processing pipeline (removes the most duplication)
 
