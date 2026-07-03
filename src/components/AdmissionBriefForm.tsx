@@ -246,7 +246,7 @@ function AdmissionBriefForm({
           {expandedAdmissionBrief && (
             <details className="admission-expanded-brief">
               <summary>3-min expanded oral brief</summary>
-              <p>{expandedAdmissionBrief}</p>
+              <p className="admission-brief-multiline">{expandedAdmissionBrief}</p>
             </details>
           )}
         </label>
