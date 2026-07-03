@@ -2,6 +2,7 @@ import { useState, type ClipboardEvent } from "react";
 import { applyClinicalKnowledgeToText, formatRuleBasedAdmissionSummary } from "../clinicalKnowledge";
 import { formatClinicalDocumentDraft } from "../clinicalDocumentFormat";
 import { generateClinicalDocument } from "../firebase/aiService";
+import { stripMarkdownEmphasis } from "../utils";
 import type { Patient } from "../types";
 import ColorMarkupTextarea from "./ColorMarkupTextarea";
 
@@ -27,6 +28,7 @@ function AdmissionBriefForm({
   const [generatingSummary, setGeneratingSummary] = useState(false);
   const [generationStatus, setGenerationStatus] = useState("");
   const [generationError, setGenerationError] = useState("");
+  const displayedAdmissionSummary = stripMarkdownEmphasis(patient.admissionBriefFreeText || patient.generatedAdmissionSummary);
 
   function updateField<K extends keyof Patient>(field: K, value: Patient[K]) {
     onChange({ ...patient, [field]: value, updatedAt: new Date().toISOString() });
@@ -226,7 +228,7 @@ function AdmissionBriefForm({
           Admission Summary
           <span className="field-hint">You can paste a full admission note here too; it will be converted into a short summary after de-identification is confirmed.</span>
           <ColorMarkupTextarea
-            value={patient.admissionBriefFreeText || patient.generatedAdmissionSummary}
+            value={displayedAdmissionSummary}
             onChange={(value) => updateField("admissionBriefFreeText", value)}
             onBlur={commitOnBlur}
             onCompositionStart={onCompositionStart}

@@ -69,6 +69,10 @@ export function hasColorMarkup(value: string) {
   return /\[\[(?:red|orange|yellow|blue|green|purple)(?:-(?:highlight|text))?:/i.test(String(value ?? ""));
 }
 
+export function stripMarkdownEmphasis(value: string) {
+  return String(value ?? "").replace(/\*\*([\s\S]*?)\*\*/g, "$1").replace(/\*\*/g, "");
+}
+
 export function safeClinicalLinePreservingMarks(value: string, maxChars = 120) {
   const source = String(value ?? "");
   if (!hasColorMarkup(source)) return safeClinicalLine(source, maxChars);
@@ -181,7 +185,7 @@ export function getAdmissionSummaryText(patient: Patient, options: { allowFallba
       !admissionSources.some((source) => isSameClinicalContent(candidate, source)),
   );
 
-  if (summary) return summary;
+  if (summary) return stripMarkdownEmphasis(summary);
   if (!allowFallback) return "";
 
   return (
@@ -206,6 +210,6 @@ export function compactClinicalText(value: string, maxLines = 2, fallback = "-")
 // (age/sex line + labeled PHx/CC/PI sections). Used to stop downstream
 // formatters from rebuilding or flattening a brief that is already correct.
 export function looksLikeStructuredAdmissionBrief(value: string) {
-  const plain = stripColorMarkup(value).replace(/\*\*/g, "");
+  const plain = stripMarkdownEmphasis(stripColorMarkup(value));
   return /\bPHx\s*:/i.test(plain) && /\bCC\s*:/i.test(plain) && /\b(?:PI|HPI)\s*:/i.test(plain);
 }

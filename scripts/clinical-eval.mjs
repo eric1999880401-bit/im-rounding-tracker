@@ -560,6 +560,25 @@ try {
   if (reviewedPreferred !== "reviewed free text summary") {
     throw new Error(`reviewed admission brief should display before stale generated summary: ${reviewedPreferred}`);
   }
+  const existingMarkdownBrief = getAdmissionSummaryText(
+    {
+      ...emptyPatient(),
+      admissionBriefFreeText: [
+        "**90F**",
+        "",
+        "**PHx:** T2DM c prior DKA",
+        "",
+        "**CC:** fever x 1 d",
+        "",
+        "**PI:** vomiting and Lt thigh redness",
+      ].join("\n"),
+      generatedAdmissionSummary: "stale generated summary",
+    },
+    { allowFallback: false },
+  );
+  if (/\*\*/.test(existingMarkdownBrief) || !/^90F\s*\n[\s\S]*PHx:\s*T2DM[\s\S]*CC:\s*fever[\s\S]*PI:\s*vomiting/i.test(existingMarkdownBrief)) {
+    throw new Error(`stored admission brief markdown emphasis should be hidden on display: ${existingMarkdownBrief}`);
+  }
   console.log("PASS Rule-based new-admission summary is concise and preserves key IM work");
   supplementalPasses += 1;
 } catch (error) {
