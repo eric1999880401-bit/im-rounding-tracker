@@ -201,3 +201,10 @@ export function compactClinicalText(value: string, maxLines = 2, fallback = "-")
   return [...important, ...normal].slice(0, maxLines).map((line) => line.text).join("; ");
 }
 
+
+// True when the text already follows the structured admission brief format
+// (age/sex line + labeled PHx/CC/PI sections). Used to stop downstream
+// formatters from rebuilding or flattening a brief that is already correct.
+export function looksLikeStructuredAdmissionBrief(value: string) {
+  return /\bPHx\s*:/i.test(value) && /\bCC\s*:/i.test(value) && /\b(?:PI|HPI)\s*:/i.test(value);
+}

@@ -1,5 +1,6 @@
 import type { AiDocumentDraft } from "./types";
 import { formatReasoningAdmissionSummary, formatReasoningSbar, formatReasoningWeeklySummary, hasClinicalReasoning } from "./clinicalKnowledge";
+import { looksLikeStructuredAdmissionBrief } from "./clinicalTextFormat";
 
 function sectionContent(draft: AiDocumentDraft | null, headings: string[]) {
   if (!draft) return "";
@@ -193,6 +194,10 @@ export function formatClinicalDocumentDraft(draft: AiDocumentDraft) {
   }
 
   if (draft.documentType === "admissionSummary") {
+    const structured = [...draft.sections.map((section) => section.content), draft.conciseSummary].find((value) =>
+      looksLikeStructuredAdmissionBrief(value ?? ""),
+    );
+    if (structured) return structured.trim();
     if (hasClinicalReasoning(draft.clinicalReasoning)) {
       return formatReasoningAdmissionSummary(draft.clinicalReasoning, undefined, { length: "threeMinute" });
     }
