@@ -5,29 +5,65 @@ every push to `main` that touches `functions/**`, `firebase.json`, or
 `.firebaserc` (or manually from the Actions tab → "Deploy Firebase Functions"
 → Run workflow).
 
-## One-time setup: FIREBASE_SERVICE_ACCOUNT secret
+Authentication uses **Workload Identity Federation** (keyless) because the
+organization policy `iam.disableServiceAccountKeyCreation` blocks service
+account key downloads. No secret keys are stored anywhere.
 
-1. Open Google Cloud Console → IAM & Admin → Service Accounts for project
-   `im-rounding-tracker`
-   (https://console.cloud.google.com/iam-admin/serviceaccounts?project=im-rounding-tracker).
-2. Create a service account (e.g. `github-functions-deploy`) and grant it these
-   roles:
-   - Cloud Functions Admin (`roles/cloudfunctions.admin`)
-   - Service Account User (`roles/iam.serviceAccountUser`)
-   - Firebase Admin (`roles/firebase.admin`) — simplest way to cover
-     Firestore rules and other Firebase resources the CLI checks.
-   - Secret Manager Admin or at least Secret Manager Secret Accessor if the
-     deploy needs to bind the existing `OPENAI_API_KEY` secret.
-3. Create a JSON key for that service account (Keys → Add key → JSON) and
-   download it.
-4. In GitHub: repo → Settings → Secrets and variables → Actions → New
-   repository secret, name `FIREBASE_SERVICE_ACCOUNT`, value = the entire JSON
-   file content.
+## One-time setup
+
+Prerequisite: a service account `github-functions-deploy` in project
+`im-rounding-tracker` with roles Cloud Functions Admin, Service Account User,
+and Firebase Admin.
+
+1. Open Cloud Shell: https://shell.cloud.google.com/?project=im-rounding-tracker
+2. Paste the whole block below and press Enter (authorize if prompted):
+
+```bash
+gcloud config set project im-rounding-tracker
+
+gcloud services enable iamcredentials.googleapis.com sts.googleapis.com
+
+gcloud iam workload-identity-pools create github-pool \
+  --location=global --display-name="GitHub Actions"
+
+gcloud iam workload-identity-pools providers create-oidc github-provider \
+  --location=global --workload-identity-pool=github-pool \
+  --display-name="GitHub" \
+  --issuer-uri="https://token.actions.githubusercontent.com" \
+  --attribute-mapping="google.subject=assertion.sub,attribute.repository=assertion.repository" \
+  --attribute-condition="assertion.repository=='eric1999880401-bit/im-rounding-tracker'"
+
+PROJECT_NUMBER=$(gcloud projects describe im-rounding-tracker --format='value(projectNumber)')
+
+gcloud iam service-accounts add-iam-policy-binding \
+  github-functions-deploy@im-rounding-tracker.iam.gserviceaccount.com \
+  --role="roles/iam.workloadIdentityUser" \
+  --member="principalSet://iam.googleapis.com/projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/github-pool/attribute.repository/eric1999880401-bit/im-rounding-tracker"
+
+echo ""
+echo "===== COPY THE LINE BELOW ====="
+echo "projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/github-pool/providers/github-provider"
+```
+
+3. Copy the final output line (`projects/1234.../providers/github-provider`).
+4. In GitHub: repo → Settings → Secrets and variables → Actions →
+   **Variables** tab → New repository variable:
+   - Name: `WORKLOAD_IDENTITY_PROVIDER`
+   - Value: the line you copied
+   (This is a Variable, not a Secret — it is an identifier, not a credential.)
+
+## How it works
+
+The workflow's `id-token: write` permission lets GitHub mint an OIDC token for
+the workflow run; the Workload Identity Provider only trusts tokens whose
+`repository` claim equals `eric1999880401-bit/im-rounding-tracker`, and
+exchanges them for short-lived credentials to impersonate
+`github-functions-deploy`. Nothing long-lived exists to leak.
 
 ## Notes
 
 - `OPENAI_API_KEY` stays in Firebase Functions Secret Manager (set once with
   `firebase functions:secrets:set OPENAI_API_KEY`); deploys reuse it.
 - Local manual deploy still works: `npx firebase-tools deploy --only functions`
-  after `firebase login`.
-- The workflow fails fast with a clear error if the secret is missing.
+  after `npx firebase-tools login`.
+- The workflow fails fast with a clear error if the variable is missing.

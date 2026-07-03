@@ -12,6 +12,7 @@ on:
 
 permissions:
   contents: read
+  id-token: write
 
 concurrency:
   group: deploy-functions
@@ -24,14 +25,20 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Check deploy credentials
+      - name: Check deploy configuration
         env:
-          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          WIF_PROVIDER: ${{ vars.WORKLOAD_IDENTITY_PROVIDER }}
         run: |
-          if [ -z "$FIREBASE_SERVICE_ACCOUNT" ]; then
-            echo "::error::FIREBASE_SERVICE_ACCOUNT secret is not set. See docs/DEPLOY_FUNCTIONS.md."
+          if [ -z "$WIF_PROVIDER" ]; then
+            echo "::error::WORKLOAD_IDENTITY_PROVIDER repository variable is not set. See docs/DEPLOY_FUNCTIONS.md."
             exit 1
           fi
+
+      - name: Authenticate to Google Cloud (keyless)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: github-functions-deploy@im-rounding-tracker.iam.gserviceaccount.com
 
       - name: Set up Node
         uses: actions/setup-node@v4
@@ -40,9 +47,4 @@ jobs:
           cache: npm
 
       - name: Deploy functions
-        env:
-          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
-        run: |
-          printf '%s' "$FIREBASE_SERVICE_ACCOUNT" > "$RUNNER_TEMP/firebase-sa.json"
-          export GOOGLE_APPLICATION_CREDENTIALS="$RUNNER_TEMP/firebase-sa.json"
-          npx firebase-tools@latest deploy --only functions --project im-rounding-tracker --non-interactive --force
+        run: npx firebase-tools@latest deploy --only functions --project im-rounding-tracker --non-interactive --force
