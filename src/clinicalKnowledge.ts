@@ -12,6 +12,7 @@ import type {
 } from "./types";
 import { specificAntibioticPlan } from "./clinicalFieldRouter";
 import { compactMedicalAbbreviations } from "./medicalAbbreviations";
+import { removeGenericFiller } from "./aiPostprocess/genericFiller";
 
 type KnowledgeScope =
   | "neuro-stroke"
@@ -253,14 +254,6 @@ function dedupe(items: string[]) {
     });
 }
 
-function removeGenericFiller(items: string[]) {
-  return items.filter((item) => {
-    const text = item.toLowerCase();
-    const hasTrigger = /\d|if\b|when\b|call\b|threshold|pending|f\/u|repeat|culture|lactate|troponin|\bk\b|\bcr\b|\bhb\b|o2|shock|bleed|fever|glucose|anc|pathology/.test(text);
-    if (hasTrigger) return true;
-    return !/(monitor closely|continue current management|clinical correlation|stable condition|watch for deterioration|supportive care)$/i.test(text);
-  });
-}
 
 function corpusFromFacts(facts: ClinicalFactBundle) {
   return [

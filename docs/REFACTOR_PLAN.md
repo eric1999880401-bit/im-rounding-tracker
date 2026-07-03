@@ -60,27 +60,22 @@ import sites are unchanged. Delete the shim in a follow-up codemod commit.
 - Import direction: dates → clinicalTextFormat → labParsing → patientModel
   (no cycles).
 
-## Phase 2 — One AI post-processing pipeline (removes the most duplication)
+## Phase 2 — One AI post-processing pipeline — DONE (core)
 
-- Create `src/aiPostprocess/` with single implementations of:
-  - `genericFiller.ts` — one filler word-list + `removeGenericFiller` used by
-    clinicalKnowledge, aiDraftSanitizer, and clinicalPatientPolish.
-  - `planConcretizer.ts` — already exists; move here.
-  - shock-context and report-vs-PE heuristics currently inlined in aiDraftSanitizer.
-- Make `sanitizeAiSoapDraftForReview` the only entry point that touches raw AI
-  drafts; clinicalFieldRouter/clinicalPatientPolish call the shared helpers instead
-  of re-implementing filters.
-- Add eval cases pinning the shared filler list so consolidation cannot silently
-  drop a filter someone relied on.
+- DONE: `src/aiPostprocess/genericFiller.ts` is the single filler word-list and
+  detector; the duplicated filters in clinicalKnowledge, aiDraftSanitizer, and
+  clinicalPatientPolish now call it. `planConcretizer.ts` moved here too.
+- Remaining: extract shock-context and report-vs-PE heuristics from
+  aiDraftSanitizer; make `sanitizeAiSoapDraftForReview` the only raw-draft entry
+  point for clinicalFieldRouter as well.
 
-## Phase 3 — Split `functions/src/index.ts`
+## Phase 3 — Split `functions/src/index.ts` — DONE (core)
 
-- `schemas.ts` (JSON schemas), `prompts.ts` (makePrompt/makeRoundSoapPrompt/
-  makeBatchImportPrompt/documentInstructions + shared bullet constants),
-  `sanitize.ts` (truncate/clean/filler/concretizer helpers), and one file per
-  callable under `callables/`; `index.ts` only re-exports.
-- Evaluate an npm-workspace `shared/` package for the filler list + concretizer map
-  so web and functions stop drifting (currently duplicated by necessity).
+- DONE: split into `schemas.ts`, `types.ts`, `openai.ts`, `sanitize.ts`,
+  `prompts.ts`; `index.ts` (~620 lines) keeps only the four onCall callables.
+- Remaining: evaluate an npm-workspace `shared/` package for the filler list +
+  concretizer map so web and functions stop drifting (currently duplicated with
+  sync comments on both sides).
 
 ## Phase 4 — Component and bundle slimming
 

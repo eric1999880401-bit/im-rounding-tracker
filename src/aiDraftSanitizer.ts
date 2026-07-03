@@ -1,6 +1,7 @@
 import type { AiClinicalSourceType, AiSoapDraft } from "./types";
 import { compactMedicalAbbreviations } from "./medicalAbbreviations";
-import { concretizeVagueFollowUps } from "./planConcretizer";
+import { concretizeVagueFollowUps } from "./aiPostprocess/planConcretizer";
+import { containsGenericFiller, hasConcreteTrigger, isEntirelyGenericFiller, stripInlineFiller } from "./aiPostprocess/genericFiller";
 
 type Vital = AiSoapDraft["objective"]["vitals"][number];
 type Lab = AiSoapDraft["objective"]["labs"][number];
@@ -133,18 +134,18 @@ function sanitizeGeneratedText(value: string, rawText: string, maxLines = 8) {
       })
       .filter(Boolean)
       .filter((line) => !(resolved && isShockOnlyLine(line, rawText)))
-      .filter((line) => !/^(?:recommendation:\s*)?(?:monitor closely|continue current management|clinical correlation)[.!]?$/i.test(line))
+      .filter((line) => !isEntirelyGenericFiller(line))
       .slice(0, maxLines),
     (line) => line,
   ).join("\n");
 }
 
 function sanitizeAdmissionSummaryText(value: string, rawText: string) {
-  const compact = sanitizeGeneratedText(value, rawText, 8)
-    .replace(/\n+/g, " ")
-    .replace(/\b(?:The patient is|This patient is)\s+/gi, "")
-    .replace(/\bcontinue current management\b\.?/gi, "")
-    .replace(/\bmonitor closely\b\.?/gi, "")
+  const compact = stripInlineFiller(
+    sanitizeGeneratedText(value, rawText, 8)
+      .replace(/\n+/g, " ")
+      .replace(/\b(?:The patient is|This patient is)\s+/gi, ""),
+  )
     .replace(/\s+/g, " ")
     .trim();
   if (!compact) return "";
@@ -472,7 +473,7 @@ function sanitizeRedFlags(items: RedFlag[], rawText: string) {
       const text = itemText(item);
       if (shockResolved(rawText) && /\b(shock|hypotension|pressor|norepi|54\/29)\b/i.test(text)) return false;
       if (isShockOnlyLine(text, rawText)) return false;
-      if (/monitor closely|clinical correlation|watch for deterioration/i.test(text) && !/[<>]?\d|call|threshold|if\b/i.test(text)) return false;
+      if (containsGenericFiller(text) && !hasConcreteTrigger(text)) return false;
       return Boolean(item.text.trim());
     })
     .map((item) => ({
@@ -487,7 +488,7 @@ function sanitizeTasks(items: Task[], rawText: string) {
     .filter((item) => {
       if (shockResolved(rawText) && /\b(shock|hypotension|pressor|norepi|54\/29)\b/i.test(item.text)) return false;
       if (isShockOnlyLine(item.text, rawText)) return false;
-      if (/monitor closely|continue current management|clinical correlation/i.test(item.text)) return false;
+      if (containsGenericFiller(item.text) && !hasConcreteTrigger(item.text)) return false;
       return Boolean(item.text.trim());
     })
     .map((item) => ({

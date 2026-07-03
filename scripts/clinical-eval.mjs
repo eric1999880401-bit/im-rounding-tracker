@@ -3011,7 +3011,7 @@ try {
 }
 
 try {
-  const { concretizeVagueFollowUps } = await server.ssrLoadModule("/src/planConcretizer.ts");
+  const { concretizeVagueFollowUps } = await server.ssrLoadModule("/src/aiPostprocess/planConcretizer.ts");
   const vagueDraft = sanitizeAiSoapDraftForReview(
     {
       oneLiner: "AKI on CKD under workup",

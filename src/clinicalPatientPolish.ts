@@ -3,13 +3,14 @@ import { specificAntibioticPlan } from "./clinicalFieldRouter";
 import { compactMedicalAbbreviations } from "./medicalAbbreviations";
 import type { AssessmentPlanItem, DailyNote, GeneratedClinicalPlan, Patient, PatientTask, TaskCategory, TaskPriority } from "./types";
 import { nowIso, safeClinicalLine } from "./utils";
+import { stripInlineFiller } from "./aiPostprocess/genericFiller";
 
 function cleanLine(value: string, maxChars = 220) {
-  const clean = value
-    .replace(/\[\[(?:red|orange|yellow|blue|green|purple)(?:-(?:highlight|text))?:([^\]]+)\]\]/gi, "$1")
-    .replace(/\bwith done\b/gi, "")
-    .replace(/\bmonitor closely\b/gi, "")
-    .replace(/\bcontinue current management\b/gi, "")
+  const clean = stripInlineFiller(
+    value
+      .replace(/\[\[(?:red|orange|yellow|blue|green|purple)(?:-(?:highlight|text))?:([^\]]+)\]\]/gi, "$1")
+      .replace(/\bwith done\b/gi, ""),
+  )
     .replace(/\s+/g, " ")
     .trim();
   return safeClinicalLine(compactMedicalAbbreviations(clean), maxChars);
