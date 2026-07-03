@@ -11,7 +11,7 @@ import { aiDocumentDraftSchema, aiSoapDraftSchema, patientBatchImportSchema, rou
 import { documentTypes, sourceTypes } from "./types";
 import type { CallableInput, DocumentCallableInput, DocumentType, PatientBatchCallableInput, RoundSoapCallableInput, SourceType } from "./types";
 import { OPENAI_API_KEY, extractOutputText, extractRefusal, getModel, getModelForQuality, getOpenAiApiKey, getOpenAiErrorMessage, openAiHttpsError, sanitizeQualityMode } from "./openai";
-import { asPlainObject, compactDailyNote, compactPatientContext, concretizeVagueFollowUps, findTargetPatientForBatch, sanitizeExistingPatientsForBatch, sanitizePatientBatchImportMode, sanitizePatientBatchOutput, sanitizePatientContext, sanitizeUserStyleProfile, truncateString } from "./sanitize";
+import { asPlainObject, collapseDischargePendingLines, compactDailyNote, compactPatientContext, concretizeVagueFollowUps, findTargetPatientForBatch, sanitizeExistingPatientsForBatch, sanitizePatientBatchImportMode, sanitizePatientBatchOutput, sanitizePatientContext, sanitizeUserStyleProfile, truncateString } from "./sanitize";
 import { admissionSummaryStyleBullets, documentInstructions, makeBatchImportPrompt, makeDocumentPrompt, makePrompt, makeRoundSoapPrompt } from "./prompts";
 
 export const analyzePatientBatchText = onCall(
@@ -262,7 +262,7 @@ export const generateRoundSoap = onCall(
     }
 
     const parsed = asPlainObject(parsedDraft);
-    const soapText = concretizeVagueFollowUps(truncateString(parsed.soapText, 14000).trim());
+    const soapText = collapseDischargePendingLines(concretizeVagueFollowUps(truncateString(parsed.soapText, 14000).trim()));
     if (!soapText) {
       throw new HttpsError("data-loss", "OpenAI returned an empty SOAP draft. Retry generation; no patient data was saved.");
     }
