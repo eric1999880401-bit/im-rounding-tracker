@@ -3154,6 +3154,88 @@ try {
 }
 
 try {
+  const { dropRestatedLabBullets, leanSoapCleanup, stripDeferralTails } = await server.ssrLoadModule("/src/aiPostprocess/soapLeanCleanup.ts");
+
+  // Pinned from the user's 2026-07 manual correction (ESRD/UTI note).
+  const soap = [
+    "S:",
+    "- Fever persists",
+    "O:",
+    "- !! Lab: Hb 7.6 -> 7.3 g/dL, Cr 7.08",
+    "A/P:",
+    "# Anemia, r/o occult GI bleed",
+    "- !! Hb 7.3; f/u trend/bleeding signs and transfusion threshold.",
+    "- !! Hb 7.6 -> 7.3 g/dL, stool brown/FOBT neg; GI offered EGD but pt/family refused.",
+    "# ESRD on HD",
+    "- !! Cr 7.08; f/u UO/renal trend, adjust nephrotoxins.",
+    "- !! Cr 7.08, residual UO 100-200 mL/day; on M/W/F HD via L Hickman, s/p recent AVF PTA.",
+    "# DM2 + severe CAD s/p PCI",
+    "- ! Cont vildagliptin + aspirin/clopidogrel/statin/bisoprolol as ordered; f/u AC/PC glucose.",
+    "Tasks:",
+    "- transfuse PRBC only if symptomatic or Hb trend worsens per team decision.",
+    "DC:",
+    "- ! Meds □ / OPD □ / Cert □",
+    "- ! Pending Meds/OPD/Cert",
+  ].join("\n");
+  const cleaned = leanSoapCleanup(soap);
+
+  if (/Hb 7\.3; f\/u trend\/bleeding signs/.test(cleaned)) {
+    throw new Error(`vague Hb restatement bullet was not dropped:\n${cleaned}`);
+  }
+  if (!/Hb 7\.6 -> 7\.3 g\/dL, stool brown\/FOBT neg/.test(cleaned)) {
+    throw new Error(`concrete Hb bullet was lost:\n${cleaned}`);
+  }
+  if (/Cr 7\.08; f\/u UO\/renal trend/.test(cleaned)) {
+    throw new Error(`vague Cr restatement bullet was not dropped:\n${cleaned}`);
+  }
+  if (!/Cr 7\.08, residual UO 100-200 mL\/day/.test(cleaned)) {
+    throw new Error(`concrete Cr bullet was lost:\n${cleaned}`);
+  }
+  if (/as ordered|per team decision/.test(cleaned)) {
+    throw new Error(`decision-deferral filler tails were not stripped:\n${cleaned}`);
+  }
+  if (!/bisoprolol; f\/u AC\/PC glucose\./.test(cleaned)) {
+    throw new Error(`stripDeferralTails damaged surrounding text:\n${cleaned}`);
+  }
+  if ((cleaned.match(/Meds.*OPD.*Cert/gi) ?? []).length !== 1) {
+    throw new Error(`duplicated DC pending lines were not collapsed to one:\n${cleaned}`);
+  }
+  // The O-section lab line must never be touched by the A/P-scoped dedupe.
+  if (!/Lab: Hb 7\.6 -> 7\.3 g\/dL, Cr 7\.08/.test(cleaned)) {
+    throw new Error(`O-section lab line was altered:\n${cleaned}`);
+  }
+
+  // Bullets with concrete remainders (doses, dates, actions) must be kept even
+  // when another bullet shares the same lab value.
+  const concreteKept = dropRestatedLabBullets([
+    "A/P:",
+    "# Anemia",
+    "- !! Hb 7.3; transfuse 2U PRBC if symptomatic",
+    "- !! Hb 7.6 -> 7.3, stool neg",
+  ].join("\n"));
+  if (!/transfuse 2U PRBC/.test(concreteKept)) {
+    throw new Error(`concrete transfusion bullet was wrongly dropped:\n${concreteKept}`);
+  }
+  const repletionKept = dropRestatedLabBullets([
+    "A/P:",
+    "# Hypokalemia",
+    "- ! K 3.1; replete KCl 40 mEq PO",
+    "- ! K 3.1 on today's draw",
+  ].join("\n"));
+  if (!/replete KCl 40 mEq PO/.test(repletionKept)) {
+    throw new Error(`repletion bullet was wrongly dropped:\n${repletionKept}`);
+  }
+  if (stripDeferralTails("- cont HD + furosemide") !== "- cont HD + furosemide") {
+    throw new Error("stripDeferralTails altered a line without filler");
+  }
+  console.log("PASS Lean SOAP cleanup drops restated-lab bullets, strips 'as ordered/per team decision' tails, collapses DC dupes");
+  supplementalPasses += 1;
+} catch (error) {
+  failures.push({ name: "Lean SOAP cleanup", error: error instanceof Error ? error.message : String(error) });
+  console.error(`FAIL Lean SOAP cleanup: ${failures[failures.length - 1].error}`);
+}
+
+try {
   const { looksLikeStructuredAdmissionBrief } = await server.ssrLoadModule("/src/clinicalTextFormat.ts");
   const structuredBrief = [
     "73F",

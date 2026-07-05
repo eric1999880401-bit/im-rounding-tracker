@@ -1,6 +1,7 @@
 import { formatSoapDraft, normalizeSoapTextForEditor, parseSoapText, type SoapDraft } from "./soapDraft";
 import { classifyClinicalLine } from "./clinicalLineClassifier";
 import { normalizeApProblems } from "./apProblemNormalizer";
+import { leanSoapCleanup } from "./aiPostprocess/soapLeanCleanup";
 import { parseLabReports, safeClinicalLinePreservingMarks } from "./utils";
 
 export const AI_SOAP_OUTPUT_CONTRACT_VERSION = "ai-soap-v2";
@@ -190,7 +191,7 @@ export function normalizeAiSoapDraft(draft: SoapDraft): SoapDraft {
 }
 
 export function normalizeAiSoapText(soapText: string, candidateWarnings: string[] = []): NormalizedAiSoapOutput {
-  const parsed = parseSoapText(normalizeSoapTextForEditor(soapText));
+  const parsed = parseSoapText(normalizeSoapTextForEditor(leanSoapCleanup(soapText)));
   const normalized = normalizeAiSoapDraft(parsed);
   const warnings = [...candidateWarnings];
 
