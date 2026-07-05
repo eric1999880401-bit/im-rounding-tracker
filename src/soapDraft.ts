@@ -138,6 +138,31 @@ function makeObjectiveLines(vitalPe: string, lab: string, image: string) {
 
 function apProblemsFromText(value: string): SoapApProblem[] {
   const problems: SoapApProblem[] = [];
+
+  // Legacy assessment text pasted in "# problem" form: group each '#' title
+  // with the lines under it (and strip the hash so the board doesn't render
+  // '##'), instead of turning every line into its own problem.
+  if (/^\s*#/m.test(value)) {
+    let current: SoapApProblem | null = null;
+    value.split(/\r?\n/).forEach((rawLine) => {
+      const line = rawLine.replace(/^A\/P\s*:\s*/i, "").trim();
+      if (!line) return;
+      const title = line.match(/^#+\s*(.+)$/);
+      if (title) {
+        if (current) problems.push(current);
+        current = { title: cleanSoapLine(title[1], 72), lines: [] };
+        return;
+      }
+      if (!current) {
+        current = { title: cleanSoapLine(line, 72), lines: [] };
+        return;
+      }
+      if (current.lines.length < 3) current.lines.push(cleanSoapLine(line.replace(/^[-*]\s*/, ""), 140));
+    });
+    if (current) problems.push(current);
+    return dedupeApProblems(problems).slice(0, 5);
+  }
+
   uniqueSoapLines(value.split(/\r?\n|;\s+/), 8, 150).forEach((line) => {
     const clean = line.replace(/^A\/P\s*:\s*/i, "").trim();
     if (!clean) return;

@@ -76,6 +76,8 @@ export function compactDisplaySymbols(value: string) {
     .replace(/\belevated\b/gi, "\u2191")
     // "impr" not an arrow: \u2197 next to a symptom ("diarrhea \u2197") reads as worsening.
     .replace(/\bimprov(?:ing|ed|ement)\b/gi, "impr")
+    .replace(/\bnegative\b/gi, "neg")
+    .replace(/\bpositive\b/gi, "pos")
     .replace(/\s+and\s+/gi, " + ")
     .replace(/\s{2,}/g, " ");
 }
