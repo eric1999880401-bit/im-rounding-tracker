@@ -3523,6 +3523,30 @@ try {
 }
 
 try {
+  // "U/A" (slash form) must put urine WBC/RBC in Urinalysis, not blood CBC:
+  // "U/A cloudy, WBC >1000" once rendered as a fake critical blood WBC.
+  const uaItems = parseLabText("U/A cloudy, WBC >1000, RBC 97, LE 3+, Bacteria 2+, nitrite neg");
+  const uaWbc = uaItems.find((item) => item.label === "UA WBC");
+  const uaRbc = uaItems.find((item) => item.label === "UA RBC");
+  if (!uaWbc || uaWbc.group !== "Urinalysis" || uaWbc.value !== ">1000") {
+    throw new Error(`U/A WBC not classified as urinalysis: ${JSON.stringify(uaItems.map((i) => `${i.group}|${i.label}=${i.value}`))}`);
+  }
+  if (!uaRbc || uaRbc.group !== "Urinalysis") {
+    throw new Error("U/A RBC not classified as urinalysis");
+  }
+  const bloodItems = parseLabText("CBC: WBC 8.6, Hb 7.3 (7.6), Plt 165 (147)");
+  const bloodWbc = bloodItems.find((item) => item.label === "WBC");
+  if (!bloodWbc || bloodWbc.value !== "8.6" || bloodWbc.group === "Urinalysis") {
+    throw new Error("blood CBC WBC misclassified after U/A fix");
+  }
+  console.log("PASS U/A slash-form urinalysis stays out of blood CBC (urine WBC >1000 no longer a fake blood count)");
+  supplementalPasses += 1;
+} catch (error) {
+  failures.push({ name: "U/A urinalysis grouping", error: error instanceof Error ? error.message : String(error) });
+  console.error(`FAIL U/A urinalysis grouping: ${failures[failures.length - 1].error}`);
+}
+
+try {
   const disp = compactDisplaySymbols;
   if (disp("curam 07/02- and clindamycin 07/02-") !== "curam 07/02- + clindamycin 07/02-") {
     throw new Error(`and->+ failed: ${disp("curam 07/02- and clindamycin 07/02-")}`);

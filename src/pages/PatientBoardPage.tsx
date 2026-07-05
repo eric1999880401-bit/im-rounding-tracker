@@ -1560,7 +1560,7 @@ function PatientBoardPage({
                             [problem.title, ...problem.lines].every((line) => isCarriedForwardLine(line, carriedKeys));
                           return (
                           <div className={`${problemClass}${problemCarried ? " board-visual-line-carried" : ""}`} key={`${problem.title}-${problem.lines.join("|")}`}>
-                            <strong>#<ClinicalInlineText value={problem.title} maxChars={56} keywordRules={preferences.keywordHighlightRules} /></strong>
+                            <strong>#<ClinicalInlineText value={problem.title.replace(/^#+\s*/, "")} maxChars={56} keywordRules={preferences.keywordHighlightRules} /></strong>
                             {problem.lines.length > 0 && (
                               <span>
                                 <ClinicalInlineText value={problem.lines.slice(0, 2).join("; ")} maxChars={92} keywordRules={preferences.keywordHighlightRules} />

@@ -92,6 +92,7 @@ function parsedLabItem(
 }
 
 function parseLabItemsFromLine(line: string, important: boolean, groupHint = "") {
+  if (/^\s*(?:U\/?A|urine|urinalysis)\s*$/i.test(groupHint)) groupHint = "Urinalysis";
   const items: ParsedLabItem[] = [];
   const directionalKeys = new Set<string>();
   const tumorMarkerPattern = new RegExp(
@@ -124,7 +125,9 @@ function parseLabItemsFromLine(line: string, important: boolean, groupHint = "")
     "gi",
   );
   const genericQualitativePattern = /(?:^|[,;])\s*([A-Za-z][A-Za-z0-9+./() -]{1,28}?)\s*(?::|=)\s*(positive|negative|pos|neg|reactive|nonreactive|detected|not detected|pending|no growth|growth[^,;\n]*)/gi;
-  const uaContext = /\b(UA|urine|urinalysis)\b/i.test(groupHint) || /\b(UA|urine|urinalysis)\s*:?\b/i.test(line);
+  // "U/A" (with slash) is the common bedside spelling — without it, urine
+  // WBC >1000 / RBC land in the blood CBC line as a fake critical count.
+  const uaContext = /\b(U\/?A|urine|urinalysis)\b/i.test(groupHint) || /\b(U\/?A|urine|urinalysis)\s*:?\b/i.test(line);
 
   // Composite slash pairs like "BUN/Cr 33/0.63" or "AST/ALT 20/18": split the
   // label list and the value list positionally so each lab gets its own value.
@@ -255,7 +258,7 @@ function splitLabLineTitle(line: string) {
     return { title: colonMatch[1].trim(), body: colonMatch[2].trim() };
   }
 
-  const prefixMatch = line.match(/^(cbc\/dc|cbc|dc|metabolic|renal|electrolytes|liver|lft|coag|coag\.|ua|urine|cardiac|blood gas|abg|vbg)\s+(.+)$/i);
+  const prefixMatch = line.match(/^(cbc\/dc|cbc|dc|metabolic|renal|electrolytes|liver|lft|coag|coag\.|u\/?a|urine|cardiac|blood gas|abg|vbg)\s+(.+)$/i);
   if (prefixMatch) {
     return { title: prefixMatch[1].replace(/\.$/, "").trim(), body: prefixMatch[2].trim() };
   }
