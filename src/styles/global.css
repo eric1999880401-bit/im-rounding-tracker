@@ -3676,6 +3676,7 @@ tbody tr:last-child td {
 
 .round-soap-toolbar select {
   min-width: 150px;
+  width: auto;
 }
 
 .round-soap-paste textarea {
@@ -4212,7 +4213,9 @@ tbody tr:last-child td {
   gap: 5px;
 }
 
-.soap-preview-header span {
+/* Child selector only: ClinicalInlineText renders nested spans, and styling
+   those as chips puts padded inline boxes over neighbouring lines. */
+.soap-preview-header > span {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
@@ -4220,6 +4223,8 @@ tbody tr:last-child td {
   font-size: 12px;
   font-weight: 650;
   line-height: 1.2;
+  min-width: 0;
+  overflow-wrap: anywhere;
   padding: 4px 7px;
 }
 

@@ -1,4 +1,4 @@
-import { useRef, type RefObject } from "react";
+import { useLayoutEffect, useRef, type RefObject } from "react";
 import type { ClinicalLineKind, ClinicalLineTone } from "../clinicalLineClassifier";
 import {
   applyClinicalColorMarkup,
@@ -163,6 +163,14 @@ function LineEditor({
 }) {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const { rememberSelection, getSelectionRange } = useSelectionRange(textareaRef);
+  // Auto-grow so long lines (Dx/PMH) stay fully visible instead of clipping
+  // inside a one-row textarea; capped so a pasted wall of text stays scrollable.
+  useLayoutEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight + 2, 220)}px`;
+  }, [line.text]);
   return (
     <div className={`structured-soap-line structured-soap-line-${line.tone}`}>
       <textarea
