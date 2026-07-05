@@ -1479,11 +1479,22 @@ function PatientBoardPage({
             const visibleTaskLines = isLayoutSectionVisible(roundingLayout, "tasks")
               ? soap.taskLines.filter((line) => !isOrderSoapLine(line) && isTaskSoapLineVisible(line, roundingLayout))
               : [];
+            // The interactive Meds/OPD/Cert checklist already shows DC-prep
+            // state, so any SOAP DC line that just restates it ("Meds □ / OPD
+            // □ / Cert □", "! Pending Meds/OPD/Cert") would render the same
+            // thing twice in the DC box.
+            const dcPrepChecklistVisible = isLayoutSectionVisible(roundingLayout, "dcPrep");
+            const isDcPrepChecklistLine = (line: string) => {
+              const clean = line.replace(/^[\s!*-]+/, "").toLowerCase();
+              const tokens = ["med", "opd", "cert"].filter((token) => clean.includes(token));
+              return tokens.length >= 2 && (line.includes("□") || /pending/i.test(clean) || clean.length <= 36);
+            };
             const visibleDcLines = (soap.dcLines.length > 0 ? soap.dcLines : [])
               .filter((line) => isDcSoapLineVisible(line, roundingLayout))
               .filter((line) => !/^Target\s*:?/i.test(line))
               .filter((line) => !/^Prep\s*:/i.test(line))
-              .filter((line) => !/^Pending\s*:?\s*(?:Meds|OPD|Cert|meds|certificate)\b/i.test(line));
+              .filter((line) => !/^Pending\s*:?\s*(?:Meds|OPD|Cert|meds|certificate)\b/i.test(line))
+              .filter((line) => !(dcPrepChecklistVisible && isDcPrepChecklistLine(line)));
             const pendingTaskCount = pendingTasks(patient).length;
             const urgentTaskCount = pendingTasks(patient).filter(
               (task) => task.priority === "urgent" || task.text.trim().startsWith("!"),

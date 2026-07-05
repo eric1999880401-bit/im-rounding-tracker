@@ -2928,106 +2928,6 @@ tbody tr:last-child td {
   min-width: 0;
 }
 
-.color-toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
-}
-
-.color-tool {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  color: var(--text);
-  font-size: 12px;
-  font-weight: 500;
-  letter-spacing: 0;
-  min-height: 28px;
-  padding: 4px 9px;
-  text-transform: capitalize;
-}
-
-.color-tool-red {
-  background: #f0d9cb;
-  border-color: #d8b3a2;
-  color: #8b3a2b;
-}
-
-.color-tool-orange {
-  background: #f0e0c4;
-  border-color: #d4b888;
-  color: #8a6238;
-}
-
-.color-tool-yellow {
-  background: #ede2b6;
-  border-color: #ccb98c;
-  color: #6b5728;
-}
-
-.color-tool-blue {
-  background: #d8dfe2;
-  border-color: #b3c1c8;
-  color: #3a4a55;
-}
-
-.color-tool-green {
-  background: #d6dfc7;
-  border-color: #b9c4a5;
-  color: #4a5d3e;
-}
-
-.color-tool-purple {
-  background: #ddd5dc;
-  border-color: #bdb1bd;
-  color: #5a4a5c;
-}
-
-.color-tool-clear {
-  background: var(--surface);
-  color: var(--text-muted);
-}
-
-.color-markup-preview {
-  background: var(--surface);
-  border: 1px dashed var(--border);
-  border-radius: var(--radius-sm);
-  display: grid;
-  font-size: 13px;
-  gap: 2px;
-  line-height: 1.45;
-  padding: 6px 9px;
-}
-
-.inline-color-toolbar {
-  align-items: center;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 3px;
-}
-
-.inline-color-tool,
-.inline-color-clear {
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  flex: 0 0 auto;
-  height: 20px;
-  min-height: 20px;
-  padding: 0;
-  width: 20px;
-}
-
-.inline-color-clear {
-  align-items: center;
-  background: var(--surface);
-  color: var(--text-muted);
-  display: inline-flex;
-  font-size: 12px;
-  font-weight: 800;
-  justify-content: center;
-}
-
 .clinical-numbered-line {
   padding-left: 10px;
 }
@@ -5027,47 +4927,11 @@ tbody tr:last-child td {
   background: transparent;
 }
 
-:root[data-theme="dark"] .color-tool-red,
-:root[data-theme="system"] .color-tool-red {
-  background: rgb(201 122 106 / 0.18);
-  border-color: #6a3a2c;
-  color: #d8a99c;
-}
 
-:root[data-theme="dark"] .color-tool-orange,
-:root[data-theme="system"] .color-tool-orange {
-  background: rgb(212 168 116 / 0.16);
-  border-color: #6a5530;
-  color: #d8b794;
-}
 
-:root[data-theme="dark"] .color-tool-yellow,
-:root[data-theme="system"] .color-tool-yellow {
-  background: rgb(212 184 116 / 0.16);
-  border-color: #6a5d30;
-  color: #d4c194;
-}
 
-:root[data-theme="dark"] .color-tool-blue,
-:root[data-theme="system"] .color-tool-blue {
-  background: rgb(148 168 179 / 0.16);
-  border-color: #3e4c56;
-  color: #b3c4cd;
-}
 
-:root[data-theme="dark"] .color-tool-green,
-:root[data-theme="system"] .color-tool-green {
-  background: rgb(155 171 133 / 0.18);
-  border-color: #4a5640;
-  color: #b3c0a3;
-}
 
-:root[data-theme="dark"] .color-tool-purple,
-:root[data-theme="system"] .color-tool-purple {
-  background: rgb(173 158 173 / 0.16);
-  border-color: #4e424e;
-  color: #c0b3c0;
-}
 
 /* ============================================================
    Responsive
