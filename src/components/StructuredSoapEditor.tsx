@@ -1,11 +1,5 @@
-import { useLayoutEffect, useRef, type RefObject } from "react";
+import { useLayoutEffect, useRef } from "react";
 import type { ClinicalLineKind, ClinicalLineTone } from "../clinicalLineClassifier";
-import {
-  applyClinicalColorMarkup,
-  clearClinicalColorMarkupAtSelection,
-  clinicalMarkColors,
-  type ClinicalMarkColor,
-} from "../clinicalColorMarkup";
 import {
   emptySoapEditorLine,
   emptySoapEditorProblem,
@@ -16,7 +10,6 @@ import {
   type SoapEditorProblem,
 } from "../soapEditorDraft";
 import MedicationOrderReviewPanel, { type MedicationOrderSummaryLine } from "./MedicationOrderReviewPanel";
-import { useSelectionRange } from "./useSelectionRange";
 
 interface StructuredSoapEditorProps {
   draft: SoapEditorDraft;
@@ -77,71 +70,6 @@ function editableTone(tone: ClinicalLineTone): ClinicalLineTone {
   return tone === "critical" || tone === "important" ? tone : "plain";
 }
 
-function SelectionColorToolbar({
-  value,
-  onChange,
-  controlRef,
-  getSelectionRange,
-}: {
-  value: string;
-  onChange: (value: string) => void;
-  controlRef: RefObject<HTMLTextAreaElement | HTMLInputElement | null>;
-  getSelectionRange: (valueLength: number) => { start: number; end: number } | null;
-}) {
-  const applySelection = (nextValue: string, start: number, selectedLength: number) => {
-    onChange(nextValue);
-    window.setTimeout(() => {
-      const control = controlRef.current;
-      if (!control) return;
-      control.focus();
-      control.setSelectionRange(start, start + selectedLength);
-    }, 0);
-  };
-
-  const markColor = (color: ClinicalMarkColor) => {
-    const range = getSelectionRange(value.length);
-    if (!range) return;
-    const selectedText = value.slice(range.start, range.end);
-    applySelection(applyClinicalColorMarkup(value, range.start, range.end, color), range.start + `[[${color}:`.length, selectedText.length);
-  };
-
-  const clearColor = () => {
-    const range = getSelectionRange(value.length);
-    if (!range) return;
-    applySelection(clearClinicalColorMarkupAtSelection(value, range.start, range.end), range.start, value.slice(range.start, range.end).length);
-  };
-
-  return (
-    <div className="inline-color-toolbar" aria-label="Color selected text">
-      {clinicalMarkColors.map((color) => (
-        <button
-          type="button"
-          className={`inline-color-tool color-tool-${color}`}
-          key={color}
-          onMouseDown={(event) => {
-            event.preventDefault();
-            markColor(color);
-          }}
-          title={`Mark selected text ${color}`}
-          aria-label={`Mark selected text ${color}`}
-        />
-      ))}
-      <button
-        type="button"
-        className="inline-color-clear"
-        onMouseDown={(event) => {
-          event.preventDefault();
-          clearColor();
-        }}
-        title="Clear selected color"
-        aria-label="Clear selected color"
-      >
-        clear
-      </button>
-    </div>
-  );
-}
-
 function LineEditor({
   line,
   showKind,
@@ -162,7 +90,6 @@ function LineEditor({
   onCompositionEnd?: () => void;
 }) {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
-  const { rememberSelection, getSelectionRange } = useSelectionRange(textareaRef);
   // Auto-grow so long lines (Dx/PMH) stay fully visible instead of clipping
   // inside a one-row textarea; capped so a pasted wall of text stays scrollable.
   useLayoutEffect(() => {
@@ -178,7 +105,6 @@ function LineEditor({
         className="structured-soap-line-text"
         value={line.text}
         onChange={(event) => onChange({ ...line, text: event.target.value })}
-        onSelect={rememberSelection}
         onCompositionStart={onCompositionStart}
         onCompositionEnd={onCompositionEnd}
         rows={1}
@@ -207,12 +133,6 @@ function LineEditor({
             ))}
           </select>
         </div>
-        <SelectionColorToolbar
-          value={line.text}
-          onChange={(text) => onChange({ ...line, text })}
-          controlRef={textareaRef}
-          getSelectionRange={getSelectionRange}
-        />
         <div className="structured-soap-line-actions">
           <button type="button" className="secondary compact-button" onClick={() => onChange({ ...line, tone: "important" })} title="Keep in Print">Keep</button>
           <button type="button" className="secondary compact-button" onClick={onMoveUp} title="Move up">Up</button>
@@ -296,27 +216,17 @@ function ProblemEditor({
   onCompositionEnd?: () => void;
 }) {
   const lines = problem.lines.length > 0 ? problem.lines : [emptySoapEditorLine("ap")];
-  const titleRef = useRef<HTMLInputElement | null>(null);
-  const { rememberSelection, getSelectionRange } = useSelectionRange(titleRef);
   return (
     <article className={`structured-soap-problem structured-soap-line-${problem.tone}`}>
       <div className="structured-soap-problem-heading">
         <div className="structured-soap-problem-title-row">
           <span className="structured-soap-problem-index">#{index + 1}</span>
           <input
-            ref={titleRef}
             value={problem.title}
             onChange={(event) => onChange({ ...problem, title: event.target.value })}
-            onSelect={rememberSelection}
             onCompositionStart={onCompositionStart}
             onCompositionEnd={onCompositionEnd}
             placeholder="Problem title"
-          />
-          <SelectionColorToolbar
-            value={problem.title}
-            onChange={(title) => onChange({ ...problem, title })}
-            controlRef={titleRef}
-            getSelectionRange={getSelectionRange}
           />
         </div>
         <div className="structured-soap-line-meta">

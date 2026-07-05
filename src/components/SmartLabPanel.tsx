@@ -86,7 +86,6 @@ function SmartLabPanel({
   const [nameQuery, setNameQuery] = useState("");
   const [suggestionsOpen, setSuggestionsOpen] = useState(false);
   const labTextareaRef = useRef<HTMLTextAreaElement | null>(null);
-  const colorOptions = ["red", "orange", "yellow", "blue", "green", "purple"];
   const suggestions = useMemo(() => {
     return searchLabDictionary(nameQuery, 12);
   }, [nameQuery]);
@@ -197,22 +196,6 @@ function SmartLabPanel({
     }, 0);
   }
 
-  function markRawLabColor(color: string) {
-    const textarea = labTextareaRef.current;
-    if (!textarea) return;
-    const start = textarea.selectionStart;
-    const end = textarea.selectionEnd;
-    if (start === end) return;
-    const selectedText = rawValue.slice(start, end);
-    const markerStart = `[[${color}:`;
-    const nextValue = `${rawValue.slice(0, start)}${markerStart}${selectedText}]]${rawValue.slice(end)}`;
-    updateRaw(nextValue);
-    window.setTimeout(() => {
-      textarea.focus();
-      textarea.setSelectionRange(start + markerStart.length, end + markerStart.length);
-    }, 0);
-  }
-
   return (
     <div className="smart-lab-panel">
       <label>
@@ -227,20 +210,6 @@ function SmartLabPanel({
           placeholder="Example: CBC/DC: WBC 3000 Neu 50&#10;metabolic: AST 20 ALT 18&#10;HbA1c 11.7% UA WBC 20 LE 1+"
         />
       </label>
-
-      <div className="color-toolbar" aria-label="Color selected lab text">
-        {colorOptions.map((color) => (
-          <button
-            type="button"
-            className={`color-tool color-tool-${color}`}
-            key={color}
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={() => markRawLabColor(color)}
-          >
-            {color}
-          </button>
-        ))}
-      </div>
 
       <div className="lab-report-meta">
         <label>

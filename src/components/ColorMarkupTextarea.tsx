@@ -1,12 +1,9 @@
-import { useRef, type ClipboardEvent } from "react";
-import {
-  applyClinicalColorMarkup,
-  clearClinicalColorMarkupAtSelection,
-  clinicalMarkColors,
-  type ClinicalMarkColor,
-} from "../clinicalColorMarkup";
-import { useSelectionRange } from "./useSelectionRange";
+import type { ClipboardEvent } from "react";
 
+// Historically wrapped the textarea with manual color-markup buttons; those
+// were removed (user request: raw [[color:...]] markup in plain textareas was
+// noisy and error-prone). Existing stored color marks still render everywhere
+// via ClinicalText; automatic keyword highlighting lives in Settings.
 interface ColorMarkupTextareaProps {
   value: string;
   onChange: (value: string) => void;
@@ -28,77 +25,17 @@ function ColorMarkupTextarea({
   placeholder,
   className,
 }: ColorMarkupTextareaProps) {
-  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
-  const { rememberSelection, getSelectionRange } = useSelectionRange(textareaRef);
-
-  function applySelection(nextValue: string, start: number, selectedLength: number) {
-    onChange(nextValue);
-    window.setTimeout(() => {
-      textareaRef.current?.focus();
-      textareaRef.current?.setSelectionRange(start, start + selectedLength);
-    }, 0);
-  }
-
-  function markColor(color: ClinicalMarkColor) {
-    const range = getSelectionRange(value.length);
-    if (!range) return;
-
-    const selectedText = value.slice(range.start, range.end);
-    applySelection(
-      applyClinicalColorMarkup(value, range.start, range.end, color),
-      range.start + `[[${color}:`.length,
-      selectedText.length,
-    );
-  }
-
-  function clearColor() {
-    const range = getSelectionRange(value.length);
-    if (!range) return;
-    applySelection(clearClinicalColorMarkupAtSelection(value, range.start, range.end), range.start, value.slice(range.start, range.end).length);
-  }
-
   return (
-    <div className="color-textarea">
-      <textarea
-        ref={textareaRef}
-        className={className}
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        onSelect={rememberSelection}
-        onBlur={onBlur}
-        onCompositionStart={onCompositionStart}
-        onCompositionEnd={onCompositionEnd}
-        onPaste={onPaste}
-        placeholder={placeholder}
-      />
-      <div className="color-toolbar" aria-label="Color selected text">
-        {clinicalMarkColors.map((color) => (
-          <button
-            type="button"
-            className={`color-tool color-tool-${color}`}
-            key={color}
-            onMouseDown={(event) => {
-              event.preventDefault();
-              markColor(color);
-            }}
-            title={`Mark selected text ${color}`}
-          >
-            {color}
-          </button>
-        ))}
-        <button
-          type="button"
-          className="color-tool color-tool-clear"
-          onMouseDown={(event) => {
-            event.preventDefault();
-            clearColor();
-          }}
-          title="Clear selected color"
-        >
-          clear
-        </button>
-      </div>
-    </div>
+    <textarea
+      className={className}
+      value={value}
+      onChange={(event) => onChange(event.target.value)}
+      onBlur={onBlur}
+      onCompositionStart={onCompositionStart}
+      onCompositionEnd={onCompositionEnd}
+      onPaste={onPaste}
+      placeholder={placeholder}
+    />
   );
 }
 
