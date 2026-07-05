@@ -1354,7 +1354,7 @@ function AiIntakePanel({ patient, selectedDate, onApplyPatient }: AiIntakePanelP
           ))}
         </div>
 
-        <DeidNotice />
+        <DeidNotice span2 />
 
         <details className="advanced-fold span-2">
           <summary>Advanced</summary>

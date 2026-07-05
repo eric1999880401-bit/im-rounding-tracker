@@ -454,7 +454,7 @@ function AiDocumentsPage({ patients, dailyNotesByPatient = {}, onSavePatient }: 
               placeholder="Paste de-identified note / V/S / lab / image / consult…"
             />
           </label>
-          <DeidNotice />
+          <DeidNotice span2 />
           <details className="advanced-fold span-2">
             <summary>Advanced</summary>
             <label className="checkbox-label">
