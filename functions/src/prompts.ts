@@ -405,6 +405,8 @@ export function makeRoundSoapPrompt(params: {
     "- A pending decision the team has not made may be a terse Task question: 'transfuse?'. Do not spell out the whole decision rule.",
     "- Standing schedules (HD M/W/F) and routine next-draw lab panels ('f/u CBC, BUN/Cr, Na/K, CRP') are not Tasks. A dialysis schedule lives in the ESRD problem line if anywhere.",
     "- Each f/u item appears exactly once in the whole note — under its A/P problem or in Tasks, never both. If the A/P bullet already says 'f/u B/C clearance/susceptibility', Tasks must not repeat a de-escalation reminder for the same cultures.",
+    "- For ESRD/dialysis patients, chronically elevated BUN/Cr is their baseline: never mark renal values with !!/red as if they were a new critical event, and never generate 'f/u BUN/Cr / renal function' boilerplate. Flag renal values only for an acute change from that patient's own baseline (e.g. missed HD, hyperkalemia, new oliguria).",
+    "- Treat currentSoapBaseline as the clinician's latest editorial decision: if a problem, task, or line that exists in older context (activeProblems, admission info, prior notes) is absent from the baseline, the clinician deleted it on purpose. Do not re-add it unless today's pasted source clearly reintroduces it.",
     "- Preserve exact lab values, dates, antibiotics, cultures, image study names/dates, procedures, consults, and pending items.",
     "- If lab parser/category would conflict with pasted lab line, trust pasted text and warn instead of rewriting values.",
     "- If source says shock/hypotension resolved or latest BP stable, do not create active shock red flag/A/P.",

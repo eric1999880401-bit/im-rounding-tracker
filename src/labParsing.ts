@@ -104,8 +104,11 @@ function parseLabItemsFromLine(line: string, important: boolean, groupHint = "")
     "gi",
   );
   const cultureStatusPattern = /\b(Blood culture|B\/C|BCx|Sputum culture|S\/C|SCx|Urine culture|U\/C|UCx)\s*(?:\d{1,2}\/\d{1,2})?\s*(?:[:=-])?\s*(pending|no growth|negative|positive|growth[^,;\n]*)/gi;
+  // "[:=]?" after the alias: clinicians write "Cortisol: 5.2" / "TSH = 0.8";
+  // without it the dictionary pattern misses and the generic pattern skips
+  // dictionary labels, so the value vanished entirely.
   const directionalPattern = new RegExp(
-    `(?:^|\\b)(${labAliasPattern()})\\.?\\s*${labValuePattern}\\s*(?:->|→|to)\\s*${labValuePattern}${labFlagPattern}`,
+    `(?:^|\\b)(${labAliasPattern()})\\.?\\s*(?:[:=]\\s*)?${labValuePattern}\\s*(?:->|→|to)\\s*${labValuePattern}${labFlagPattern}`,
     "gi",
   );
   const genericDirectionalPattern = new RegExp(
@@ -113,7 +116,7 @@ function parseLabItemsFromLine(line: string, important: boolean, groupHint = "")
     "gi",
   );
   const pattern = new RegExp(
-    `(?:^|\\b)(${labAliasPattern()})\\.?\\s*${labValuePattern}(?:\\s*(?:\\(\\s*${labValuePattern}\\s*\\)|from(?:\\s+baseline)?\\s*${labValuePattern}))?${labFlagPattern}`,
+    `(?:^|\\b)(${labAliasPattern()})\\.?\\s*(?:[:=]\\s*)?${labValuePattern}(?:\\s*(?:\\(\\s*${labValuePattern}\\s*\\)|from(?:\\s+baseline)?\\s*${labValuePattern}))?${labFlagPattern}`,
     "gi",
   );
   const genericPattern = new RegExp(
@@ -656,6 +659,23 @@ function patientLabContext(patient: Patient) {
     .toLowerCase();
 }
 
+// Chronic dialysis context: chronically elevated BUN/Cr is that patient's
+// baseline, not a new critical event, so renal values are capped at
+// "abnormal" instead of screaming critical/red on every list.
+// "\bhd\b(?!\s*#?\s*\d)" avoids hospital-day notation like "HD#3".
+export function hasChronicRenalContext(patient?: Patient | null) {
+  if (!patient) return false;
+  const context = patientLabContext(patient);
+  return /\besrd\b|end[-\s]stage renal|dialysis|\bcrrt\b|洗腎|\bhd\b(?!\s*#?\s*\d)/i.test(context);
+}
+
+const chronicRenalCappedKeys = new Set(["cr", "bun", "egfr"].map((key) => canonicalLabKey(key)));
+
+function contextAdjustedLabLevel(key: string, level: number, patient?: Patient | null) {
+  if (level >= 2 && chronicRenalCappedKeys.has(canonicalLabKey(key)) && hasChronicRenalContext(patient)) return 1;
+  return level;
+}
+
 function hasSpecificTlsLabContext(context: string) {
   const clean = context
     .replace(/\btrend\s+tls\s+labs?\b/gi, " ")
@@ -788,7 +808,7 @@ export function interpretLabItem(item: ParsedLabItem, patient?: Patient): LabInt
   const value = labClinicalNumericValue(key, rawValue);
   const previous = labClinicalNumericValue(key, rawPrevious);
   const qualitativeLevel = labQualitativeLevel(key, item);
-  const level = Math.max(labAbnormalLevel(key, value), qualitativeLevel);
+  const level = contextAdjustedLabLevel(key, Math.max(labAbnormalLevel(key, value), qualitativeLevel), patient);
   const hasDelta = meaningfulLabDelta(key, value, previous);
   const anchor = patient ? isDiseaseAnchorLab(key, patient) && shouldShowAnchorLab(key, level) : false;
   const severity: LabInterpretationSeverity = level >= 1 || hasDelta || anchor ? entrySeverity(level, hasDelta, anchor) : "normal";
@@ -918,7 +938,7 @@ export function getLabFocusSummary(
     const value = labClinicalNumericValue(key, rawValue);
     const previous = labClinicalNumericValue(key, rawPrevious);
     const qualitativeLevel = labQualitativeLevel(key, latest.item);
-    const level = Math.max(labAbnormalLevel(key, value), qualitativeLevel);
+    const level = contextAdjustedLabLevel(key, Math.max(labAbnormalLevel(key, value), qualitativeLevel), patient);
     const hasDelta = meaningfulLabDelta(key, value, previous);
     const anchor = isDiseaseAnchorLab(key, patient) && shouldShowAnchorLab(key, level);
     const direction = value !== null ? labDirection(key, value, previous) : latest.previousValue ? `(${latest.previousValue})` : "";

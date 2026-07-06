@@ -1436,8 +1436,11 @@ try {
   if (!/Teicoplanin 5\/13-/i.test(patch.patient.plan) || !/CT neck\/chest/i.test(patch.patient.newImaging)) {
     throw new Error(`SOAP save adapter lost concrete therapy/image:\n${patch.patient.plan}\n${patch.patient.newImaging}`);
   }
-  if (patch.patient.tasks.length !== 2 || patch.patient.assessmentPlanItems.length !== patient.assessmentPlanItems.length || patch.dailyNotePatch.assessmentPlanItems) {
-    throw new Error("SOAP save adapter should create tasks but preserve legacy A/P fields");
+  if (patch.patient.tasks.length !== 2 || patch.patient.assessmentPlanItems.length !== parsed.apProblems.length || patch.dailyNotePatch.assessmentPlanItems) {
+    throw new Error("SOAP save adapter should create tasks and sync legacy A/P items to the reviewed SOAP");
+  }
+  if (!/MRSA\/Enterococcus bacteremia/i.test(patch.patient.activeProblems)) {
+    throw new Error(`activeProblems not synced from reviewed A/P: ${patch.patient.activeProblems}`);
   }
   const fallbackPatient = {
     ...patient,
@@ -3544,6 +3547,103 @@ try {
 } catch (error) {
   failures.push({ name: "U/A urinalysis grouping", error: error instanceof Error ? error.message : String(error) });
   console.error(`FAIL U/A urinalysis grouping: ${failures[failures.length - 1].error}`);
+}
+
+try {
+  // Dictionary labs written with a colon ("Cortisol: 5.2") used to parse to
+  // nothing: the dictionary pattern rejected the colon and the generic
+  // pattern skips dictionary labels.
+  const colonItems = parseLabText("Cortisol: 5.2\nTSH: 0.82\nCr: 7.08");
+  for (const [label, value] of [["Cortisol", "5.2"], ["TSH", "0.82"], ["Cr", "7.08"]]) {
+    const found = colonItems.find((item) => item.label === label);
+    if (!found || found.value !== value) {
+      throw new Error(`colon-form ${label} did not parse: ${JSON.stringify(colonItems.map((i) => `${i.label}=${i.value}`))}`);
+    }
+  }
+  // Non-dictionary labs must still appear in the visual summary Other group
+  // instead of silently disappearing.
+  const { buildLabVisualSummaryFromText } = await server.ssrLoadModule("/src/labVisualSummary.ts");
+  const groups = buildLabVisualSummaryFromText("Lab: ACTH 12, cortisol 5.2");
+  const flat = groups.map((group) => `${group.id}:${group.items.map((item) => item.label).join("/")}`).join(" | ");
+  if (!groups.some((group) => group.id === "other" && group.items.some((item) => /acth/i.test(item.label)))) {
+    throw new Error(`non-dictionary ACTH missing from visual summary: ${flat}`);
+  }
+  if (!flat.includes("Cortisol")) {
+    throw new Error(`dictionary cortisol missing from visual summary: ${flat}`);
+  }
+  console.log("PASS Colon-form dictionary labs parse and non-dictionary labs land in Other instead of vanishing");
+  supplementalPasses += 1;
+} catch (error) {
+  failures.push({ name: "Colon-form + custom lab visibility", error: error instanceof Error ? error.message : String(error) });
+  console.error(`FAIL Colon-form + custom lab visibility: ${failures[failures.length - 1].error}`);
+}
+
+try {
+  const { hasChronicRenalContext } = await server.ssrLoadModule("/src/labParsing.ts");
+  const { buildLabVisualSummaryFromText } = await server.ssrLoadModule("/src/labVisualSummary.ts");
+  const { classifyClinicalLine } = await server.ssrLoadModule("/src/clinicalLineClassifier.ts");
+
+  const esrdPatient = { ...emptyPatient(), underlyingDiseases: "ESRD on HD, DM2", underlyingDiseaseItems: ["ESRD on HD", "DM2"] };
+  const akiPatient = { ...emptyPatient(), underlyingDiseases: "HTN", activeProblems: "AKI" };
+  if (!hasChronicRenalContext(esrdPatient)) throw new Error("ESRD on HD not detected as chronic renal context");
+  if (hasChronicRenalContext(akiPatient)) throw new Error("AKI patient wrongly treated as chronic renal");
+  if (hasChronicRenalContext({ ...emptyPatient(), hospitalCourseHighlights: "HD#3 stable" })) {
+    throw new Error("hospital-day notation HD#3 wrongly detected as dialysis");
+  }
+
+  const esrdGroups = buildLabVisualSummaryFromText("Lab: Cr 7.08, K 4.1", { patient: esrdPatient });
+  const esrdRenal = esrdGroups.find((group) => group.id === "renalLyte");
+  if (!esrdRenal || esrdRenal.tone === "critical") {
+    throw new Error(`ESRD Cr 7.08 still critical in visual summary: ${JSON.stringify(esrdGroups.map((g) => `${g.id}:${g.tone}`))}`);
+  }
+  const akiGroups = buildLabVisualSummaryFromText("Lab: Cr 3.1", { patient: akiPatient });
+  if (akiGroups.find((group) => group.id === "renalLyte")?.tone !== "critical") {
+    throw new Error("AKI Cr 3.1 lost its critical tone");
+  }
+
+  const line = "Lab: Renal/Lyte: Cr 7.08↑, Na 136, K 4.1";
+  if (classifyClinicalLine(line, { fallbackKind: "lab", chronicRenal: true }).tone === "critical") {
+    throw new Error("classifier still marks chronic-renal Cr line critical");
+  }
+  if (classifyClinicalLine(line, { fallbackKind: "lab" }).tone !== "critical") {
+    throw new Error("classifier lost the acute Cr critical signal");
+  }
+  // Headline must not scream critical for baseline ESRD renal values.
+  const esrdHeadlinePatient = { ...esrdPatient, rawLabText: "Cr 7.08" };
+  const headline = getPatientHeadline(esrdHeadlinePatient, []);
+  if (headline && headline.tone === "critical" && /cr/i.test(headline.text)) {
+    throw new Error(`ESRD headline still critical on Cr: ${JSON.stringify(headline)}`);
+  }
+  console.log("PASS ESRD/dialysis context downgrades chronic Cr from critical while AKI keeps it");
+  supplementalPasses += 1;
+} catch (error) {
+  failures.push({ name: "Chronic renal criticality context", error: error instanceof Error ? error.message : String(error) });
+  console.error(`FAIL Chronic renal criticality context: ${failures[failures.length - 1].error}`);
+}
+
+try {
+  const { soapTextToPatientPatch } = await server.ssrLoadModule("/src/soapDraft.ts");
+  const stalePatient = {
+    ...emptyPatient(),
+    activeProblems: "Pneumonia; Old deleted problem",
+    activeProblemItems: ["Pneumonia", "Old deleted problem"],
+  };
+  const reviewed = ["S:", "- stable", "A/P:", "# Pneumonia", "- cont Abx", "Tasks:", "- f/u CXR"].join("\n");
+  const patch = soapTextToPatientPatch(reviewed, stalePatient, "2026-07-06");
+  if (/Old deleted problem/i.test(patch.patient.activeProblems)) {
+    throw new Error(`activeProblems kept a problem deleted from reviewed SOAP: ${patch.patient.activeProblems}`);
+  }
+  if (!/Pneumonia/i.test(patch.patient.activeProblems) || !patch.patient.activeProblemItems.includes("Pneumonia")) {
+    throw new Error(`activeProblems lost the kept problem: ${patch.patient.activeProblems}`);
+  }
+  if (patch.patient.assessmentPlanItems.some((item) => /Old deleted problem/i.test(item.problemTitle))) {
+    throw new Error("assessmentPlanItems kept a deleted problem");
+  }
+  console.log("PASS Saving reviewed SOAP syncs activeProblems, so deleted problems stop resurrecting via AI context");
+  supplementalPasses += 1;
+} catch (error) {
+  failures.push({ name: "Reviewed-SOAP save syncs activeProblems", error: error instanceof Error ? error.message : String(error) });
+  console.error(`FAIL Reviewed-SOAP save syncs activeProblems: ${failures[failures.length - 1].error}`);
 }
 
 try {

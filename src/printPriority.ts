@@ -112,13 +112,14 @@ export function shortPrintText(value: string, maxChars = 84) {
   return cleanPrintTail(kept.join(" ") || firstClause.slice(0, limit).trim());
 }
 
-export function classifyPrintVisualItem(item: { raw: string; text: string }, fallbackKind: PrintVisualKind): PrintVisualItem {
+export function classifyPrintVisualItem(item: { raw: string; text: string }, fallbackKind: PrintVisualKind, chronicRenal = false): PrintVisualItem {
   const source = item.raw || item.text;
   const isDcLine = /^!*\s*DC\s*:/i.test(source);
   const lockedKind = fallbackKind === "task" && isDcLine ? "dc" : fallbackKind;
   const classified = classifyClinicalLine(source, {
     fallbackKind: lockedKind,
     lockKind: lockedKind !== "other" && lockedKind !== "image",
+    chronicRenal,
   });
   const label = classified.kind === "task" ? (isOrderSoapLine(source) ? "藥囑" : "T") : classified.label;
   const markedText = visualPrintText(isOrderSoapLine(source) ? stripOrderLinePrefix(source) : source);
