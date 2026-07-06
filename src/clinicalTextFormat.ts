@@ -163,6 +163,10 @@ function isSameClinicalContent(candidate: string, source: string) {
 function looksLikeFullAdmissionNote(value: string) {
   const clean = value.trim();
   if (!clean) return false;
+  // The structured brief format (PHx:/CC:/PI:/ED Lab:/Imp:) is exactly what
+  // the summary field is supposed to hold — its headings must not get it
+  // misclassified as a pasted full admission note and dropped from print.
+  if (looksLikeStructuredAdmissionBrief(clean) && clean.length <= 1600) return false;
   const headingMatches = clean.match(/(^|\n)\s*(c\.?c|chief concern|p\.?i|hpi|physical exam|assessment|plan|lab|image)\s*[:：]/gi);
   return clean.length > 1600 || clean.split(/\r?\n/).filter(Boolean).length > 14 || (headingMatches?.length ?? 0) >= 3;
 }
