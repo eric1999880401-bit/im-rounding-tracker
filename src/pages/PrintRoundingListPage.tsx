@@ -73,6 +73,7 @@ function PrintRoundingListPage({
   const roundingLayout = normalizeRoundingLayoutPreferences(preferences.roundingLayout);
   const [printMode, setPrintMode] = useState("all");
   const [admissionBriefPrintMode, setAdmissionBriefPrintMode] = useState("compact");
+  const [briefInCards, setBriefInCards] = useState(true);
   const [selectedAttending, setSelectedAttending] = useState("");
   const [hideCompletedTasks, setHideCompletedTasks] = useState(true);
   const [density, setDensity] = useState<PrintDensity>(roundingLayout.printDensity);
@@ -970,6 +971,12 @@ function PrintRoundingListPage({
                   <div className="print-patient-context">{patientContextText(patient)}</div>
                 )}
 
+                {briefInCards && (patient.showAdmissionBriefOnPrint || patient.isNewAdmission) && getAdmissionSummaryText(patient, { allowFallback: false }).trim() && (
+                  <div className="print-inline-brief">
+                    <ClinicalText value={getAdmissionSummaryText(patient, { allowFallback: false })} keywordRules={preferences.keywordHighlightRules} />
+                  </div>
+                )}
+
                 {redFlagItems.length > 0 && (
                   <div className="print-red-flags">
                     <strong>Red Flags:</strong>
@@ -1088,21 +1095,6 @@ function PrintRoundingListPage({
         )}
 
         <label>
-          {t("print.team")}
-          <input value={team} onChange={(event) => setTeam(event.target.value)} />
-        </label>
-
-        <label>
-          {t("field.attending")}
-          <input value={attending} onChange={(event) => setAttending(event.target.value)} />
-        </label>
-
-        <label>
-          {t("print.resident")}
-          <input value={resident} onChange={(event) => setResident(event.target.value)} />
-        </label>
-
-        <label>
           {t("action.sort")}
           <select value={sortMode} onChange={(event) => setSortMode(event.target.value as SortMode)}>
             <option value="bed">{t("board.byBed")}</option>
@@ -1120,6 +1112,26 @@ function PrintRoundingListPage({
           {t("action.hideCompleted")}
         </label>
 
+        <label className="checkbox-label">
+          <input type="checkbox" checked={briefInCards} onChange={(event) => setBriefInCards(event.target.checked)} />
+          {t("print.briefInCards")}
+        </label>
+
+        <details className="advanced-fold print-advanced-fold">
+          <summary>{t("print.advancedOptions")}</summary>
+          <div className="print-options-advanced">
+        <label>
+          {t("print.team")}
+          <input value={team} onChange={(event) => setTeam(event.target.value)} />
+        </label>
+        <label>
+          {t("field.attending")}
+          <input value={attending} onChange={(event) => setAttending(event.target.value)} />
+        </label>
+        <label>
+          {t("print.resident")}
+          <input value={resident} onChange={(event) => setResident(event.target.value)} />
+        </label>
         <label>
           {t("print.density")}
           <select value={density} onChange={(event) => setDensity(event.target.value as PrintDensity)}>
@@ -1163,6 +1175,8 @@ function PrintRoundingListPage({
           <input type="checkbox" checked={includeStudyTopics} onChange={(event) => setIncludeStudyTopics(event.target.checked)} />
           {t("print.includeStudyTopics")}
         </label>
+          </div>
+        </details>
       </section>
 
       {admissionBriefPrintMode !== "compact" && (

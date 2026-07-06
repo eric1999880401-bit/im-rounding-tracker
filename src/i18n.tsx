@@ -219,6 +219,8 @@ const zh: Record<string, string> = {
   "print.compactHelp": "重點完整會優先保留重要 lab、影像、A/P、藥囑與 DC；複雜病人可能跨頁。",
   "print.preview": "Admission Brief Print Preview",
   "print.noBriefs": "沒有選取 admission briefs。",
+  "print.briefInCards": "Admission summary 印在病人卡內",
+  "print.advancedOptions": "進階排版 / 表頭",
 };
 
 const en: Record<string, string> = {
@@ -439,6 +441,8 @@ const en: Record<string, string> = {
   "print.compactHelp": "Priority detail preserves important labs, imaging, A/P, orders, and DC even if complex patients continue to another page.",
   "print.preview": "Admission Brief Print Preview",
   "print.noBriefs": "No admission briefs selected for print.",
+  "print.briefInCards": "Print admission summary inside patient cards",
+  "print.advancedOptions": "Advanced layout / header",
 };
 
 const I18nContext = createContext<LanguagePreference>("en");

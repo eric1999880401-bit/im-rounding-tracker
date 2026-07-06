@@ -3647,6 +3647,40 @@ try {
 }
 
 try {
+  // The structured brief format (PHx:/CC:/PI:/Imp:) has >=3 section headings,
+  // which the full-note heuristic used to misread — the user's admission
+  // summaries came back empty on print.
+  const structuredBrief = [
+    "67F",
+    "PHx: HTN, type 2 DM",
+    "CC: fever + productive cough x3d",
+    "PI: progressive dyspnea, no chest pain -> favor CAP",
+    "ED Lab: WBC 14.2, CRP 8.9 -> c/w infection",
+    "Image: CXR RLL opacity",
+    "Imp:",
+    "1. CAP w/ hypoxemia",
+    "2. hyponatremia, mild",
+  ].join("\n");
+  const briefPatient = { ...emptyPatient(), generatedAdmissionSummary: structuredBrief };
+  const printed = getAdmissionSummaryText(briefPatient, { allowFallback: false });
+  if (!printed.includes("PHx: HTN") || !printed.includes("CAP w/ hypoxemia")) {
+    throw new Error(`structured admission brief dropped from print summary: ${JSON.stringify(printed)}`);
+  }
+  const fullNotePatient = {
+    ...emptyPatient(),
+    generatedAdmissionSummary: `CC: fever\nPI: long story\nPhysical exam: soft\nAssessment: sepsis\nPlan: abx\n${"filler line\n".repeat(20)}`,
+  };
+  if (getAdmissionSummaryText(fullNotePatient, { allowFallback: false })) {
+    throw new Error("pasted full admission note was not filtered out of the print summary");
+  }
+  console.log("PASS Structured admission brief prints (heading heuristic no longer eats PHx:/CC:/PI: format)");
+  supplementalPasses += 1;
+} catch (error) {
+  failures.push({ name: "Structured brief print summary", error: error instanceof Error ? error.message : String(error) });
+  console.error(`FAIL Structured brief print summary: ${failures[failures.length - 1].error}`);
+}
+
+try {
   const disp = compactDisplaySymbols;
   if (disp("curam 07/02- and clindamycin 07/02-") !== "curam 07/02- + clindamycin 07/02-") {
     throw new Error(`and->+ failed: ${disp("curam 07/02- and clindamycin 07/02-")}`);
