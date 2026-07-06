@@ -23,6 +23,7 @@ import {
   groupPatientsByAttending,
   dischargePrepText,
   formatDateLabel,
+  hasChronicRenalContext,
   hasColorMarkup,
   plainClinicalText,
   sortPatients,
@@ -275,8 +276,8 @@ function PrintRoundingListPage({
     ].filter(Boolean).join(" ");
   }
 
-  function classifyPrintVisualItem(item: { raw: string; text: string }, fallbackKind: PrintVisualKind) {
-    return classifyPriorityPrintVisualItem(item, fallbackKind);
+  function classifyPrintVisualItem(item: { raw: string; text: string }, fallbackKind: PrintVisualKind, chronicRenal = false) {
+    return classifyPriorityPrintVisualItem(item, fallbackKind, chronicRenal);
   }
 
   function printVisualLabelForSection(label: string, fallbackKind: PrintVisualKind) {
@@ -287,12 +288,12 @@ function PrintRoundingListPage({
     return normalized;
   }
 
-  function renderPrintVisualItems(items: Array<{ raw: string; text: string; hidden?: boolean }>, keyPrefix: string, fallbackKind: PrintVisualKind) {
+  function renderPrintVisualItems(items: Array<{ raw: string; text: string; hidden?: boolean }>, keyPrefix: string, fallbackKind: PrintVisualKind, chronicRenal = false) {
     if (items.length === 0) return null;
     return (
       <div className="print-visual-list">
         {items.map((item, index) => {
-          const visual = classifyPrintVisualItem(item, fallbackKind);
+          const visual = classifyPrintVisualItem(item, fallbackKind, chronicRenal);
           const visualLabel = printVisualLabelForSection(visual.label, fallbackKind);
           return (
             <div
@@ -843,7 +844,7 @@ function PrintRoundingListPage({
     );
   }
 
-  function sectionBox(title: string, value: string, extra?: ReactNode, fallbackKind: PrintVisualKind = "other") {
+  function sectionBox(title: string, value: string, extra?: ReactNode, fallbackKind: PrintVisualKind = "other", chronicRenal = false) {
     const visibleItems = printListItems(value.split(/\r?\n/), fallbackKind);
     if (visibleItems.length === 0 && !extra) return null;
     const sectionClass = title === "S"
@@ -858,21 +859,21 @@ function PrintRoundingListPage({
     return (
       <div className={["print-section-box", sectionClass].filter(Boolean).join(" ")}>
         <div className="print-section-title">{title}</div>
-        {renderPrintVisualItems(visibleItems, title, fallbackKind)}
+        {renderPrintVisualItems(visibleItems, title, fallbackKind, chronicRenal)}
         {extra}
       </div>
     );
   }
 
-  function renderPrintItems(value: string, keyPrefix: string, fallbackKind: PrintVisualKind = "other") {
+  function renderPrintItems(value: string, keyPrefix: string, fallbackKind: PrintVisualKind = "other", chronicRenal = false) {
     const visibleItems = printListItems(value.split(/\r?\n/), fallbackKind);
     if (visibleItems.length === 0) return null;
-    return <div className="print-soap-list-extra">{renderPrintVisualItems(visibleItems, keyPrefix, fallbackKind)}</div>;
+    return <div className="print-soap-list-extra">{renderPrintVisualItems(visibleItems, keyPrefix, fallbackKind, chronicRenal)}</div>;
   }
 
   function objectiveExtra(patient: Patient) {
     const soapLabText = labSoapText(patient);
-    const soapLab = renderPrintItems(soapLabText, `${patient.id}-lab`, "lab");
+    const soapLab = renderPrintItems(soapLabText, `${patient.id}-lab`, "lab", hasChronicRenalContext(patient));
     const lab = soapLab || (isLayoutSectionVisible(roundingLayout, "objectiveLabs") ? renderLabMiniTable(patient) : null);
     const image = renderPrintItems(imageSoapText(patient), `${patient.id}-image`, "image");
     if (!lab && !image) return null;
@@ -978,8 +979,8 @@ function PrintRoundingListPage({
 
                 <div className="print-summary-grid">
                   {sectionBox("S", subjectiveSoapText(patient), undefined, "s")}
-                  {sectionBox("O", objectiveSoapText(patient), objectiveExtra(patient), "other")}
-                  {sectionBox("A/P", assessmentSoapText(patient), undefined, "ap")}
+                  {sectionBox("O", objectiveSoapText(patient), objectiveExtra(patient), "other", hasChronicRenalContext(patient))}
+                  {sectionBox("A/P", assessmentSoapText(patient), undefined, "ap", hasChronicRenalContext(patient))}
                   {sectionBox(taskDcTitle(), taskDcText(patient), undefined, "task")}
                 </div>
               </article>

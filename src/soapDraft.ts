@@ -1150,6 +1150,7 @@ export function soapDraftToPatientPatch(
     .map((problem) => [`# ${stripTonePrefix(problem.title)}`, ...problem.lines.map((line) => `- ${stripTonePrefix(line)}`)].join("\n"))
     .join("\n");
   const now = nowIso();
+  const problemTitles = draft.apProblems.map((problem) => stripTonePrefix(problem.title)).filter(Boolean);
   const nextPatient: Patient = {
     ...patient,
     subjectiveOrChiefConcern: draft.sLines.map(stripTonePrefix).join("\n"),
@@ -1159,8 +1160,17 @@ export function soapDraftToPatientPatch(
     newLabs: objective.labSummary.join("\n"),
     rawLabText: objective.labSummary.join("\n"),
     newImaging: objective.imageSummary.join("\n"),
-    assessment: draft.apProblems.map((problem) => stripTonePrefix(problem.title)).join("\n"),
+    assessment: problemTitles.join("\n"),
     plan: apText,
+    // Keep activeProblems in lockstep with the reviewed A/P. This field is
+    // sent to the AI as patient context on every generation; if it kept the
+    // stale admission-time list, problems the clinician deleted from the
+    // reviewed SOAP were fed back in and kept reappearing.
+    activeProblems: problemTitles.join("; "),
+    activeProblemItems: problemTitles,
+    assessmentPlanItems: assessmentItemsFromSoapProblems(
+      draft.apProblems.map((problem) => ({ ...problem, title: stripTonePrefix(problem.title), lines: problem.lines.map(stripTonePrefix) })),
+    ),
     dischargePlan: draft.dcLines.map(stripTonePrefix).join("\n"),
     tasks: tasksFromSoapLines(draft.taskLines, patient),
     updatedAt: now,

@@ -1,5 +1,6 @@
 import type { DailyNote, ParsedLabItem, Patient } from "./types";
 import { findLabDictionaryItem } from "./data/labDictionary";
+import { hasChronicRenalContext } from "./labParsing";
 import { labReferenceForLabel } from "./labReference";
 import { parseLabReports, safeClinicalLine, safeClinicalLinePreservingMarks, stripColorMarkup } from "./utils";
 
@@ -254,7 +255,7 @@ function groupIdForItem(item: ParsedLabItem): LabVisualGroupId {
   return "other";
 }
 
-function toneForText(label: string, value: string, item: ParsedLabItem): LabVisualTone {
+function toneForText(label: string, value: string, item: ParsedLabItem, chronicRenal = false): LabVisualTone {
   const previousValue = String(item.previousValue ?? "").trim();
   const numeric = comparisonNumber(label, value);
   if (numeric !== null) {
@@ -263,7 +264,8 @@ function toneForText(label: string, value: string, item: ParsedLabItem): LabVisu
     if (label === "Hb" && numeric < 8) return "critical";
     if (label === "Plt" && numeric < 50) return "critical";
     if (label === "WBC" && (numeric < 2 || numeric > 20)) return "critical";
-    if (label === "Cr" && numeric >= 2) return "critical";
+    // ESRD/dialysis: elevated Cr/BUN is that patient's baseline, not critical.
+    if (label === "Cr" && numeric >= 2) return chronicRenal ? "important" : "critical";
     if ((label === "AST" || label === "ALT") && numeric >= 200) return "critical";
     if (label === "INR" && numeric >= 3) return "critical";
     if (label === "Lactate" && numeric >= 4) return "critical";
@@ -281,18 +283,20 @@ function scoreForItem(groupId: LabVisualGroupId, label: string, tone: LabVisualT
   return toneScore + groupScore + labelScore - sourceIndex / 1000;
 }
 
-function visualItemFromParsed(item: ParsedLabItem, sourceIndex = 0): LabVisualItem | null {
-  if (!trustedLabItem(item)) return null;
-  const label = labelForItem(item);
+function visualItemFromParsed(item: ParsedLabItem, sourceIndex = 0, chronicRenal = false): LabVisualItem | null {
+  const trusted = trustedLabItem(item);
+  const label = trusted ? labelForItem(item) : String(item.name || item.label || "").trim();
   const value = String(item.value ?? "").trim();
   if (!label || !value) return null;
 
   const previousValue = String(item.previousValue ?? "").trim();
-  const direction = previousValue ? trendDirection(label, value, previousValue) : noteDirection(item) || referenceDirection(label, value);
+  // Non-dictionary labs (custom entries, ACTH, ...) still display under Other;
+  // they just never get reference-range arrows or numeric criticality.
+  const direction = previousValue ? trendDirection(label, value, previousValue) : trusted ? noteDirection(item) || referenceDirection(label, value) : noteDirection(item);
   const previous = previousValue ? `(${displayLabValue(label, previousValue)})` : "";
   const text = `${label} ${displayLabValue(label, value)}${direction}${previous}`;
-  const groupId = groupIdForItem(item);
-  const tone = toneForText(label, value, item);
+  const groupId = trusted ? groupIdForItem(item) : "other";
+  const tone = trusted ? toneForText(label, value, item, chronicRenal) : item.important || item.isImportant ? "important" : "plain";
 
   return {
     key: label.toLowerCase(),
@@ -367,27 +371,31 @@ function buildGroupsFromVisualItems(items: LabVisualItem[], options: LabVisualSu
 
 export function buildLabVisualSummaryFromItems(items: ParsedLabItem[], options: LabVisualSummaryOptions = {}) {
   const includePlain = options.includePlain ?? true;
+  const chronicRenal = hasChronicRenalContext(options.patient);
   const visualItems = items
-    .map((item, index) => visualItemFromParsed(item, index))
+    .map((item, index) => visualItemFromParsed(item, index, chronicRenal))
     .filter((item): item is LabVisualItem => Boolean(item))
     .filter((item) => includePlain || item.tone !== "plain");
   return buildGroupsFromVisualItems(visualItems, options);
 }
 
 export function buildLabVisualSummaryFromText(value: string, options: LabVisualSummaryOptions = {}) {
+  const chronicRenal = hasChronicRenalContext(options.patient);
   const sourceLines = splitInputLines(value)
     .map((line) => labSourceLineFrom(line, false))
     .filter((line): line is LabSourceLine => Boolean(line));
   const visualItems: LabVisualItem[] = markedVisualItemsFromText(sourceLines.map((line) => line.body).join("\n"));
 
   sourceLines.forEach((source, sourceIndex) => {
-    const trustedItems = source.items.filter(trustedLabItem);
-    trustedItems.forEach((item) => {
-      const visualItem = visualItemFromParsed(item, sourceIndex);
+    // Untrusted (non-dictionary) items are itemized too — they land in the
+    // Other group instead of vanishing — so the leftover-text blob is only
+    // needed when nothing on the line parsed at all.
+    source.items.forEach((item) => {
+      const visualItem = visualItemFromParsed(item, sourceIndex, chronicRenal);
       if (visualItem && ((options.includePlain ?? true) || visualItem.tone !== "plain")) visualItems.push(visualItem);
     });
 
-    if (trustedItems.length === 0 || source.items.some((item) => !trustedLabItem(item))) {
+    if (source.items.length === 0) {
       const text = cleanOtherText(source);
       if (text) {
         visualItems.push({
@@ -426,8 +434,9 @@ export function buildPatientLabVisualSummary(patient: Patient, notes: DailyNote[
 
   if (items.length > 0) {
     const includePlain = options.includePlain ?? true;
+    const chronicRenal = hasChronicRenalContext(patient);
     const parsedVisualItems = items
-      .map((item, index) => visualItemFromParsed(item, index))
+      .map((item, index) => visualItemFromParsed(item, index, chronicRenal))
       .filter((item): item is LabVisualItem => Boolean(item))
       .filter((item) => includePlain || item.tone !== "plain");
     // Clinician-colored segments live in the raw lab text; merge them so colors survive the structured path too.
