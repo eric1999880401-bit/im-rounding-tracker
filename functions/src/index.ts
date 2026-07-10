@@ -10,10 +10,13 @@ const MAX_RAW_TEXT_CHARS = 18000;
 import { aiDocumentDraftSchema, aiSoapDraftSchema, patientBatchImportSchema, roundSoapDraftSchema } from "./schemas";
 import { documentTypes, sourceTypes } from "./types";
 import type { CallableInput, DocumentCallableInput, DocumentType, PatientBatchCallableInput, RoundSoapCallableInput, SourceType } from "./types";
-import { OPENAI_API_KEY, extractOutputText, extractRefusal, getModel, getModelForQuality, getOpenAiApiKey, getOpenAiErrorMessage, openAiHttpsError, sanitizeQualityMode } from "./openai";
+import { OPENAI_API_KEY, extractOutputText, extractRefusal, getModel, getModelForQuality, getOpenAiApiKey, getOpenAiErrorMessage, getResponseTuning, openAiHttpsError, postOpenAiResponse, sanitizeQualityMode } from "./openai";
+import type { AiQualityMode } from "./openai";
+import { resolveDocumentQuality, resolveRoundSoapQuality, roundSoapHistoryLimit } from "./modelRouting";
 import { asPlainObject, compactDailyNote, compactPatientContext, concretizeVagueFollowUps, findTargetPatientForBatch, leanSoapCleanup, sanitizeExistingPatientsForBatch, sanitizePatientBatchImportMode, sanitizePatientBatchOutput, sanitizePatientContext, sanitizeUserStyleProfile, truncateString } from "./sanitize";
 import { buildSoapPatch } from "./soapPatch";
-import { admissionSummaryStyleBullets, documentInstructions, makeBatchImportPrompt, makeDocumentPrompt, makePrompt, makeRoundSoapPrompt } from "./prompts";
+import { admissionSummaryStyleBullets, documentInstructions, makeBatchImportPrompt, makeDocumentPrompt, makePrompt } from "./prompts";
+import { makeRoundSoapPrompt } from "./roundSoapPrompt";
 
 export const analyzePatientBatchText = onCall(
   {
@@ -52,15 +55,17 @@ export const analyzePatientBatchText = onCall(
       throw new HttpsError("failed-precondition", "Bulk Patient Import is not configured. Set OPENAI_API_KEY for Firebase Functions.");
     }
 
-    const model = getModel();
-    const openAiResponse = await fetch("https://api.openai.com/v1/responses", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model,
+    const requestedModel = getModel();
+    const qualityMode: AiQualityMode = "balanced";
+    const tuning = getResponseTuning(qualityMode, "batch");
+    const { response: openAiResponse, body: responseBody, model } = await postOpenAiResponse({
+      apiKey,
+      model: requestedModel,
+      qualityMode,
+      payload: {
+        reasoning: tuning.reasoning,
+        max_output_tokens: tuning.max_output_tokens,
+        prompt_cache_key: tuning.prompt_cache_key,
         input: [
           {
             role: "system",
@@ -80,6 +85,7 @@ export const analyzePatientBatchText = onCall(
           },
         ],
         text: {
+          verbosity: tuning.textVerbosity,
           format: {
             type: "json_schema",
             name: "patient_batch_import_draft",
@@ -88,10 +94,9 @@ export const analyzePatientBatchText = onCall(
             schema: patientBatchImportSchema,
           },
         },
-      }),
+      },
     });
 
-    const responseBody = (await openAiResponse.json().catch(() => ({}))) as Record<string, unknown>;
     if (!openAiResponse.ok) {
       throw openAiHttpsError(openAiResponse.status, responseBody);
     }
@@ -149,7 +154,8 @@ export const generateRoundSoap = onCall(
     const rawText = String(data.rawText ?? "").trim();
     const currentSoapBaseline = truncateString(data.currentSoapBaseline, 12000);
     const deidentifiedConfirmed = data.deidentifiedConfirmed === true;
-    const qualityMode = sanitizeQualityMode(data.qualityMode);
+    const requestedQualityMode = sanitizeQualityMode(data.qualityMode);
+    const qualityMode = resolveRoundSoapQuality(requestedQualityMode, workflowMode, rawText);
 
     if (!patientId) {
       throw new HttpsError("invalid-argument", "patientId is required.");
@@ -185,32 +191,31 @@ export const generateRoundSoap = onCall(
     const notesSnapshot = await patientRef.collection("dailyNotes").orderBy("date", "asc").get();
     const dailyNotes = notesSnapshot.docs
       .map((noteDoc) => compactDailyNote(noteDoc.id, noteDoc.data()))
-      .slice(-14);
+      .slice(-roundSoapHistoryLimit(workflowMode));
     const patientContext = {
       ...compactPatientContext(patientSnapshot.data()),
       ...(sanitizePatientContext(data.patientContext) ?? {}),
     };
     const userStyleProfile = sanitizeUserStyleProfile(data.userStyleProfile);
-    const model = getModelForQuality(qualityMode);
-    const openAiResponse = await fetch("https://api.openai.com/v1/responses", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model,
+    const requestedModel = getModelForQuality(qualityMode);
+    const tuning = getResponseTuning(qualityMode, workflowMode === "dailyUpdate" ? "roundSoapDaily" : "roundSoapFull");
+    const { response: openAiResponse, body: responseBody, model } = await postOpenAiResponse({
+      apiKey,
+      model: requestedModel,
+      qualityMode,
+      payload: {
+        reasoning: tuning.reasoning,
+        max_output_tokens: tuning.max_output_tokens,
+        prompt_cache_key: `${tuning.prompt_cache_key}:${workflowMode}`,
         input: [
           {
             role: "system",
             content: [
-              "You are a clinician-facing SOAP note generator for inpatient internal medicine rounds.",
-              "Return JSON only matching the supplied schema.",
-              "The user will edit before saving; do not write to patient data.",
-              "This callable returns a draft only. Never imply that generated SOAP has been saved or has overwritten patient data.",
-              "Your job is clinical judgment and concise wording, not structured dashboard extraction.",
-              "Produce one complete, readable, check-only SOAP note that can be used for rounds and print.",
-              "Do not include patient names, full MRNs, birthdays, phone numbers, addresses, or identifiers.",
+              "Create clinician-reviewed inpatient internal medicine SOAP drafts.",
+              "Prioritize current active problems and exact source facts; never invent a diagnosis, value, date, medication, result, or plan.",
+              "Return only JSON matching the strict schema and do not expose private reasoning.",
+              "This is a preview only and never writes patient data.",
+              "Do not repeat names, full MRNs, birthdays, phone numbers, addresses, or other identifiers.",
             ].join(" "),
           },
           {
@@ -228,6 +233,7 @@ export const generateRoundSoap = onCall(
           },
         ],
         text: {
+          verbosity: tuning.textVerbosity,
           format: {
             type: "json_schema",
             name: "round_soap_draft",
@@ -236,10 +242,9 @@ export const generateRoundSoap = onCall(
             schema: roundSoapDraftSchema,
           },
         },
-      }),
+      },
     });
 
-    const responseBody = (await openAiResponse.json().catch(() => ({}))) as Record<string, unknown>;
     if (!openAiResponse.ok) {
       throw openAiHttpsError(openAiResponse.status, responseBody);
     }
@@ -331,19 +336,21 @@ export const analyzeClinicalText = onCall(
       throw new HttpsError("failed-precondition", "AI Intake is not configured. Set OPENAI_API_KEY for Firebase Functions.");
     }
 
-    const model = getModel();
+    const requestedModel = getModel();
+    const qualityMode: AiQualityMode = "balanced";
+    const tuning = getResponseTuning(qualityMode, "intake");
     const patientContext = {
       ...compactPatientContext(patientSnapshot.data()),
       ...(sanitizePatientContext(data.patientContext) ?? {}),
     };
-    const openAiResponse = await fetch("https://api.openai.com/v1/responses", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model,
+    const { response: openAiResponse, body: responseBody, model } = await postOpenAiResponse({
+      apiKey,
+      model: requestedModel,
+      qualityMode,
+      payload: {
+        reasoning: tuning.reasoning,
+        max_output_tokens: tuning.max_output_tokens,
+        prompt_cache_key: tuning.prompt_cache_key,
         input: [
           {
             role: "system",
@@ -407,6 +414,7 @@ export const analyzeClinicalText = onCall(
           },
         ],
         text: {
+          verbosity: tuning.textVerbosity,
           format: {
             type: "json_schema",
             name: "ai_soap_draft",
@@ -415,10 +423,9 @@ export const analyzeClinicalText = onCall(
             schema: aiSoapDraftSchema,
           },
         },
-      }),
+      },
     });
 
-    const responseBody = (await openAiResponse.json().catch(() => ({}))) as Record<string, unknown>;
     if (!openAiResponse.ok) {
       throw new HttpsError("internal", getOpenAiErrorMessage(openAiResponse.status, responseBody));
     }
@@ -482,7 +489,8 @@ export const generateClinicalDocument = onCall(
     const dateTo = String(data.dateTo ?? "").trim();
     const deidentifiedConfirmed = data.deidentifiedConfirmed === true;
     const storeRawText = data.storeRawText === true;
-    const qualityMode = sanitizeQualityMode(data.qualityMode);
+    const requestedQualityMode = sanitizeQualityMode(data.qualityMode);
+    const qualityMode = resolveDocumentQuality(requestedQualityMode, documentType, rawText);
 
     if (!documentTypes.has(documentType)) {
       throw new HttpsError("invalid-argument", "Invalid AI document type.");
@@ -533,15 +541,16 @@ export const generateClinicalDocument = onCall(
       throw new HttpsError("invalid-argument", "Paste de-identified source text before generating a standalone draft.");
     }
 
-    const model = getModelForQuality(qualityMode);
-    const openAiResponse = await fetch("https://api.openai.com/v1/responses", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model,
+    const requestedModel = getModelForQuality(qualityMode);
+    const tuning = getResponseTuning(qualityMode, "document");
+    const { response: openAiResponse, body: responseBody, model } = await postOpenAiResponse({
+      apiKey,
+      model: requestedModel,
+      qualityMode,
+      payload: {
+        reasoning: tuning.reasoning,
+        max_output_tokens: tuning.max_output_tokens,
+        prompt_cache_key: `${tuning.prompt_cache_key}:${documentType}`,
         input: [
           {
             role: "system",
@@ -565,6 +574,7 @@ export const generateClinicalDocument = onCall(
           },
         ],
         text: {
+          verbosity: tuning.textVerbosity,
           format: {
             type: "json_schema",
             name: "ai_clinical_document_draft",
@@ -573,10 +583,9 @@ export const generateClinicalDocument = onCall(
             schema: aiDocumentDraftSchema,
           },
         },
-      }),
+      },
     });
 
-    const responseBody = (await openAiResponse.json().catch(() => ({}))) as Record<string, unknown>;
     if (!openAiResponse.ok) {
       throw new HttpsError("internal", getOpenAiErrorMessage(openAiResponse.status, responseBody));
     }

@@ -247,16 +247,13 @@ function RoundSoapComposer({
     readComposerPref("soapFormat", ["standard", "plain", "compact"] as const, "standard"),
   );
   const [previewMode, setPreviewMode] = useState<"soap" | "print">("soap");
-  const [qualityMode, setQualityModeState] = useState<RoundSoapQualityMode>(() =>
-    readComposerPref("qualityMode", ["fast", "balanced", "highAccuracy"] as const, "balanced"),
-  );
+  const [qualityMode, setQualityModeState] = useState<RoundSoapQualityMode>("balanced");
   const setSoapFormat = (value: SoapEditorFormat) => {
     setSoapFormatState(value);
     writeComposerPref("soapFormat", value);
   };
   const setQualityMode = (value: RoundSoapQualityMode) => {
     setQualityModeState(value);
-    writeComposerPref("qualityMode", value);
   };
   const [editorDraft, setEditorDraft] = useState(() => parseSoapTextToEditorDraft(canonical.text));
   const [editorHistory, setEditorHistory] = useState<UndoRedoHistory<ReturnType<typeof parseSoapTextToEditorDraft>>>(() =>
@@ -371,7 +368,7 @@ function RoundSoapComposer({
   }, [externalSoapRevision, externalSoapStatus, externalSoapText]);
 
   useEffect(() => {
-    setQualityMode(workflowMode === "dailyUpdate" ? "fast" : "balanced");
+    setQualityMode(workflowMode === "transferHandoff" ? "highAccuracy" : "balanced");
   }, [workflowMode]);
 
   function updateEditorDraft(nextDraft: typeof editorDraft) {
@@ -539,11 +536,9 @@ function RoundSoapComposer({
     const currentSoapText = editorDraftToSoapText(editorDraftRef.current);
     const requestWorkflowMode = detectWorkflowMode(dailyNotes, rawText, workflowMode, currentSoapText || canonical.text);
     const requestWorkflow = workflowModes.find((item) => item.value === requestWorkflowMode) ?? workflowModes[0];
-    const automaticQualityMode: RoundSoapQualityMode = requestedQualityMode === "highAccuracy"
+    const automaticQualityMode: RoundSoapQualityMode = requestWorkflowMode === "transferHandoff"
       ? "highAccuracy"
-      : requestWorkflowMode === "dailyUpdate"
-        ? "fast"
-        : "balanced";
+      : requestedQualityMode;
     setError("");
     setStatus("");
     setWarnings([]);
@@ -915,13 +910,15 @@ function RoundSoapComposer({
               {soapFormatOptions.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
             </select>
             <select value={qualityMode} onChange={(event) => setQualityMode(event.target.value as RoundSoapQualityMode)} title="AI quality / cost">
-              <option value="fast">Fast / cheap</option>
-              <option value="balanced">Balanced</option>
-              <option value="highAccuracy">High accuracy</option>
+              <option value="fast">Efficient (GPT-5.4 mini)</option>
+              <option value="balanced">Recommended (GPT-5.4)</option>
+              <option value="highAccuracy">Best quality (GPT-5.5)</option>
             </select>
           </div>
           <p className="muted">{workflow.helper} Clear the primary mixed paste before using these guided fields.</p>
-          <p className="muted">Approx. {estimatedTokens.toLocaleString()} input + baseline tokens. Quality upgrade is manual.</p>
+          <p className="muted">
+            Approx. {estimatedTokens.toLocaleString()} input + baseline tokens. Transfer uses GPT-5.5; complex first SOAP may be upgraded by the backend.
+          </p>
 
       {workflowMode === "dailyUpdate" ? (
         <div className="round-soap-daily-grid round-soap-guided-grid">

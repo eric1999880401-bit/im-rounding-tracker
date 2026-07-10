@@ -104,6 +104,18 @@ const {
 } = await server.ssrLoadModule("/src/draftRecovery.ts");
 const { appendSoapEditTrace, buildSoapEditTrace, nextSoapVersion, SOAP_EDIT_HISTORY_LIMIT } = await server.ssrLoadModule("/src/soapEditTrace.ts");
 const { SoapVisualPreview } = await server.ssrLoadModule("/src/components/SoapVisualPreview.tsx");
+const { makeRoundSoapPrompt } = await server.ssrLoadModule("/functions/src/roundSoapPrompt.ts");
+const {
+  DEFAULT_BALANCED_MODEL,
+  DEFAULT_FAST_MODEL,
+  DEFAULT_HIGH_ACCURACY_MODEL,
+  getModelCandidates,
+  getResponseTuning,
+  resolveDocumentQuality,
+  resolveRoundSoapQuality,
+  roundSoapHistoryLimit,
+  sanitizeQualityMode,
+} = await server.ssrLoadModule("/functions/src/modelRouting.ts");
 
 function haystack(plan) {
   return [
@@ -3963,6 +3975,79 @@ try {
 } catch (error) {
   failures.push({ name: "Display compaction substitutions", error: error instanceof Error ? error.message : String(error) });
   console.error(`FAIL Display compaction substitutions: ${failures[failures.length - 1].error}`);
+}
+
+try {
+  if (sanitizeQualityMode(undefined) !== "balanced") throw new Error("missing quality did not default to balanced");
+  if (DEFAULT_FAST_MODEL !== "gpt-5.4-mini-2026-03-17") throw new Error(`unexpected fast model: ${DEFAULT_FAST_MODEL}`);
+  if (DEFAULT_BALANCED_MODEL !== "gpt-5.4-2026-03-05") throw new Error(`unexpected balanced model: ${DEFAULT_BALANCED_MODEL}`);
+  if (DEFAULT_HIGH_ACCURACY_MODEL !== "gpt-5.5-2026-04-23") throw new Error(`unexpected high-accuracy model: ${DEFAULT_HIGH_ACCURACY_MODEL}`);
+  if (resolveRoundSoapQuality("balanced", "dailyUpdate", "BP 110/70") !== "balanced") {
+    throw new Error("daily update was silently downgraded from balanced");
+  }
+  if (resolveRoundSoapQuality("balanced", "transferHandoff", "stable transfer") !== "highAccuracy") {
+    throw new Error("transfer did not route to high accuracy");
+  }
+  const complexAdmission = "ICU septic shock on norepinephrine with AKI and respiratory failure";
+  if (resolveRoundSoapQuality("balanced", "newSoap", complexAdmission) !== "highAccuracy") {
+    throw new Error("complex first SOAP did not auto-upgrade");
+  }
+  if (resolveDocumentQuality("balanced", "admissionSummary", complexAdmission) !== "highAccuracy") {
+    throw new Error("complex admission summary did not auto-upgrade");
+  }
+  if (getResponseTuning("balanced", "roundSoapDaily").reasoning.effort !== "low") {
+    throw new Error("routine daily SOAP should use low reasoning on GPT-5.4");
+  }
+  if (getResponseTuning("highAccuracy", "roundSoapFull").reasoning.effort !== "medium") {
+    throw new Error("high-accuracy SOAP should use medium reasoning");
+  }
+  if (roundSoapHistoryLimit("dailyUpdate") !== 3 || roundSoapHistoryLimit("newSoap") !== 5 || roundSoapHistoryLimit("transferHandoff") !== 10) {
+    throw new Error("SOAP history limits no longer match daily/new/transfer context needs");
+  }
+  const highCandidates = getModelCandidates(DEFAULT_HIGH_ACCURACY_MODEL, "highAccuracy");
+  if (!highCandidates.includes("gpt-5.5") || !highCandidates.some((model) => /^gpt-5\.4(?:-|$)/.test(model))) {
+    throw new Error(`high-accuracy fallback chain is incomplete: ${highCandidates.join(", ")}`);
+  }
+  console.log("PASS AI model routing defaults to GPT-5.4, upgrades complex work, and preserves fallbacks");
+  supplementalPasses += 1;
+} catch (error) {
+  failures.push({ name: "AI model routing", error: error instanceof Error ? error.message : String(error) });
+  console.error(`FAIL AI model routing: ${failures[failures.length - 1].error}`);
+}
+
+try {
+  const prompt = makeRoundSoapPrompt({
+    sourceType: "lab",
+    workflowMode: "dailyUpdate",
+    selectedDate: "2026-07-10",
+    rawText: "Na 158 from 142; CXR 07-10 RLL opacity improving",
+    currentSoapBaseline: "S:\n- no dyspnea\nO:\nLab: Na 142\nA/P:\n# CAP\n- ceftriaxone",
+    patientContext: { primaryDiagnosis: "CAP" },
+    userStyleProfile: { styleSummary: "terse IM abbreviations" },
+    dailyNotes: [],
+  });
+  const requiredRules = [
+    /reviewed baseline is authoritative/i,
+    /replace stale facts in the same domain/i,
+    /dangerous Na\/K change/i,
+    /same treatment into multiple problems/i,
+    /A baseline omission is an intentional clinician edit/i,
+    /Today's pasted de-identified clinical data:\nNa 158 from 142/i,
+  ];
+  requiredRules.forEach((pattern) => {
+    if (!pattern.test(prompt)) throw new Error(`missing SOAP prompt guardrail: ${pattern}`);
+  });
+  if (prompt.indexOf("SOURCE PACKAGE") < prompt.indexOf("CLINICAL PRIORITIZATION")) {
+    throw new Error("dynamic source package appeared before stable clinical instructions");
+  }
+  if (/target (?:3|4|5)|exactly [345] (?:active )?problems/i.test(prompt)) {
+    throw new Error("SOAP prompt still targets a mechanical A/P problem count");
+  }
+  console.log("PASS SOAP prompt is outcome-first, delta-safe, style-aware, and avoids mechanical A/P splitting");
+  supplementalPasses += 1;
+} catch (error) {
+  failures.push({ name: "SOAP prompt contract", error: error instanceof Error ? error.message : String(error) });
+  console.error(`FAIL SOAP prompt contract: ${failures[failures.length - 1].error}`);
 }
 
 await server.close();

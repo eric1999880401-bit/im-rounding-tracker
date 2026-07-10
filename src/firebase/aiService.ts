@@ -40,7 +40,7 @@ function aiCallableMessage(error: unknown, feature: string) {
 
   if (text && !/^internal$/i.test(text)) return text;
   if (code.includes("unauthenticated")) return "Sign in again, then retry.";
-  if (code.includes("not-found")) return `${feature} is not available. Check whether Firebase Functions were deployed and OPENAI_MODEL exists.`;
+  if (code.includes("not-found")) return `${feature} is not available. Check the Functions deployment and configured OpenAI model route.`;
   if (code.includes("failed-precondition")) return `${feature} is not configured. Check OPENAI_API_KEY in Firebase Functions.`;
   if (code.includes("invalid-argument")) return `${feature} could not run because the request was incomplete or unsafe. Check de-identification and pasted text length.`;
   if (code.includes("permission-denied")) return `${feature} is blocked by OpenAI or Firebase permissions. Check the API key, model access, and function logs.`;

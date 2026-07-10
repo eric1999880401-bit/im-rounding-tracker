@@ -2,9 +2,23 @@
 import { logger } from "firebase-functions";
 import { defineSecret } from "firebase-functions/params";
 import { HttpsError } from "firebase-functions/v2/https";
+import { getModelCandidates } from "./modelRouting";
+import type { AiQualityMode } from "./modelRouting";
+
+export {
+  DEFAULT_BALANCED_MODEL,
+  DEFAULT_FAST_MODEL,
+  DEFAULT_HIGH_ACCURACY_MODEL,
+  DEFAULT_MODEL,
+  getModel,
+  getModelCandidates,
+  getModelForQuality,
+  getResponseTuning,
+  sanitizeQualityMode,
+} from "./modelRouting";
+export type { AiQualityMode, AiWorkload } from "./modelRouting";
 
 export const OPENAI_API_KEY = defineSecret("OPENAI_API_KEY");
-export const DEFAULT_MODEL = "gpt-5.4-mini";
 
 export function getOpenAiApiKey() {
   try {
@@ -17,25 +31,41 @@ export function getOpenAiApiKey() {
   return process.env.OPENAI_API_KEY ?? "";
 }
 
-export function getModel() {
-  return process.env.OPENAI_MODEL || DEFAULT_MODEL;
+function isModelUnavailable(status: number, responseBody: Record<string, unknown>) {
+  const errorInfo = responseBody.error as { code?: unknown } | undefined;
+  return status === 404 || errorInfo?.code === "model_not_found";
 }
 
-export function sanitizeQualityMode(value: unknown) {
-  const mode = String(value ?? "").trim();
-  if (mode === "highAccuracy") return "highAccuracy";
-  if (mode === "balanced") return "balanced";
-  return "fast";
-}
+export async function postOpenAiResponse(params: {
+  apiKey: string;
+  model: string;
+  qualityMode: AiQualityMode;
+  payload: Record<string, unknown>;
+}) {
+  const candidates = getModelCandidates(params.model, params.qualityMode);
+  let lastResponse: Response | null = null;
+  let lastBody: Record<string, unknown> = {};
+  let usedModel = params.model;
 
-export function getModelForQuality(qualityMode: "fast" | "balanced" | "highAccuracy") {
-  if (qualityMode === "highAccuracy") {
-    return process.env.OPENAI_MODEL_HIGH_ACCURACY || process.env.OPENAI_MODEL_BALANCED || getModel();
+  for (const candidate of candidates) {
+    usedModel = candidate;
+    const response = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${params.apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ ...params.payload, model: candidate }),
+    });
+    const body = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+    lastResponse = response;
+    lastBody = body;
+    if (response.ok || !isModelUnavailable(response.status, body)) break;
+    logger.warn("OpenAI model unavailable; trying configured fallback", { model: candidate });
   }
-  if (qualityMode === "balanced") {
-    return process.env.OPENAI_MODEL_BALANCED || getModel();
-  }
-  return process.env.OPENAI_MODEL_FAST || getModel();
+
+  if (!lastResponse) throw new HttpsError("internal", "OpenAI request could not be started.");
+  return { response: lastResponse, body: lastBody, model: usedModel };
 }
 
 export function extractOutputText(response: Record<string, unknown>) {
@@ -88,7 +118,7 @@ export function getOpenAiErrorMessage(status: number, responseBody: Record<strin
   }
 
   if (status === 404 || code === "model_not_found") {
-    return "OpenAI model is unavailable. Update OPENAI_MODEL in Firebase Functions.";
+    return "OpenAI model is unavailable. Check the selected model and OPENAI_MODEL_BALANCED / FAST / HIGH_ACCURACY in Firebase Functions.";
   }
 
   if (status === 429) {

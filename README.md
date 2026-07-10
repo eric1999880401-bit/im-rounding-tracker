@@ -88,11 +88,15 @@ Set the OpenAI API key as a Firebase Functions secret:
 firebase functions:secrets:set OPENAI_API_KEY
 ```
 
-The default model is `gpt-5.4-mini`. To override it, create `functions/.env` locally or set the deployed Functions environment with:
+The default clinical model is the pinned GPT-5.4 snapshot. GPT-5.4 mini is an explicit efficient option; GPT-5.5 is used for best-quality drafts and selected complex workflows. Override any route in `functions/.env` or the deployed Functions environment with:
 
 ```bash
-OPENAI_MODEL=gpt-5.4-mini
+OPENAI_MODEL_BALANCED=gpt-5.4-2026-03-05
+OPENAI_MODEL_FAST=gpt-5.4-mini-2026-03-17
+OPENAI_MODEL_HIGH_ACCURACY=gpt-5.5-2026-04-23
 ```
+
+`OPENAI_MODEL` remains a legacy override for the balanced route. Transfer SOAP always requests the high-accuracy route; a complex first SOAP or complex admission document may be upgraded automatically. Model-unavailable errors fall back from a pinned snapshot to its stable alias, and the high-accuracy route can fall back to the balanced model.
 
 Deploy backend functions and rules:
 

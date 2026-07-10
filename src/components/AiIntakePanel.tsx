@@ -1370,7 +1370,7 @@ function AiIntakePanel({ patient, selectedDate, onApplyPatient }: AiIntakePanelP
 
         <div className="ai-cost-note span-2">
           {rawText.length.toLocaleString()} / {MAX_INPUT_CHARS.toLocaleString()} characters across {nonEmptyBlockCount} block(s).
-          Approx. {estimatedTokens.toLocaleString()} input tokens. Model and cost are controlled by the backend. The default model is gpt-5.4-mini.
+          Approx. {estimatedTokens.toLocaleString()} input tokens. The backend uses GPT-5.4 by default; GPT-5.4 mini is reserved for explicit efficient mode.
         </div>
 
         {rawText.length > MAX_INPUT_CHARS && (

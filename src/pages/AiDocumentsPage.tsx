@@ -67,10 +67,14 @@ const isbarHeadings = ["Situation", "Background", "Assessment", "Recommendation"
 type AiQualityMode = "fast" | "balanced" | "highAccuracy";
 
 const qualityModeOptions: Array<{ value: AiQualityMode; label: string; helper: string }> = [
-  { value: "fast", label: "Fast / cheap", helper: "Best for simple formatting or low-risk drafts." },
-  { value: "balanced", label: "Balanced", helper: "Default for admission, discharge, weekly, and SBAR drafts." },
-  { value: "highAccuracy", label: "High accuracy", helper: "Use for complex ICU/oncology handoff or when cheap draft fails." },
+  { value: "fast", label: "Efficient (GPT-5.4 mini)", helper: "Use only for simple, low-risk formatting when cost matters most." },
+  { value: "balanced", label: "Recommended (GPT-5.4)", helper: "Best value for routine SOAP, discharge, and weekly drafts." },
+  { value: "highAccuracy", label: "Best quality (GPT-5.5)", helper: "Recommended for admission summaries and complex ICU/oncology material." },
 ];
+
+function recommendedQualityForDocument(documentType: AiDocumentType): AiQualityMode {
+  return documentType === "admissionSummary" || documentType === "admissionNote" ? "highAccuracy" : "balanced";
+}
 
 function compactIsbarContent(value: string) {
   return value
@@ -408,7 +412,14 @@ function AiDocumentsPage({ patients, dailyNotesByPatient = {}, onSavePatient }: 
           </label>
           <label>
             AI document
-            <select value={documentType} onChange={(event) => setDocumentType(event.target.value as AiDocumentType)}>
+            <select
+              value={documentType}
+              onChange={(event) => {
+                const nextType = event.target.value as AiDocumentType;
+                setDocumentType(nextType);
+                setQualityMode(recommendedQualityForDocument(nextType));
+              }}
+            >
               {documentOptions.map((option) => (
                 <option key={option.value} value={option.value}>
                   {option.label}
