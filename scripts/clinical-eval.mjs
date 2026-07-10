@@ -102,6 +102,7 @@ const {
   removeRecoveryDraft,
   writeRecoveryDraft,
 } = await server.ssrLoadModule("/src/draftRecovery.ts");
+const { appendSoapEditTrace, buildSoapEditTrace, nextSoapVersion, SOAP_EDIT_HISTORY_LIMIT } = await server.ssrLoadModule("/src/soapEditTrace.ts");
 const { SoapVisualPreview } = await server.ssrLoadModule("/src/components/SoapVisualPreview.tsx");
 
 function haystack(plan) {
@@ -1874,6 +1875,85 @@ try {
 } catch (error) {
   failures.push({ name: "AI SOAP contract, undo/redo, and recovery draft protection", error: error instanceof Error ? error.message : String(error) });
   console.error(`FAIL AI SOAP contract, undo/redo, and recovery draft protection: ${failures[failures.length - 1].error}`);
+}
+
+try {
+  const aiDraft = [
+    "S:",
+    "- dyspnea improving",
+    "O:",
+    "- V/S: BP 118/70, SpO2 97% NC2L",
+    "- Lab: Na 156, Cr 1.8",
+    "A/P:",
+    "# PNA",
+    "- Ceftriaxone; continue O2.",
+    "# Hypernatremia",
+    "- Ceftriaxone; continue O2.",
+    "Tasks:",
+    "- Order: Ceftriaxone",
+  ].join("\n");
+  const reviewed = [
+    "S:",
+    "- dyspnea improving",
+    "O:",
+    "- V/S: BP 118/70, SpO2 97% NC2L",
+    "- Lab: Na 156 (142), Cr 1.8",
+    "A/P:",
+    "# PNA, improving",
+    "- Ceftriaxone; wean O2 as tolerated.",
+    "# Hypernatremia",
+    "- Na 156 from 142; replace free water and trend Na.",
+    "Tasks:",
+    "- Order: Ceftriaxone",
+  ].join("\n");
+  const trace = buildSoapEditTrace({
+    source: "ai",
+    beforeText: aiDraft,
+    afterText: reviewed,
+    workflowMode: "dailyUpdate",
+    aiDraftId: "fake-draft",
+    model: "fake-model",
+    qualityMode: "balanced",
+    baseSoapVersion: 2,
+    savedSoapVersion: nextSoapVersion({ soapVersion: 2 }),
+    savedAt: "2026-06-01T08:00:00.000Z",
+  });
+  if (!trace || !trace.changedSections.includes("lab") || !trace.changedSections.includes("ap")) {
+    throw new Error(`SOAP correction trace did not preserve section-aware edits: ${JSON.stringify(trace)}`);
+  }
+  if (trace.stats.rewritten < 2 || trace.model !== "fake-model" || trace.savedSoapVersion !== 3) {
+    throw new Error(`SOAP correction trace lost AI metadata or rewrite counts: ${JSON.stringify(trace)}`);
+  }
+  const accepted = buildSoapEditTrace({
+    source: "ai",
+    beforeText: reviewed,
+    afterText: reviewed,
+    workflowMode: "dailyUpdate",
+    baseSoapVersion: 3,
+    savedSoapVersion: 4,
+  });
+  if (!accepted?.acceptedAiDraftWithoutEdits || accepted.changes.length !== 0) {
+    throw new Error("Accepting an AI draft unchanged should still create a feedback trace.");
+  }
+  const manualNoop = buildSoapEditTrace({
+    source: "manual",
+    beforeText: reviewed,
+    afterText: reviewed,
+    workflowMode: "dailyUpdate",
+    baseSoapVersion: 3,
+    savedSoapVersion: 4,
+  });
+  if (manualNoop !== null) throw new Error("Unchanged manual save should not create a noisy edit trace.");
+  const capped = Array.from({ length: SOAP_EDIT_HISTORY_LIMIT + 4 }, (_, index) => ({ ...trace, id: `trace-${index}` }))
+    .reduce((history, item) => appendSoapEditTrace(history, item), []);
+  if (capped.length !== SOAP_EDIT_HISTORY_LIMIT || capped[0].id !== "trace-4") {
+    throw new Error(`SOAP correction history did not stay capped: ${capped.length}`);
+  }
+  console.log("PASS SOAP AI correction history and revision trace");
+  supplementalPasses += 1;
+} catch (error) {
+  failures.push({ name: "SOAP AI correction history and revision trace", error: error instanceof Error ? error.message : String(error) });
+  console.error(`FAIL SOAP AI correction history and revision trace: ${failures[failures.length - 1].error}`);
 }
 
 try {

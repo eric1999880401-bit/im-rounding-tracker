@@ -79,6 +79,7 @@ export function emptyDailyNote(date = todayKey()): DailyNote {
     soapStatus: "draft",
     soapUpdatedAt: "",
     soapVersion: 1,
+    soapEditHistory: [],
     importantRedFlags: "",
     overnightEvents: "",
     subjectiveOrChiefConcern: "",

@@ -20,6 +20,9 @@ import type {
   Patient,
   PatientTask,
   PhysicalExamEntry,
+  SoapEditChangeKind,
+  SoapEditSection,
+  SoapEditTrace,
 } from "../types";
 import { db } from "./firebase";
 import { normalizeDateKey, parseLabReports, parseLabText, textToItems } from "../utils";
@@ -144,6 +147,43 @@ function normalizeAiThinkingPrompt(item: Partial<AiThinkingPrompt>): AiThinkingP
   };
 }
 
+const soapEditSections = new Set<SoapEditSection>(["header", "s", "vs", "pe", "lab", "image", "objective", "ap", "orders", "tasks", "dc"]);
+const soapEditChangeKinds = new Set<SoapEditChangeKind>(["added", "removed", "rewritten"]);
+
+function normalizeSoapEditTrace(value: Partial<SoapEditTrace>): SoapEditTrace {
+  const changes = Array.isArray(value.changes)
+    ? value.changes.slice(0, 40).map((change) => ({
+        section: soapEditSections.has(change.section as SoapEditSection) ? (change.section as SoapEditSection) : "objective",
+        kind: soapEditChangeKinds.has(change.kind as SoapEditChangeKind) ? (change.kind as SoapEditChangeKind) : "rewritten",
+        before: String(change.before ?? "").slice(0, 320),
+        after: String(change.after ?? "").slice(0, 320),
+      }))
+    : [];
+  const changedSections = Array.isArray(value.changedSections)
+    ? value.changedSections.filter((section): section is SoapEditSection => soapEditSections.has(section as SoapEditSection))
+    : [];
+  return {
+    id: String(value.id ?? ""),
+    savedAt: String(value.savedAt ?? ""),
+    source: value.source === "ai" ? "ai" : "manual",
+    workflowMode: value.workflowMode === "newSoap" || value.workflowMode === "transferHandoff" ? value.workflowMode : "dailyUpdate",
+    aiDraftId: String(value.aiDraftId ?? ""),
+    model: String(value.model ?? ""),
+    qualityMode: value.qualityMode === "fast" || value.qualityMode === "balanced" || value.qualityMode === "highAccuracy" ? value.qualityMode : "",
+    baseSoapVersion: Number(value.baseSoapVersion) || 0,
+    savedSoapVersion: Number(value.savedSoapVersion) || 1,
+    changedSections,
+    changes,
+    stats: {
+      added: Number(value.stats?.added) || changes.filter((change) => change.kind === "added").length,
+      removed: Number(value.stats?.removed) || changes.filter((change) => change.kind === "removed").length,
+      rewritten: Number(value.stats?.rewritten) || changes.filter((change) => change.kind === "rewritten").length,
+    },
+    acceptedAiDraftWithoutEdits: Boolean(value.acceptedAiDraftWithoutEdits),
+    truncated: Boolean(value.truncated),
+  };
+}
+
 function normalizeDailyNote(date: string, data: Partial<DailyNote>): DailyNote {
   return {
     date: normalizeDateKey(data.date ?? date, date),
@@ -151,6 +191,9 @@ function normalizeDailyNote(date: string, data: Partial<DailyNote>): DailyNote {
     soapStatus: data.soapStatus === "reviewed" ? "reviewed" : "draft",
     soapUpdatedAt: data.soapUpdatedAt ?? "",
     soapVersion: typeof data.soapVersion === "number" ? data.soapVersion : 1,
+    soapEditHistory: Array.isArray(data.soapEditHistory)
+      ? data.soapEditHistory.slice(-12).map((trace) => normalizeSoapEditTrace(trace as Partial<SoapEditTrace>))
+      : [],
     importantRedFlags: data.importantRedFlags ?? "",
     overnightEvents: data.overnightEvents ?? "",
     subjectiveOrChiefConcern: data.subjectiveOrChiefConcern ?? "",

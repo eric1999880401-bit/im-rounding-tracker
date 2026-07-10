@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { AiClinicalSourceType, DailyNote, KeywordHighlightRule, Patient, RoundingLayoutPreferences, UserAiStyleProfile } from "../types";
+import type { AiClinicalSourceType, DailyNote, KeywordHighlightRule, Patient, RoundingLayoutPreferences, SoapEditTrace, UserAiStyleProfile } from "../types";
 import { generateRoundSoap } from "../firebase/aiService";
 import { readComposerPref, writeComposerPref } from "../composerPreferences";
 import DeidNotice from "./DeidNotice";
@@ -26,6 +26,7 @@ import {
   type SoapDeltaSection,
 } from "../soapDeltaGuardrails";
 import { normalizeAiSoapText } from "../aiSoapContract";
+import { appendSoapEditTrace, buildSoapEditTrace, nextSoapVersion, type SoapEditOrigin } from "../soapEditTrace";
 import {
   createUndoRedoHistory,
   pushUndoRedoEdit,
@@ -42,6 +43,7 @@ import {
   writeRecoveryDraft,
   type RecoveryDraft,
 } from "../draftRecovery";
+import SoapEditHistoryPanel from "./SoapEditHistoryPanel";
 
 interface RoundSoapComposerProps {
   patient: Patient;
@@ -192,6 +194,8 @@ function buildSavedNote(
   notes: DailyNote[],
   selectedDate: string,
   patch: ReturnType<typeof soapTextToPatientPatch>,
+  savedSoapVersion: number,
+  editTrace: SoapEditTrace | null,
 ): DailyNote {
   const now = nowIso();
   const baseNote = selectedNoteForDate(notes, selectedDate) ?? emptyDailyNote(selectedDate);
@@ -202,7 +206,8 @@ function buildSavedNote(
     soapText: soapText.trim(),
     soapStatus: "reviewed",
     soapUpdatedAt: now,
-    soapVersion: 1,
+    soapVersion: savedSoapVersion,
+    soapEditHistory: appendSoapEditTrace(baseNote.soapEditHistory, editTrace),
     createdAt: baseNote.createdAt || now,
     updatedAt: now,
   };
@@ -262,8 +267,10 @@ function RoundSoapComposer({
   const editorHistoryRef = useRef(editorHistory);
   const isComposingRef = useRef(false);
   const externalSoapRevisionRef = useRef(externalSoapRevision);
-  const pendingSavedSoapRef = useRef<{ date: string; text: string } | null>(null);
+  const pendingSavedSoapRef = useRef<{ date: string; text: string; note: DailyNote } | null>(null);
   const pendingOrderSourcesRef = useRef<Record<WorkflowMode, boolean>>(emptyPendingOrderSources);
+  const editOriginRef = useRef<SoapEditOrigin | null>(null);
+  const manualBaselineRef = useRef(editorDraftToSoapText(parseSoapTextToEditorDraft(canonical.text)));
   const recoveryScope = { kind: "roundSoap" as const, patientId: patient.id, selectedDate };
   const recoveryBaseline = canonical.text;
   const recoveryBaselineUpdatedAt = selectedNoteForDate(dailyNotes, selectedDate)?.soapUpdatedAt || selectedNoteForDate(dailyNotes, selectedDate)?.updatedAt || "";
@@ -273,6 +280,10 @@ function RoundSoapComposer({
   useEffect(() => {
     editorHistoryRef.current = editorHistory;
   }, [editorHistory]);
+
+  useEffect(() => {
+    editOriginRef.current = null;
+  }, [patient.id, selectedDate]);
 
   const hasUnsavedEdits = dirty || Object.values(pendingOrderSources).some(Boolean);
 
@@ -329,7 +340,9 @@ function RoundSoapComposer({
     }
     const nextDraft = parseSoapTextToEditorDraft(canonical.text);
     setEditorDraftState(nextDraft);
-    setRawSoapText(editorDraftToSoapText(nextDraft));
+    const normalizedBaseline = editorDraftToSoapText(nextDraft);
+    manualBaselineRef.current = normalizedBaseline;
+    setRawSoapText(normalizedBaseline);
     setDeltaReview(null);
   }, [canonical.text, dirty, selectedDate]);
 
@@ -339,6 +352,7 @@ function RoundSoapComposer({
     const nextSoapText = externalSoapText.trim();
     if (!nextSoapText) return;
     pendingSavedSoapRef.current = null;
+    editOriginRef.current = null;
     const nextDraft = parseSoapTextToEditorDraft(nextSoapText);
     updateEditorDraft(nextDraft);
     setError("");
@@ -550,6 +564,14 @@ function RoundSoapComposer({
         selectedDate,
       });
       const nextDraft = parseSoapTextToEditorDraft(guarded.acceptedText);
+      editOriginRef.current = {
+        source: "ai",
+        beforeText: editorDraftToSoapText(nextDraft),
+        workflowMode,
+        aiDraftId: result.draftId,
+        model: result.model,
+        qualityMode: result.qualityMode ?? requestedQualityMode,
+      };
       updateEditorDraft(nextDraft);
       updatePendingOrderSource(workflowMode, false);
       setWarnings([...guarded.warnings, ...guarded.highRiskWarnings]);
@@ -604,20 +626,39 @@ function RoundSoapComposer({
     try {
       const patch = soapTextToPatientPatch(reviewedText, patient, selectedDate);
       const nextPatient = { ...patch.patient, updatedAt: nowIso() };
-      const nextNote = buildSavedNote(reviewedText, nextPatient, dailyNotes, selectedDate, patch);
+      const subscribedBaseNote = selectedNoteForDate(dailyNotes, selectedDate);
+      const pendingBaseNote = pendingSavedSoapRef.current?.date === selectedDate ? pendingSavedSoapRef.current.note : undefined;
+      const baseNote = pendingBaseNote && (pendingBaseNote.soapVersion ?? 0) >= (subscribedBaseNote?.soapVersion ?? 0)
+        ? pendingBaseNote
+        : subscribedBaseNote;
+      const savedSoapVersion = nextSoapVersion(baseNote);
+      const editOrigin = editOriginRef.current ?? {
+        source: "manual" as const,
+        beforeText: manualBaselineRef.current,
+        workflowMode,
+      };
+      const editTrace = buildSoapEditTrace({
+        ...editOrigin,
+        afterText: reviewedText,
+        baseSoapVersion: baseNote?.soapVersion ?? 0,
+        savedSoapVersion,
+      });
+      const nextNote = buildSavedNote(reviewedText, nextPatient, dailyNotes, selectedDate, patch, savedSoapVersion, editTrace);
       await onSavePatient(nextPatient);
       await onSaveDailyNote(nextPatient.id, nextNote);
       const nextDraft = parseSoapTextToEditorDraft(reviewedText);
-      pendingSavedSoapRef.current = { date: selectedDate, text: reviewedText };
+      pendingSavedSoapRef.current = { date: selectedDate, text: reviewedText, note: nextNote };
       setEditorDraftState(nextDraft);
       setRawSoapText(editorDraftToSoapText(nextDraft));
+      manualBaselineRef.current = reviewedText;
       clearSourceText();
       setDirty(false);
       setDeltaReview(null);
+      editOriginRef.current = null;
       removeRecoveryDraft(recoveryStorage, recoveryScope);
       setRecoveryDraft(null);
       setRecoverySavedAt("");
-      setStatus("Reviewed SOAP saved. Board, Details, and Print now read this note.");
+      setStatus(`Reviewed SOAP saved. Board, Details, and Print now read this note.${editTrace ? " Correction history recorded." : ""}`);
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : "Saving SOAP failed.");
     } finally {
@@ -1180,6 +1221,8 @@ function RoundSoapComposer({
           )}
         </section>
       </div>
+
+      {!compact && <SoapEditHistoryPanel history={selectedNoteForDate(dailyNotes, selectedDate)?.soapEditHistory} />}
 
       {(dirty || Object.values(pendingOrderSources).some(Boolean)) && <p className="muted">Not saved yet.</p>}
     </section>

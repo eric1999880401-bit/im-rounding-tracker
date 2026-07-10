@@ -4483,6 +4483,102 @@ tbody tr:last-child td {
   padding: 8px;
 }
 
+.soap-edit-history-panel {
+  margin-top: 0.75rem;
+  border-top: 1px solid var(--border);
+  padding-top: 0.65rem;
+}
+
+.soap-edit-history-panel > summary,
+.soap-edit-trace > summary {
+  cursor: pointer;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem 0.75rem;
+}
+
+.soap-edit-history-panel > summary {
+  font-weight: 700;
+}
+
+.soap-edit-history-panel > summary span,
+.soap-edit-trace > summary span {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  font-weight: 500;
+}
+
+.soap-edit-trace-list {
+  display: grid;
+  gap: 0.5rem;
+  margin-top: 0.6rem;
+}
+
+.soap-edit-trace {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.55rem 0.65rem;
+  background: var(--surface-muted);
+}
+
+.soap-edit-section-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  margin: 0.55rem 0;
+}
+
+.soap-edit-section-tags span {
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 0.08rem 0.35rem;
+  color: var(--text-muted);
+  font-size: 0.72rem;
+}
+
+.soap-edit-change {
+  display: grid;
+  grid-template-columns: 4rem minmax(0, 1fr);
+  gap: 0.5rem;
+  border-top: 1px solid var(--border);
+  padding: 0.45rem 0;
+  font-size: 0.8rem;
+}
+
+.soap-edit-change > strong {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+}
+
+.soap-edit-change-before,
+.soap-edit-change-after {
+  overflow-wrap: anywhere;
+}
+
+.soap-edit-change-before + .soap-edit-change-after {
+  margin-top: 0.28rem;
+}
+
+.soap-edit-change-before span,
+.soap-edit-change-after span {
+  display: inline-block;
+  min-width: 3.6rem;
+  margin-right: 0.4rem;
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+}
+
+.soap-edit-change-before {
+  color: var(--danger-text);
+}
+
+.soap-edit-change-after {
+  color: var(--success-text);
+}
+
 .legacy-note {
   background: var(--surface-muted);
 }

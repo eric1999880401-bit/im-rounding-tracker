@@ -461,6 +461,7 @@ export interface DailyNote {
   soapStatus?: "draft" | "reviewed";
   soapUpdatedAt?: string;
   soapVersion?: number;
+  soapEditHistory?: SoapEditTrace[];
   importantRedFlags: string;
   overnightEvents: string;
   subjectiveOrChiefConcern: string;
@@ -483,6 +484,39 @@ export interface DailyNote {
   assessmentPlanItems: AssessmentPlanItem[];
   updatedAt: string;
   createdAt: string;
+}
+
+export type SoapEditWorkflowMode = "dailyUpdate" | "newSoap" | "transferHandoff";
+export type SoapEditSource = "ai" | "manual";
+export type SoapEditSection = "header" | "s" | "vs" | "pe" | "lab" | "image" | "objective" | "ap" | "orders" | "tasks" | "dc";
+export type SoapEditChangeKind = "added" | "removed" | "rewritten";
+
+export interface SoapEditLineChange {
+  section: SoapEditSection;
+  kind: SoapEditChangeKind;
+  before: string;
+  after: string;
+}
+
+export interface SoapEditTrace {
+  id: string;
+  savedAt: string;
+  source: SoapEditSource;
+  workflowMode: SoapEditWorkflowMode;
+  aiDraftId: string;
+  model: string;
+  qualityMode: "fast" | "balanced" | "highAccuracy" | "";
+  baseSoapVersion: number;
+  savedSoapVersion: number;
+  changedSections: SoapEditSection[];
+  changes: SoapEditLineChange[];
+  stats: {
+    added: number;
+    removed: number;
+    rewritten: number;
+  };
+  acceptedAiDraftWithoutEdits: boolean;
+  truncated: boolean;
 }
 
 export type DailyNotesByPatient = Record<string, DailyNote[]>;
