@@ -15,6 +15,7 @@ interface StructuredSoapEditorProps {
   draft: SoapEditorDraft;
   onChange: (draft: SoapEditorDraft) => void;
   compact?: boolean;
+  showHeader?: boolean;
   onCompositionStart?: () => void;
   onCompositionEnd?: () => void;
 }
@@ -305,6 +306,7 @@ export function StructuredSoapEditor({
   draft,
   onChange,
   compact = false,
+  showHeader = true,
   onCompositionStart,
   onCompositionEnd,
 }: StructuredSoapEditorProps) {
@@ -324,14 +326,16 @@ export function StructuredSoapEditor({
 
   return (
     <div className={compact ? "structured-soap-editor structured-soap-editor-compact" : "structured-soap-editor"}>
-      <SectionEditor
-        title="Header"
-        lines={draft.headerLines}
-        fallbackKind="header"
-        onChange={(headerLines) => updateDraft({ headerLines: cleanLines(headerLines) })}
-        onCompositionStart={onCompositionStart}
-        onCompositionEnd={onCompositionEnd}
-      />
+      {showHeader && (
+        <SectionEditor
+          title="Header"
+          lines={draft.headerLines}
+          fallbackKind="header"
+          onChange={(headerLines) => updateDraft({ headerLines: cleanLines(headerLines) })}
+          onCompositionStart={onCompositionStart}
+          onCompositionEnd={onCompositionEnd}
+        />
+      )}
       <SectionEditor
         title="S"
         lines={draft.sLines}

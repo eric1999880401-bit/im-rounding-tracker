@@ -19,6 +19,7 @@ import type {
 import { parseSoapText } from "./soapDraft";
 import { classifyClinicalLine } from "./clinicalLineClassifier";
 import { stripOrderLinePrefix } from "./medicationOrderParser";
+import { deriveSoapCorrectionLearning } from "./soapCorrectionProfile";
 
 export const roundingLayoutSections: Array<{ id: RoundingLayoutSection; label: string }> = [
   { id: "redFlags", label: "Red flag (AI)" },
@@ -172,6 +173,7 @@ export function normalizeUserPreferences(value: unknown): UserPreferences {
     roundingLayout: normalizeRoundingLayoutPreferences(source.roundingLayout),
     keywordHighlightRules: normalizeKeywordHighlightRules(source.keywordHighlightRules),
     aiStyleProfile: normalizeUserAiStyleProfile(source.aiStyleProfile),
+    aiStyleLearningResetAt: String(source.aiStyleLearningResetAt ?? ""),
   };
 }
 
@@ -308,6 +310,12 @@ export function normalizeUserAiStyleProfile(value: unknown): UserAiStyleProfile 
     sectionOrder,
     typicalApProblemCount,
     typicalApLineLimit,
+    correctionFingerprint: String(source.correctionFingerprint ?? ""),
+    reviewedAiSaveCount: Math.max(0, Number(source.reviewedAiSaveCount) || 0),
+    acceptedAiDraftCount: Math.max(0, Number(source.acceptedAiDraftCount) || 0),
+    correctionTendencies: Array.isArray(source.correctionTendencies)
+      ? source.correctionTendencies.map(String).filter(Boolean).slice(0, 6)
+      : [],
     updatedAt: String(source.updatedAt ?? ""),
   };
 }
@@ -357,10 +365,15 @@ function styleSummary(profile: Pick<UserAiStyleProfile, "apVoice" | "apOrganizat
   ].filter(Boolean);
 }
 
-export function buildUserAiStyleProfile(patients: Patient[], dailyNotesByPatient: DailyNotesByPatient): UserAiStyleProfile {
+export function buildUserAiStyleProfile(
+  patients: Patient[],
+  dailyNotesByPatient: DailyNotesByPatient,
+  options: { after?: string } = {},
+): UserAiStyleProfile {
+  const after = String(options.after ?? "");
   const reviewedTexts = patients.flatMap((patient) =>
     (dailyNotesByPatient[patient.id] ?? [])
-      .filter((note) => note.soapText?.trim() && note.soapStatus === "reviewed")
+      .filter((note) => note.soapText?.trim() && note.soapStatus === "reviewed" && (!after || (note.soapUpdatedAt || note.updatedAt) > after))
       .map((note) => String(note.soapText ?? "").trim())
       .filter(Boolean),
   );
@@ -389,8 +402,9 @@ export function buildUserAiStyleProfile(patients: Patient[], dailyNotesByPatient
     preferredTerms,
     taskStyle,
   };
+  const correctionLearning = deriveSoapCorrectionLearning(dailyNotesByPatient, after);
   return {
-    styleSummary: styleSummary(profile),
+    styleSummary: [...styleSummary(profile), ...correctionLearning.tendencies].slice(0, 10),
     apVoice,
     apOrganization,
     abbreviationStyle,
@@ -399,6 +413,10 @@ export function buildUserAiStyleProfile(patients: Patient[], dailyNotesByPatient
     sectionOrder: ["Header", "S", "O", "A/P", "Orders", "Tasks", "DC"],
     typicalApProblemCount: median(apCounts, 4),
     typicalApLineLimit: median(apLineCounts, 2),
+    correctionFingerprint: correctionLearning.fingerprint,
+    reviewedAiSaveCount: correctionLearning.reviewedAiSaveCount,
+    acceptedAiDraftCount: correctionLearning.acceptedAiDraftCount,
+    correctionTendencies: correctionLearning.tendencies,
     updatedAt: new Date().toISOString(),
   };
 }

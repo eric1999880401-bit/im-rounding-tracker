@@ -5393,3 +5393,222 @@ tbody tr:last-child td {
   letter-spacing: normal;
   text-transform: none;
 }
+
+/* Board-first rounding workflow */
+.patient-board-page > .page-header { order: 0; }
+.patient-board-page > .board-overview-compact { order: 1; }
+.patient-board-page > .board-patient-list-panel { order: 2; }
+.patient-board-page > .board-discharge-alerts { order: 3; }
+.patient-board-page > .board-bulk-import { order: 4; }
+
+.bulk-import-collapse:not([open]) .bulk-import-summary {
+  padding: 9px 12px;
+}
+
+.bulk-import-collapse:not([open]) .bulk-import-summary h3 {
+  font-size: 13px;
+}
+
+.bulk-import-collapse:not([open]) .bulk-import-summary p,
+.bulk-import-collapse:not([open]) .bulk-import-summary .badge.normal {
+  display: none;
+}
+
+.board-overview-compact {
+  padding: 9px 12px;
+}
+
+.board-overview-row {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+}
+
+.board-overview-row > strong {
+  font-family: var(--font-serif);
+  font-size: 16px;
+}
+
+.board-overview-row > span {
+  color: var(--text-muted);
+  font-size: 12.5px;
+}
+
+.board-overview-row > span b {
+  color: var(--text);
+  font-size: 14px;
+}
+
+.board-overview-queues {
+  margin-left: auto;
+  position: relative;
+}
+
+.board-overview-queues > summary {
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 750;
+  list-style: none;
+  padding: 5px 9px;
+}
+
+.board-overview-queues[open] .cockpit-grid {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-md);
+  min-width: min(680px, 80vw);
+  padding: 10px;
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 30;
+}
+
+.board-patient-list-panel > .section-heading {
+  align-items: flex-end;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.board-patient-list-panel .filter-row {
+  flex-wrap: nowrap;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.board-patient-list-panel .filter-row label {
+  font-size: 10px;
+  min-width: 0;
+  width: auto;
+}
+
+.board-patient-list-panel .filter-row select {
+  min-width: 150px;
+  padding: 6px 30px 6px 8px;
+}
+
+.round-soap-primary-paste textarea {
+  line-height: 1.45;
+  min-height: 150px;
+}
+
+.round-soap-advanced-panel {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  min-width: 0;
+}
+
+.round-soap-advanced-panel > summary {
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 750;
+  padding: 9px 11px;
+}
+
+.round-soap-advanced-body {
+  border-top: 1px solid var(--border);
+  display: grid;
+  gap: 10px;
+  padding: 11px;
+}
+
+.round-soap-advanced-selectors {
+  justify-content: flex-start;
+}
+
+.compact-soap-toolbar { align-items: center; }
+.compact-soap-toolbar h3 { font-size: 15px; }
+
+.compact-generate-row,
+.compact-soap-save-row {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: space-between;
+}
+
+.compact-soap-preview { max-height: 420px; }
+
+.soap-delta-panel-compact .soap-delta-section-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.soap-delta-panel-compact .soap-delta-section {
+  align-items: center;
+  flex: 1 1 180px;
+  padding: 6px 8px;
+}
+
+.patient-board-card-actions .board-action-buttons {
+  grid-template-columns: repeat(4, minmax(70px, 1fr));
+  max-width: 480px;
+}
+
+.board-action-more {
+  min-width: 0;
+  position: relative;
+}
+
+.board-action-more > summary {
+  align-items: center;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  display: flex;
+  font-size: 11.5px;
+  justify-content: center;
+  list-style: none;
+  min-height: 30px;
+  padding: 4px 8px;
+}
+
+.board-action-more-menu {
+  background: var(--surface-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  bottom: calc(100% + 5px);
+  box-shadow: var(--shadow-md);
+  display: grid;
+  gap: 4px;
+  min-width: 180px;
+  padding: 6px;
+  position: absolute;
+  right: 0;
+  z-index: 25;
+}
+
+.board-action-more-menu button {
+  justify-content: flex-start;
+  width: 100%;
+}
+
+@media (max-width: 720px) {
+  .board-overview-queues[open] .cockpit-grid {
+    min-width: min(92vw, 520px);
+  }
+
+  .patient-board-card-actions .board-action-buttons {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .board-patient-list-panel > .section-heading {
+    align-items: stretch;
+  }
+
+  .board-patient-list-panel .filter-row {
+    flex-wrap: wrap;
+    margin-left: 0;
+  }
+
+  .board-patient-list-panel .filter-row label,
+  .board-patient-list-panel .filter-row select {
+    flex: 1 1 140px;
+    width: 100%;
+  }
+}

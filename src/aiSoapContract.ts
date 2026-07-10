@@ -178,14 +178,48 @@ function normalizeObjectiveLine(line: string) {
   return clean;
 }
 
+function isGenericTaskLine(line: string) {
+  const text = normalizedKey(line);
+  if (!text) return true;
+  if (/^(?:monitor closely|continue current management|clinical correlation|review as needed|follow clinically)$/.test(text)) return true;
+  if (/^(?:continue|cont|monitor|observe)\b/.test(text) &&
+    !/\b(?:until|through|x\s*\d|today|tonight|pending|result|culture|cx|call|if|when|q\d+h|hold|resume|stop|start|dose|day|d\d+|teicoplanin|vancomycin|vanco|cef\w*|meropenem|ertapenem|zosyn|pip\/tazo|levofloxacin|apixaban|heparin|warfarin|insulin|lasix|furosemide|steroid)\b/.test(text)) return true;
+  return false;
+}
+
+function lineEquivalent(left: string, right: string) {
+  const a = normalizedKey(left);
+  const b = normalizedKey(right);
+  return Boolean(a && b && (a === b || (a.length >= 24 && b.includes(a)) || (b.length >= 24 && a.includes(b))));
+}
+
+function normalizeTaskAndDcOwnership(taskLines: string[], dcLines: string[], apProblems: SoapDraft["apProblems"]) {
+  const nextDc = [...dcLines];
+  const apLines = apProblems.flatMap((problem) => [problem.title, ...problem.lines]);
+  const nextTasks = taskLines.filter((line) => {
+    if (/^(?:dc|discharge|dispo|barrier)\s*[:：]/i.test(line.replace(/^!+\s*/, ""))) {
+      nextDc.push(line.replace(/^(?:dc|discharge|dispo|barrier)\s*[:：]\s*/i, ""));
+      return false;
+    }
+    if (isGenericTaskLine(line)) return false;
+    return !apLines.some((apLine) => lineEquivalent(line, apLine));
+  });
+  return {
+    taskLines: normalizeLines(nextTasks, 8, 160),
+    dcLines: normalizeLines(nextDc, 6, 160),
+  };
+}
+
 export function normalizeAiSoapDraft(draft: SoapDraft): SoapDraft {
+  const apProblems = normalizedApProblems(draft);
+  const owned = normalizeTaskAndDcOwnership(draft.taskLines, draft.dcLines, apProblems);
   return {
     header: normalizeLines(draft.header, 8, 150),
     sLines: normalizeLines(draft.sLines, 8, 140),
     oLines: normalizeLines(draft.oLines.map(normalizeObjectiveLine), 16, 180),
-    apProblems: normalizedApProblems(draft),
-    taskLines: normalizeLines(draft.taskLines, 8, 160),
-    dcLines: normalizeLines(draft.dcLines, 6, 160),
+    apProblems,
+    taskLines: owned.taskLines,
+    dcLines: owned.dcLines,
     warnings: normalizeLines(draft.warnings, 8, 160),
   };
 }

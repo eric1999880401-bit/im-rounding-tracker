@@ -50,6 +50,14 @@ function isOrderLine(line: string) {
   );
 }
 
+function actionOnlyApHeadings(text: string) {
+  return String(text ?? "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => /^!{0,2}\s*#\s*(?:continue|cont|complete|start|stop|hold|resume|restart|wean|review|adjust|monitor|follow(?:\s+up)?|f\/u|repeat|check|trend|order|arrange|consult|titrate|transition|ambulat\w*|mobiliz\w*|rehab)\b/i.test(line))
+    .map(compactLine);
+}
+
 function soapLinesBySection(text: string) {
   const draft = parseSoapText(text);
   const sections = new Map<SoapEditSection, string[]>();
@@ -135,6 +143,12 @@ export function buildSoapEditTrace(input: BuildSoapEditTraceInput): SoapEditTrac
   const allChanges = sectionOrder.flatMap((section) =>
     sectionChanges(section, beforeSections.get(section) ?? [], afterSections.get(section) ?? []),
   );
+  const afterActionHeadings = new Set(actionOnlyApHeadings(input.afterText).map((line) => line.toLowerCase()));
+  actionOnlyApHeadings(input.beforeText).forEach((line) => {
+    if (afterActionHeadings.has(line.toLowerCase())) return;
+    if (allChanges.some((change) => change.section === "ap" && change.before === line)) return;
+    allChanges.push({ section: "ap", kind: "removed", before: line, after: "" });
+  });
   const acceptedAiDraftWithoutEdits = input.source === "ai" && allChanges.length === 0;
   if (allChanges.length === 0 && !acceptedAiDraftWithoutEdits) return null;
 

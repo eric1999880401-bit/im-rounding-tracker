@@ -1957,6 +1957,122 @@ try {
 }
 
 try {
+  const legacyCap = {
+    ...emptyPatient(),
+    id: "legacy-cap",
+    bed: "7A-11",
+    patientCode: "FAKE-CAP",
+    age: 61,
+    sex: "F",
+    status: "active",
+    primaryDiagnosis: "Community-acquired pneumonia",
+    assessment: "CAP improving on antibiotics.",
+    plan: "Continue IV antibiotics; wean oxygen; ambulation trial.",
+  };
+  const legacyCapDraft = patientToSoapDraft(legacyCap, [], "2026-06-02");
+  const capTitles = legacyCapDraft.apProblems.map((problem) => problem.title).join("\n");
+  const capBody = legacyCapDraft.apProblems.flatMap((problem) => problem.lines).join("\n");
+  if (/^(?:continue|wean|ambulation)/im.test(capTitles)) {
+    throw new Error(`Legacy fallback promoted plan actions into fake problems: ${capTitles}`);
+  }
+  if (!/CAP|pneumonia/i.test(capTitles) || !/antibiotic|oxygen|ambulation/i.test(capBody)) {
+    throw new Error(`Legacy fallback lost the diagnosis-to-plan merge: ${JSON.stringify(legacyCapDraft.apProblems)}`);
+  }
+
+  const legacyHf = {
+    ...emptyPatient(),
+    id: "legacy-hf",
+    bed: "7A-12",
+    patientCode: "FAKE-HF",
+    age: 72,
+    sex: "M",
+    status: "active",
+    primaryDiagnosis: "Acute decompensated heart failure",
+    assessment: "Improving after diuresis.",
+    plan: "Continue oral diuretic transition; review echo; adjust GDMT.",
+  };
+  const legacyHfDraft = patientToSoapDraft(legacyHf, [], "2026-06-02");
+  if (!legacyHfDraft.apProblems.some((problem) => /heart failure/i.test(problem.title))) {
+    throw new Error(`Status-only legacy assessment did not recover the supported diagnosis: ${JSON.stringify(legacyHfDraft.apProblems)}`);
+  }
+  if (legacyHfDraft.apProblems.some((problem) => /^(?:continue|review|adjust)/i.test(problem.title))) {
+    throw new Error(`HF actions remained separate A/P problems: ${JSON.stringify(legacyHfDraft.apProblems)}`);
+  }
+
+  console.log("PASS Legacy A/P fallback merges action-only plan fragments into supported diagnoses");
+  supplementalPasses += 1;
+} catch (error) {
+  failures.push({ name: "Legacy A/P action-only merge", error: error instanceof Error ? error.message : String(error) });
+  console.error(`FAIL Legacy A/P action-only merge: ${failures[failures.length - 1].error}`);
+}
+
+try {
+  const before = [
+    "S:",
+    "- cough improved",
+    "O:",
+    "- Lab: WBC 12",
+    "A/P:",
+    "# PNA",
+    "- ceftriaxone + O2",
+    "# Continue antibiotics",
+    "- ceftriaxone + O2",
+    "Tasks:",
+    "- continue antibiotics",
+  ].join("\n");
+  const after = [
+    "S:",
+    "- cough improved",
+    "O:",
+    "- Lab: WBC 12",
+    "A/P:",
+    "# PNA",
+    "- ceftriaxone + O2; f/u Cx",
+  ].join("\n");
+  const baseTrace = buildSoapEditTrace({
+    source: "ai",
+    beforeText: before,
+    afterText: after,
+    workflowMode: "dailyUpdate",
+    aiDraftId: "fake-learning",
+    model: "fake-mini",
+    qualityMode: "fast",
+    baseSoapVersion: 1,
+    savedSoapVersion: 2,
+    savedAt: "2026-06-03T08:00:00.000Z",
+  });
+  if (!baseTrace) throw new Error("Could not create correction trace fixture");
+  const history = Array.from({ length: 5 }, (_, index) => ({
+    ...baseTrace,
+    id: `fake-learning-${index}`,
+    savedAt: `2026-06-0${index + 3}T08:00:00.000Z`,
+  }));
+  const note = {
+    ...emptyDailyNote("2026-06-07"),
+    soapText: after,
+    soapStatus: "reviewed",
+    soapEditHistory: history,
+    soapUpdatedAt: "2026-06-07T08:00:00.000Z",
+  };
+  const patient = { ...emptyPatient(), id: "learning-patient", status: "active" };
+  const profile = buildUserAiStyleProfile([patient], { [patient.id]: [note] });
+  if (profile.reviewedAiSaveCount !== 5 || !profile.correctionFingerprint) {
+    throw new Error(`Correction learning did not activate after five reviewed AI saves: ${JSON.stringify(profile)}`);
+  }
+  if (!profile.correctionTendencies.some((line) => /action-only A\/P/i.test(line))) {
+    throw new Error(`Correction profile did not learn action-only A/P merging: ${JSON.stringify(profile.correctionTendencies)}`);
+  }
+  if (/FAKE-CAP|learning-patient/i.test(JSON.stringify(profile))) {
+    throw new Error("Correction profile leaked patient-specific fixture identifiers");
+  }
+  console.log("PASS Abstract correction learning activates after five reviewed AI saves");
+  supplementalPasses += 1;
+} catch (error) {
+  failures.push({ name: "Abstract correction learning", error: error instanceof Error ? error.message : String(error) });
+  console.error(`FAIL Abstract correction learning: ${failures[failures.length - 1].error}`);
+}
+
+try {
   const baselineSoap = [
     "7A-01 IM-A01 67/F",
     "Dx: PNA w/ bacteremia",
@@ -3110,6 +3226,59 @@ try {
   if (/K 2\.9(?!\]\])/.test(markedLabSummary.replace(/\[\[orange:K 2\.9\]\]/g, ""))) {
     throw new Error(`Lab visual summary duplicated the marked lab value:\n${markedLabSummary}`);
   }
+
+  const supersedePatient = {
+    ...emptyPatient("daily-supersede"),
+    bed: "7A-01",
+    patientCode: "FAKE-01",
+    primaryDiagnosis: "CAP",
+  };
+  const supersedeDate = "2026-07-10";
+  const supersedeBaseline = [
+    "S:",
+    "- Less dyspnea today, still coughing.",
+    "O:",
+    "- Image: CXR: improved RLL opacity",
+    "- Lab: WBC 12.1, Na 132, Cr 0.8",
+    "A/P:",
+    "# CAP improving on antibiotics",
+    "- Continue IV antibiotics; wean oxygen; ambulation trial.",
+    "Tasks:",
+    "- Check ambulatory oxygen saturation",
+    "- Update family after rounds",
+    "DC:",
+    "- Target 2026-05-04",
+    "- Home when off oxygen",
+  ].join("\n");
+  const supersedeNote = {
+    ...emptyDailyNote(supersedePatient.id, supersedeDate),
+    soapText: supersedeBaseline,
+    soapStatus: "reviewed",
+  };
+  const supersedeSource = [
+    "Lab: WBC 9.2 from 12.1, Na 136 from 132, Cr 0.8",
+    "CXR 07-10: RLL opacity further improved",
+    "No dyspnea; cough improved.",
+    "Completed ceftriaxone today. Ambulation passed.",
+    "DC tomorrow if stable.",
+  ].join("\n");
+  const supersedeCandidate = localRoundSoapFromPaste(supersedePatient, [supersedeNote], supersedeDate, supersedeSource);
+  const supersedeGuarded = guardRoundSoapDelta({
+    workflowMode: "dailyUpdate",
+    baselineText: supersedeBaseline,
+    candidateText: supersedeCandidate,
+    sourceFields: { other: supersedeSource },
+    selectedDate: supersedeDate,
+  });
+  if (/improved RLL opacity/i.test(supersedeGuarded.acceptedText) && !/further improved/i.test(supersedeGuarded.acceptedText)) {
+    throw new Error(`Old CXR survived a same-study update:\nCandidate:\n${supersedeCandidate}\nAccepted:\n${supersedeGuarded.acceptedText}`);
+  }
+  if (/Check ambulatory oxygen saturation|Continue IV antibiotics|Target 2026-05-04/i.test(supersedeGuarded.acceptedText)) {
+    throw new Error(`Explicitly completed/stale daily items survived:\nCandidate:\n${supersedeCandidate}\nAccepted:\n${supersedeGuarded.acceptedText}`);
+  }
+  if (!/WBC 9\.2[\s\S]*12\.1|WBC 9\.2.*\(12\.1\)/i.test(supersedeGuarded.acceptedText) || !/Na 136[\s\S]*132|Na 136.*\(132\)/i.test(supersedeGuarded.acceptedText)) {
+    throw new Error(`Updated labs lost prior-value comparison:\n${supersedeGuarded.acceptedText}`);
+  }
   console.log("PASS Pasted CXR/A&P updates replace stale lines, color marks persist, and bangs stay out of plain fields");
   supplementalPasses += 1;
 } catch (error) {
@@ -3228,6 +3397,17 @@ try {
   const textForm = dedupeDiseaseText("diabetes mellitus, hypertension, hyperlipidemia, HTN, DM, and HLD");
   if (textForm !== "DM, HTN, HLD") {
     throw new Error(`PMH text dedupe produced: ${textForm}`);
+  }
+  const pmhPatient = {
+    ...emptyPatient("pmh-header-dedupe"),
+    bed: "7A-01",
+    patientCode: "FAKE-PMH",
+    underlyingDiseases: "HTN; type 2 DM; DM",
+    primaryDiagnosis: "PNA",
+  };
+  const pmhHeader = patientToSoapDraft(pmhPatient, [], "2026-07-10").header.find((line) => /^PMH:/i.test(line)) ?? "";
+  if ((pmhHeader.match(/\bDM\b/gi) ?? []).length !== 1 || /type 2 DM.*\bDM\b/i.test(pmhHeader)) {
+    throw new Error(`SOAP header PMH kept synonymous duplicates: ${pmhHeader}`);
   }
   console.log("PASS PMH synonym dedupe collapses full-name/abbreviation duplicates without losing distinct diseases");
   supplementalPasses += 1;

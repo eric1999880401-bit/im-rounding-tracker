@@ -1,5 +1,8 @@
 import { getRoundingDigest } from "./roundingDigest";
 import { ensureAntibioticApInDraft } from "./antibioticPlan";
+import { normalizeApProblems } from "./apProblemNormalizer";
+import { imageStudyKey } from "./clinicalFieldRouter";
+import { dedupeDiseaseItems, dedupeDiseaseText } from "./aiPostprocess/diseaseDedupe";
 import type { AiSoapDraft, AssessmentPlanItem, DailyNote, Patient, PatientTask, TaskCategory, TaskPriority } from "./types";
 import {
   createId,
@@ -93,7 +96,9 @@ function specificPmh(patient: Patient, fallbackRisks: string[]) {
   const cancerMatch = cancerSource.match(
     /\b(?:hypopharyngeal|esophageal|tonsillar|lung|breast|colon|gastric|hepatic|pancreatic|prostate|bladder|renal|ovarian|cervical|endometrial|thyroid)?\s*(?:SCC|squamous cell carcinoma|adenocarcinoma|cancer|carcinoma)\b(?:[^;\n,.]{0,48})?/i,
   );
-  const cleanedItems = uniqueSoapLines(textToItems(source), 5, 70).filter((line) => !/^CA hx$/i.test(line));
+  const cleanedItems = dedupeDiseaseItems(uniqueSoapLines(textToItems(dedupeDiseaseText(source)), 8, 70))
+    .slice(0, 5)
+    .filter((line) => !/^CA hx$/i.test(line));
   if (cancerMatch && !cleanedItems.some((line) => /scc|cancer|carcinoma/i.test(line))) {
     cleanedItems.unshift(cleanSoapLine(cancerMatch[0], 70));
   }
@@ -211,21 +216,26 @@ function legacyApProblemsFromFields(patient: Patient, dailyNotes: DailyNote[] = 
   if (legacyNote?.assessmentPlanItems.length) return apProblemsFromLegacyItems(legacyNote.assessmentPlanItems);
   if (patient.assessmentPlanItems.length > 0) return apProblemsFromLegacyItems(patient.assessmentPlanItems);
 
-  return apProblemsFromText(
-    [
-      legacyNote?.assessment,
-      legacyNote?.plan,
-      patient.assessment,
-      patient.plan,
-    ]
-      .filter(hasText)
-      .join("\n"),
-  );
+  const assessmentText = [legacyNote?.assessment, patient.assessment].filter(hasText).join("\n");
+  const planText = [legacyNote?.plan, patient.plan].filter(hasText).join("\n");
+  const assessmentProblems = apProblemsFromText(assessmentText);
+  const preferredTitle = cleanSoapLine(patient.primaryDiagnosis || patient.oneLiner || patient.activeProblemItems[0] || "Active problem", 80);
+
+  if (assessmentProblems.length === 1 && /^(?:improv\w*|worsen\w*|stable|resolved|persistent|after|s\/p|post)\b/i.test(assessmentProblems[0].title)) {
+    assessmentProblems[0] = {
+      title: preferredTitle,
+      lines: uniqueSoapLines([assessmentProblems[0].title, ...assessmentProblems[0].lines], 2, 140, false),
+    };
+  }
+
+  const planProblems = uniqueSoapLines([planText], 8, 150).map((line) => ({ title: line, lines: [] }));
+  if (assessmentProblems.length === 0 && preferredTitle) assessmentProblems.push({ title: preferredTitle, lines: [] });
+  return dedupeApProblems([...assessmentProblems, ...planProblems]);
 }
 
 function dedupeApProblems(problems: SoapApProblem[]) {
   const seen = new Set<string>();
-  return problems
+  const deduped = problems
     .map((problem) => ({
       title: cleanSoapLine(problem.title, 80),
       lines: uniqueSoapLines(problem.lines, 5, 140, false),
@@ -237,6 +247,7 @@ function dedupeApProblems(problems: SoapApProblem[]) {
       seen.add(key);
       return true;
     });
+  return normalizeApProblems(deduped);
 }
 
 function sortedNotes(notes: DailyNote[]) {
@@ -336,20 +347,40 @@ function splitGuidedSoapSource(rawText: string): Record<GuidedSoapSourceSection,
     .forEach((line) => {
       const match = line.match(/^\s*(Admission|V\/S|VS|Vitals?|Lab|Labs|Image|Img|Imaging|Orders?|Meds?|Medication|藥囑|Description\s*\/\s*other|Other update\s*\/\s*task\s*\/\s*course|Last SOAP\s*\/\s*SBAR)\s*:\s*(.*)$/i);
       if (match) {
-        current = guidedSectionKey(match[1]);
-        if (match[2].trim()) buckets[current].push(match[2].trim());
+        const matchedSection = guidedSectionKey(match[1]);
+        const inlineValue = match[2].trim();
+        if (inlineValue) {
+          buckets[matchedSection].push(inlineValue);
+          current = "other";
+        } else {
+          current = matchedSection;
+        }
         return;
       }
-      if (line.trim()) buckets[current].push(line.trim());
+      const trimmed = line.trim();
+      if (!trimmed) return;
+      if (current !== "other") {
+        buckets[current].push(trimmed);
+        return;
+      }
+      if (/^(?:v\/s|vs|vitals?)\s*:/i.test(trimmed) || /\b(?:BP|HR|RR|SpO2|T\s*\d|afebrile|NC\s*\d*L?|RA)\b/i.test(trimmed)) {
+        buckets.vitals.push(trimmed.replace(/^(?:v\/s|vs|vitals?)\s*:\s*/i, ""));
+      } else if (/^lab\s*:/i.test(trimmed) || /\b(?:WBC|Hb|Hgb|Plt|Cr|BUN|Na|K\b|AST|ALT|INR|lactate|CRP|culture|B\/C|BCx)\b/i.test(trimmed)) {
+        buckets.labs.push(trimmed.replace(/^lab\s*:\s*/i, ""));
+      } else if (/^(?:image|img)\s*:/i.test(trimmed) || /\b(?:CXR|CT\b|MRI|echo|sono|ultrasound|impression)\b/i.test(trimmed)) {
+        buckets.images.push(trimmed.replace(/^(?:image|img)\s*:\s*/i, ""));
+      } else {
+        buckets.other.push(trimmed);
+      }
     });
 
   return {
-    admission: buckets.admission.join(" "),
-    vitals: buckets.vitals.join(" "),
-    labs: buckets.labs.join(" "),
-    images: buckets.images.join(" "),
-    orders: buckets.orders.join(" "),
-    other: buckets.other.join(" "),
+    admission: buckets.admission.join("\n"),
+    vitals: buckets.vitals.join("\n"),
+    labs: buckets.labs.join("\n"),
+    images: buckets.images.join("\n"),
+    orders: buckets.orders.join("\n"),
+    other: buckets.other.join("\n"),
   };
 }
 
@@ -413,20 +444,82 @@ export function localRoundSoapFromPaste(patient: Patient, dailyNotes: DailyNote[
       addUniqueLine(baseline.sLines, line.replace(/^Admission\s*:\s*/i, ""), 5, 140);
     }
   });
-  sourceSentences(source.vitals).forEach((line) => {
+  const nextSubjectiveLines = sourceSentences(source.other).filter((line) =>
+    /\b(?:pain|dyspnea|sob|cough|fever|chills|n\/v|diarrhea|constipation|poor intake|dizziness|weakness)\b/i.test(line),
+  );
+  if (nextSubjectiveLines.length > 0) {
+    baseline.sLines = uniqueSoapLines(nextSubjectiveLines, 5, 140);
+  }
+  const nextVitalLines = sourceSentences(source.vitals);
+  if (nextVitalLines.length > 0) {
+    baseline.oLines = baseline.oLines.filter((line) => !/^(?:v\/s|vs|vitals?)\s*:/i.test(line));
+  }
+  nextVitalLines.forEach((line) => {
     if (/^PE\s*:/i.test(line)) {
       addUniqueLine(baseline.oLines, prefixedLine("PE", line.replace(/^PE\s*:\s*/i, "")), 12, 150);
       return;
     }
     addUniqueLine(baseline.oLines, prefixedLine("V/S", line), 12, 160);
   });
-  sourceSentences(source.labs).forEach((line) => addUniqueLine(baseline.oLines, prefixedLine("Lab", line), 12, 170));
-  sourceSentences(source.images).forEach((line) => addUniqueLine(baseline.oLines, prefixedLine("Image", line), 12, 170));
+  const nextLabLines = sourceSentences(source.labs);
+  if (nextLabLines.length > 0) {
+    baseline.oLines = baseline.oLines.filter((line) => !/^(?:lab|cbc|renal(?:\/lyte)?|lyte\/renal|liver(?:\/coag)?|infx(?:\/perfusion)?|abg|vbg|cardiac|other)\s*:/i.test(line));
+  }
+  nextLabLines.forEach((line) => addUniqueLine(baseline.oLines, prefixedLine("Lab", line), 12, 170));
+  sourceSentences(source.images).forEach((line) => {
+    const studyKey = imageStudyKey(line);
+    if (studyKey) {
+      baseline.oLines = baseline.oLines.filter((existing) => imageStudyKey(existing) !== studyKey);
+    }
+    addUniqueLine(baseline.oLines, prefixedLine("Image", line), 12, 170);
+  });
   sourceSentences(source.other).forEach((line) => {
-    if (/^PE\s*:/i.test(line)) addUniqueLine(baseline.oLines, line, 12, 150);
+    if (/^PE\s*:/i.test(line)) {
+      addUniqueLine(baseline.oLines, line, 12, 150);
+      return;
+    }
+    if (/^(?:image|img)\s*:/i.test(line) || /\b(?:CXR|CT\b|MRI|echo|sono|ultrasound|impression)\b/i.test(line)) {
+      addUniqueLine(baseline.oLines, prefixedLine("Image", line.replace(/^(?:image|img)\s*:\s*/i, "")), 12, 170);
+      return;
+    }
+    if (/^lab\s*:/i.test(line) || /\b(?:WBC|Hb|Hgb|Plt|Cr|BUN|Na|K\b|AST|ALT|INR|lactate|CRP|culture|B\/C|BCx)\b/i.test(line)) {
+      addUniqueLine(baseline.oLines, prefixedLine("Lab", line.replace(/^lab\s*:\s*/i, "")), 12, 170);
+      return;
+    }
+    if (/^(?:v\/s|vs|vitals?)\s*:/i.test(line) || /\b(?:BP|HR|RR|SpO2|T\s*\d|afebrile|NC\s*\d*L?|RA)\b/i.test(line)) {
+      addUniqueLine(baseline.oLines, prefixedLine("V/S", line.replace(/^(?:v\/s|vs|vitals?)\s*:\s*/i, "")), 12, 170);
+      return;
+    }
+    if (/\b(?:pain|dyspnea|sob|cough|fever|chills|n\/v|diarrhea|constipation|poor intake|dizziness|weakness)\b/i.test(line)) {
+      addUniqueLine(baseline.sLines, line, 5, 140);
+    }
   });
 
+  sourceSentences(source.other)
+    .filter((line) => /\b(?:completed|done|passed|resolved|final negative|discontinued|stopped)\b/i.test(line))
+    .forEach((line) => {
+      if (/\b(?:ambulat\w*|walk\w*)\b/i.test(line)) {
+        baseline.taskLines = baseline.taskLines.filter((task) => !/\b(?:ambulat\w*|walk\w*|exertional oxygen|oxygen saturation)\b/i.test(task));
+      }
+      if (/\b(?:culture|b\/c|bcx)\b/i.test(line)) {
+        baseline.taskLines = baseline.taskLines.filter((task) => !/\b(?:culture|b\/c|bcx)\b/i.test(task));
+      }
+    });
+
   const nextProblems = removeEmptyApProblems(baseline.apProblems);
+  const completedAntibiotic = sourceSentences(source.other).find((line) =>
+    /\b(?:completed|done|discontinued|stopped)\b/i.test(line) &&
+    /\b(?:abx|antibiotic|teicoplanin|vancomycin|cef\w*|meropenem|ertapenem|pip\/?tazo|zosyn)\b/i.test(line),
+  );
+  if (completedAntibiotic) {
+    nextProblems.forEach((problem) => {
+      if (!/\b(?:cap|pna|pneumonia|infection|bacteremia|sepsis|cholangitis|abx|antibiotic)\b/i.test(`${problem.title} ${problem.lines.join(" ")}`)) return;
+      problem.lines = uniqueSoapLines([
+        completedAntibiotic,
+        ...problem.lines.filter((line) => !/\bcontinue\b.*\b(?:abx|antibiotics?|cef\w*|teicoplanin|vancomycin|meropenem|ertapenem)\b/i.test(line)),
+      ], 2, 140);
+    });
+  }
   if (/\b(cholangitis|sepsis|biliary|ercp|bile|culture|cx|meropenem|vanco|vancomycin|piperacillin|tazobactam|pip\/?tazo|zosyn)\b/i.test(sourceAll)) {
     addProblem(nextProblems, "Cholangitis / sepsis", [
       compactProblemLine([
@@ -438,7 +531,7 @@ export function localRoundSoapFromPaste(patient: Patient, dailyNotes: DailyNote[
       ]),
     ]);
   }
-  if (/\b(aki|hyperk|hyperkal|cr\s*\d|k\s*\d|lokelma|renal-dose)\b/i.test(sourceAll)) {
+  if (/\b(aki|acute kidney injury|hyperk|hyperkal(?:emia)?|renal failure|lokelma|renal-dose)\b/i.test(sourceAll)) {
     addProblem(nextProblems, "AKI / hyperK", [
       compactProblemLine([
         firstMatch(source.labs, /\bCr\s*[\d.]+(?:\s*from\s*[\d.]+)?/i),
@@ -448,7 +541,7 @@ export function localRoundSoapFromPaste(patient: Patient, dailyNotes: DailyNote[
       ]),
     ]);
   }
-  if (/\b(pleural effusion|o2|oxygen|spo2|hfref|af\b|apixaban|congestion)\b/i.test(sourceAll)) {
+  if (/\b(pleural effusion|oxygen requirement|on\s+(?:NC|O2)|hfref|atrial fibrillation|af\b|apixaban|congestion)\b/i.test(sourceAll)) {
     addProblem(nextProblems, "R pleural effusion/O2 need; HFrEF/AF", [
       compactProblemLine([
         firstMatch(source.vitals, /\bSpO2\s*[\d%]+\s*(?:on\s*)?(?:NC|O2)?\s*\d*L?/i),
@@ -472,14 +565,18 @@ export function localRoundSoapFromPaste(patient: Patient, dailyNotes: DailyNote[
   }
 
   sourceSentences([source.other, source.labs].join(" "))
-    .filter((line) => /\b(f\/u|follow|pending|repeat|call|consult|arrange|dc|discharge|opd|culture|cx)\b/i.test(line))
+    .filter((line) => /\b(f\/u|follow|pending|repeat|call|consult|arrange|opd|culture|cx)\b/i.test(line))
     .forEach((line) => addUniqueLine(baseline.taskLines, line.replace(/^tasks?\s*:\s*/i, ""), 6, 130));
   sourceSentences(source.orders)
     .filter((line) => /\b(meropenem|vanco|vancomycin|piperacillin|tazobactam|pip\/?tazo|zosyn|hold|resume|lokelma|o2|strict i\/o|vs q|insulin|lasix|heparin|apixaban)\b/i.test(line))
     .forEach((line) => addUniqueLine(baseline.taskLines, `Order: ${line}`, 6, 130));
-  sourceSentences(source.other)
+  const incomingDcLines = sourceSentences(source.other)
     .filter((line) => /\b(dc|discharge|not ready|barrier|opd|certificate)\b/i.test(line))
-    .forEach((line) => addUniqueLine(baseline.dcLines, line.replace(/^DC\s*:\s*/i, ""), 4, 130));
+    .map((line) => line.replace(/^DC\s*:\s*/i, ""));
+  if (incomingDcLines.some((line) => /\b(?:today|tomorrow|target|discharge)\b|\b\d{4}-\d{2}-\d{2}\b/i.test(line))) {
+    baseline.dcLines = baseline.dcLines.filter((line) => !/\b(?:target|today|tomorrow)\b|\b\d{4}-\d{2}-\d{2}\b/i.test(line));
+  }
+  baseline.dcLines = uniqueSoapLines([...incomingDcLines, ...baseline.dcLines], 5, 130);
 
   const mergedDraft = {
     ...baseline,
@@ -487,7 +584,9 @@ export function localRoundSoapFromPaste(patient: Patient, dailyNotes: DailyNote[
     warnings: uniqueSoapLines([...baseline.warnings, "Local demo SOAP merge. Review before saving."], 3, 120),
   } satisfies SoapDraft;
 
-  return formatSoapDraft(ensureAntibioticApInDraft(mergedDraft, [rawText, formatSoapDraft(baseline)].join("\n"), selectedDate));
+  return completedAntibiotic
+    ? formatSoapDraft(mergedDraft)
+    : formatSoapDraft(ensureAntibioticApInDraft(mergedDraft, [rawText, formatSoapDraft(baseline)].join("\n"), selectedDate));
 }
 
 function fallbackAntibioticSourceText(patient: Patient, dailyNotes: DailyNote[] = [], selectedDate = "") {

@@ -12,6 +12,7 @@ import { documentTypes, sourceTypes } from "./types";
 import type { CallableInput, DocumentCallableInput, DocumentType, PatientBatchCallableInput, RoundSoapCallableInput, SourceType } from "./types";
 import { OPENAI_API_KEY, extractOutputText, extractRefusal, getModel, getModelForQuality, getOpenAiApiKey, getOpenAiErrorMessage, openAiHttpsError, sanitizeQualityMode } from "./openai";
 import { asPlainObject, compactDailyNote, compactPatientContext, concretizeVagueFollowUps, findTargetPatientForBatch, leanSoapCleanup, sanitizeExistingPatientsForBatch, sanitizePatientBatchImportMode, sanitizePatientBatchOutput, sanitizePatientContext, sanitizeUserStyleProfile, truncateString } from "./sanitize";
+import { buildSoapPatch } from "./soapPatch";
 import { admissionSummaryStyleBullets, documentInstructions, makeBatchImportPrompt, makeDocumentPrompt, makePrompt, makeRoundSoapPrompt } from "./prompts";
 
 export const analyzePatientBatchText = onCall(
@@ -270,6 +271,8 @@ export const generateRoundSoap = onCall(
     return {
       draftId: admin.firestore().collection("_aiDraftIds").doc().id,
       soapText,
+      mode: workflowMode === "dailyUpdate" ? "patch" : "full",
+      ...(workflowMode === "dailyUpdate" ? { patch: buildSoapPatch(currentSoapBaseline, soapText, rawText) } : {}),
       warnings: Array.isArray(parsed.warnings) ? parsed.warnings.map((item) => truncateString(item, 240)).slice(0, 8) : [],
       highlightHints: Array.isArray(parsed.highlightHints) ? parsed.highlightHints.map((item) => truncateString(item, 180)).slice(0, 12) : [],
       model,

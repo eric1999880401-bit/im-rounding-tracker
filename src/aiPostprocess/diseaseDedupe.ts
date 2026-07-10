@@ -5,7 +5,7 @@
 // Keep in sync with the copy in functions/src/sanitize.ts.
 
 const DISEASE_SYNONYMS: Array<[RegExp, string]> = [
-  [/^(?:type\s*(?:2|ii)\s*)?diabetes(?:\s+mellitus)?(?:\s*type\s*(?:2|ii))?$|^t2dm$|^dm$|^dm\s*type\s*(?:2|ii)$/i, "dm"],
+  [/^(?:type\s*(?:2|ii)\s*)?diabetes(?:\s+mellitus)?(?:\s*type\s*(?:2|ii))?$|^t2dm$|^dm$|^type\s*(?:2|ii)\s*dm$|^dm\s*type\s*(?:2|ii)$/i, "dm"],
   [/^hypertension$|^htn$/i, "htn"],
   [/^hyperlipidemia$|^dyslipidemia$|^hld$/i, "hld"],
   [/^coronary artery disease$|^cad$/i, "cad"],

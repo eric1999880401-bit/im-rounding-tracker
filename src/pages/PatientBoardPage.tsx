@@ -1045,7 +1045,7 @@ function PatientBoardPage({
   }
 
   return (
-    <div className="page">
+    <div className="page patient-board-page">
       <header className="page-header">
         <div>
           <h2>{t("nav.patientBoard")}</h2>
@@ -1079,7 +1079,7 @@ function PatientBoardPage({
       )}
 
       <details
-        className="panel bulk-import-panel bulk-import-collapse"
+        className="panel bulk-import-panel bulk-import-collapse board-bulk-import"
         open={bulkImportOpen}
         onToggle={(event) => setBulkImportOpen(event.currentTarget.open)}
       >
@@ -1354,35 +1354,25 @@ function PatientBoardPage({
         </div>
       </details>
 
-      <section className="panel morning-cockpit">
-        <div className="section-heading">
-          <div>
-            <h3>Board Overview</h3>
-          </div>
-          <span className="muted">{activePatients.length} active</span>
-        </div>
-        <div className="cockpit-summary-grid" aria-label="Morning priority summary">
-          <div className="cockpit-stat cockpit-stat-today">
-            <strong>{activeTodayCount}</strong>
-            <span>Active today</span>
-          </div>
-          <div className="cockpit-stat">
-            <strong>{dischargeSoonPatients.length}</strong>
-            <span>DC prep</span>
-          </div>
-          <div className="cockpit-stat">
-            <strong>{activePatients.length}</strong>
-            <span>Total census</span>
-          </div>
-        </div>
-        <div className="cockpit-grid">
-          {renderCockpitColumn("New Admits", newAdmissionPatients, "No new admits", "admission")}
-          {renderCockpitColumn("DC Soon", dischargeSoonPatients, "No DC prep", "discharge")}
+      <section className="panel morning-cockpit board-overview-compact">
+        <div className="board-overview-row" aria-label="Morning priority summary">
+          <strong>Board</strong>
+          <span><b>{activePatients.length}</b> active</span>
+          <span><b>{activeTodayCount}</b> updated</span>
+          <span><b>{newAdmissionPatients.length}</b> new</span>
+          <span><b>{dischargeSoonPatients.length}</b> DC prep</span>
+          <details className="board-overview-queues">
+            <summary>Queues</summary>
+            <div className="cockpit-grid">
+              {renderCockpitColumn("New Admits", newAdmissionPatients, "No new admits", "admission")}
+              {renderCockpitColumn("DC Soon", dischargeSoonPatients, "No DC prep", "discharge")}
+            </div>
+          </details>
         </div>
       </section>
 
       {dischargeAlerts.length > 0 && (
-        <section className="dc-alert-panel">
+        <section className="dc-alert-panel board-discharge-alerts">
           <h3>{t("dc.upcoming")}</h3>
           {dischargeAlerts.map(({ patient, pending }) => (
             <div className="dc-alert-card" key={patient.id}>
@@ -1409,7 +1399,7 @@ function PatientBoardPage({
         </section>
       )}
 
-      <section className="panel">
+      <section className="panel board-patient-list-panel">
         <div className="section-heading">
           <h3>{t("board.activePatients")}</h3>
           <div className="filter-row">
@@ -1653,40 +1643,6 @@ function PatientBoardPage({
                   </button>
                   <button
                     type="button"
-                    className="secondary icon-button"
-                    onClick={() => startToday(patient.id)}
-                    aria-label={t("action.createToday")}
-                    title={t("action.createToday")}
-                  >
-                    <span className="icon-button-icon"><IconCreateToday /></span>
-                    <span className="icon-button-label">{t("board.actionShort.createToday")}</span>
-                  </button>
-                  <button
-                    type="button"
-                    className={`secondary icon-button${patient.isNewAdmission ? " icon-button-active" : ""}`}
-                    onClick={() => setNewAdmission(patient.id, !patient.isNewAdmission)}
-                    aria-label={patient.isNewAdmission ? t("board.unmarkNew") : t("action.markNew")}
-                    title={patient.isNewAdmission ? t("board.unmarkNew") : t("action.markNew")}
-                  >
-                    <span className="icon-button-icon"><IconStar /></span>
-                    <span className="icon-button-label">
-                      {patient.isNewAdmission ? t("board.actionShort.unmarkNew") : t("board.actionShort.markNew")}
-                    </span>
-                  </button>
-                  <button
-                    type="button"
-                    className={`secondary icon-button${patient.showAdmissionBriefOnPrint ? " icon-button-active" : ""}`}
-                    onClick={() => setAdmissionBriefPrint(patient.id, !patient.showAdmissionBriefOnPrint)}
-                    aria-label={patient.showAdmissionBriefOnPrint ? t("board.excludeBrief") : t("action.includeBrief")}
-                    title={patient.showAdmissionBriefOnPrint ? t("board.excludeBrief") : t("action.includeBrief")}
-                  >
-                    <span className="icon-button-icon"><IconBrief /></span>
-                    <span className="icon-button-label">
-                      {patient.showAdmissionBriefOnPrint ? t("board.actionShort.excludeBrief") : t("board.actionShort.includeBrief")}
-                    </span>
-                  </button>
-                  <button
-                    type="button"
                     className="icon-button"
                     onClick={() => updateStatus(patient.id, "discharged")}
                     aria-label={t("action.discharge")}
@@ -1695,16 +1651,35 @@ function PatientBoardPage({
                     <span className="icon-button-icon"><IconDischarge /></span>
                     <span className="icon-button-label">{t("board.actionShort.discharge")}</span>
                   </button>
-                  <button
-                    type="button"
-                    className="secondary icon-button"
-                    onClick={() => updateStatus(patient.id, "archived")}
-                    aria-label={t("action.archive")}
-                    title={t("action.archive")}
-                  >
-                    <span className="icon-button-icon"><IconArchive /></span>
-                    <span className="icon-button-label">{t("board.actionShort.archive")}</span>
-                  </button>
+                  <details className="board-action-more">
+                    <summary>More</summary>
+                    <div className="board-action-more-menu">
+                      <button type="button" className="secondary icon-button" onClick={() => startToday(patient.id)}>
+                        <span className="icon-button-icon"><IconCreateToday /></span>
+                        <span className="icon-button-label">{t("board.actionShort.createToday")}</span>
+                      </button>
+                      <button
+                        type="button"
+                        className={`secondary icon-button${patient.isNewAdmission ? " icon-button-active" : ""}`}
+                        onClick={() => setNewAdmission(patient.id, !patient.isNewAdmission)}
+                      >
+                        <span className="icon-button-icon"><IconStar /></span>
+                        <span className="icon-button-label">{patient.isNewAdmission ? t("board.actionShort.unmarkNew") : t("board.actionShort.markNew")}</span>
+                      </button>
+                      <button
+                        type="button"
+                        className={`secondary icon-button${patient.showAdmissionBriefOnPrint ? " icon-button-active" : ""}`}
+                        onClick={() => setAdmissionBriefPrint(patient.id, !patient.showAdmissionBriefOnPrint)}
+                      >
+                        <span className="icon-button-icon"><IconBrief /></span>
+                        <span className="icon-button-label">{patient.showAdmissionBriefOnPrint ? t("board.actionShort.excludeBrief") : t("board.actionShort.includeBrief")}</span>
+                      </button>
+                      <button type="button" className="secondary icon-button" onClick={() => updateStatus(patient.id, "archived")}>
+                        <span className="icon-button-icon"><IconArchive /></span>
+                        <span className="icon-button-label">{t("board.actionShort.archive")}</span>
+                      </button>
+                    </div>
+                  </details>
                 </div>
               </footer>
               {openSoapComposerPatientId === patient.id && (

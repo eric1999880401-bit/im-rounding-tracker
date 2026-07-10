@@ -150,6 +150,9 @@ export function imageStudyKey(value: string) {
   const text = String(value ?? "");
   const study = imageStudyAliases.find(([pattern]) => pattern.test(text))?.[1] ?? "";
   if (!study) return "";
+  // CXR/X-ray region words usually describe the finding (e.g. RLL opacity),
+  // not a distinct study. A fresh CXR should therefore replace the prior CXR.
+  if (study === "cxr" || study === "xray") return study;
   const region = imageRegionAliases.find(([pattern]) => pattern.test(text))?.[1] ?? "";
   return region ? `${study}:${region}` : study;
 }

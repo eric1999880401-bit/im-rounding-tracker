@@ -31,6 +31,35 @@ function respiratoryBucket(value: string) {
   return /\b(resp|rf|hypox|oxygen|o2\b|spo2|nc\b|hfnc|hfno|bipap|vent|ventilator|mv\b|intubat|extubat|prone|pna|pneumonia|aspirat|effusion|thoracentesis|chylothorax|cxr|wean)\b/i.test(value);
 }
 
+function clinicalBucket(value: string) {
+  const text = normalizedKey(value);
+  if (/\b(sepsis|bacteremia|infection|infect|pna|pneumonia|uti|cholangitis|abx|antibiotic|culture|b\/c|bcx|cef|vanco|vancomycin|teicoplanin|meropenem|zosyn|pip\/tazo)\b/.test(text)) return "infection";
+  if (/\b(resp|rf|hypox|oxygen|o2\b|spo2|nc\b|hfnc|hfno|bipap|vent|intubat|extubat|prone|effusion|thoracentesis|chylothorax|cxr|wean)\b/.test(text)) return "resp";
+  if (/\b(aki|ckd|renal|cr\b|creatinine|bun|egfr|k\b|na\b|sodium|hypernat|hyponat|hyperk|hypok|lyte|electrolyte|uo|urine)\b/.test(text)) return "renal";
+  if (/\b(lft|ast|alt|bilirubin|t-?bil|inr|coag|transaminitis|liver|hepatitis|jaundice)\b/.test(text)) return "liver";
+  if (/\b(hb|hgb|anemia|plt|platelet|bleed|bleeding|melena|transfusion|cytopenia)\b/.test(text)) return "heme";
+  if (/\b(hfref|heart failure|adhf|af\b|cardio|diuretic|lasix|furosemide|gdmt|congestion|volume overload|echo)\b/.test(text)) return "cardio";
+  if (/\b(cancer|tumou?r|scc|adenoca|carcinoma|chemo|rt|metasta|onc)\b/.test(text)) return "onc";
+  return "";
+}
+
+function isActionOnlyTitle(value: string) {
+  const text = normalizedKey(value);
+  return /^(?:continue|cont|complete|start|stop|hold|resume|restart|wean|review|adjust|monitor|follow(?:\s+up)?|f\/u|repeat|recheck|check|trend|order|arrange|consult|schedule|titrate|transition|ambulat\w*|mobiliz\w*|rehab)\b/.test(text);
+}
+
+function isObjectiveOrCourseTitle(value: string) {
+  const text = normalizedKey(value);
+  if (/^(?:v\/s|vs|vitals?|lab|image|img|cxr|ct\b|mri|echo|sono|ultrasound)\s*[:\-]/.test(text)) return true;
+  return /^(?:s\/p|post|after)\s+(?:mv|vent|intubat|extubat|prone|thoracentesis|ercp|egd|procedure|surgery)\b/.test(text);
+}
+
+function treatmentSignature(value: string) {
+  const text = normalizedKey(value);
+  const matches = text.match(/\b(?:teicoplanin|vancomycin|vanco|ceftriaxone|cefepime|cefazolin|zosyn|pip\/tazo|meropenem|ertapenem|levofloxacin|metronidazole|acyclovir|abx|antibiotic|oxygen|o2|nc|hfnc|bipap|lasix|furosemide|apixaban|heparin|warfarin|insulin)\b/g) ?? [];
+  return [...new Set(matches)].sort().join("|");
+}
+
 function otherMajorBucket(value: string) {
   return /\b(sepsis|bacteremia|abx|culture|aki|renal|cr\b|na\b|k\b|lft|inr|hb|anemia|bleed|cancer|carcinoma|scc|adenoca|chemo|rt)\b/i.test(value);
 }
@@ -71,6 +100,13 @@ function mergeProblemLines(target: NormalizableApProblem, source: NormalizableAp
   additions.forEach((line) => pushUniqueLine(target.lines, line));
 }
 
+function compactProblemLines(lines: string[]) {
+  const unique: string[] = [];
+  lines.forEach((line) => pushUniqueLine(unique, line));
+  if (unique.length <= 2) return unique;
+  return [unique[0], unique.slice(1).join("; ")];
+}
+
 export function normalizeApProblems(problems: NormalizableApProblem[]) {
   const cleaned = problems
     .map((problem) => ({
@@ -81,6 +117,7 @@ export function normalizeApProblems(problems: NormalizableApProblem[]) {
 
   const primaryResp = cleaned.find((problem) => respiratoryBucket(`${problem.title} ${problem.lines.join(" ")}`) && !isRespiratoryCourseOnly(problem) && !isFragmentProblemTitle(problem.title));
   const result: NormalizableApProblem[] = [];
+  const deferred: NormalizableApProblem[] = [];
 
   cleaned.forEach((problem) => {
     const shouldMergeIntoResp =
@@ -94,6 +131,15 @@ export function normalizeApProblems(problems: NormalizableApProblem[]) {
       return;
     }
 
+    if (isActionOnlyTitle(problem.title) || isObjectiveOrCourseTitle(problem.title)) {
+      const bucket = clinicalBucket(`${problem.title} ${problem.lines.join(" ")}`);
+      const target = [...result].reverse().find((candidate) => bucket && clinicalBucket(`${candidate.title} ${candidate.lines.join(" ")}`) === bucket)
+        ?? result[result.length - 1];
+      if (target) mergeProblemLines(target, problem, true);
+      else deferred.push(problem);
+      return;
+    }
+
     if (isFragmentProblemTitle(problem.title) && problem.lines.length > 0) {
       const fallbackTitle = respiratoryBucket(problem.lines.join(" ")) ? "Respiratory failure / O2 weaning" : "Active problem";
       const existing = result.find((item) => normalizedKey(item.title) === normalizedKey(fallbackTitle));
@@ -103,6 +149,33 @@ export function normalizeApProblems(problems: NormalizableApProblem[]) {
     }
 
     result.push(problem);
+  });
+
+  deferred.forEach((problem) => {
+    const bucket = clinicalBucket(`${problem.title} ${problem.lines.join(" ")}`);
+    const target = [...result].reverse().find((candidate) => bucket && clinicalBucket(`${candidate.title} ${candidate.lines.join(" ")}`) === bucket)
+      ?? result[result.length - 1];
+    if (!target) {
+      result.push({ title: "Active problem", lines: compactProblemLines([problem.title, ...problem.lines]) });
+      return;
+    }
+    mergeProblemLines(target, problem, true);
+  });
+
+  result.forEach((problem) => {
+    problem.lines = compactProblemLines(problem.lines);
+  });
+
+  const seenTreatment = new Set<string>();
+  result.forEach((problem) => {
+    problem.lines = problem.lines.filter((line) => {
+      const signature = treatmentSignature(line);
+      if (!signature) return true;
+      const key = `${signature}|${normalizedKey(line)}`;
+      if (seenTreatment.has(key)) return false;
+      seenTreatment.add(key);
+      return true;
+    });
   });
 
   const seen = new Set<string>();

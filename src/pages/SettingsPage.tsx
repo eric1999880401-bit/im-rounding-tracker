@@ -397,9 +397,37 @@ function SettingsPage({ preferences, userName, onChange, onRefreshAiStyleProfile
           <div>
             <h3>AI style profile</h3>
           </div>
-          <button type="button" className="secondary" onClick={onRefreshAiStyleProfile}>
-            Refresh style
-          </button>
+          <div className="form-actions">
+            <button type="button" className="secondary" onClick={onRefreshAiStyleProfile}>
+              Refresh style
+            </button>
+            {preferences.aiStyleProfile && (
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => {
+                  const currentProfile = preferences.aiStyleProfile;
+                  if (!currentProfile) return;
+                  const resetAt = new Date().toISOString();
+                  onChange({
+                    ...preferences,
+                    aiStyleLearningResetAt: resetAt,
+                    aiStyleProfile: {
+                      ...currentProfile,
+                      styleSummary: currentProfile.styleSummary.filter((line) => !currentProfile.correctionTendencies.includes(line)),
+                      correctionFingerprint: `reset-${resetAt}`,
+                      reviewedAiSaveCount: 0,
+                      acceptedAiDraftCount: 0,
+                      correctionTendencies: [],
+                      updatedAt: resetAt,
+                    },
+                  });
+                }}
+              >
+                Reset learned corrections
+              </button>
+            )}
+          </div>
         </div>
         {preferences.aiStyleProfile ? (
           <div className="utility-row ai-style-profile-summary">
@@ -408,7 +436,12 @@ function SettingsPage({ preferences, userName, onChange, onRefreshAiStyleProfile
             <span>Shorthand: {preferences.aiStyleProfile.abbreviationStyle}</span>
             <span>Tasks: {preferences.aiStyleProfile.taskStyle}</span>
             <span>Terms: {preferences.aiStyleProfile.preferredTerms.join(", ") || "-"}</span>
-            <span className="muted">Density hint only: ~{preferences.aiStyleProfile.typicalApProblemCount} problems / {preferences.aiStyleProfile.typicalApLineLimit} line</span>
+            <span className="muted">
+              Learned from {preferences.aiStyleProfile.reviewedAiSaveCount} reviewed AI save{preferences.aiStyleProfile.reviewedAiSaveCount === 1 ? "" : "s"}; {preferences.aiStyleProfile.acceptedAiDraftCount} accepted unchanged.
+            </span>
+            {preferences.aiStyleProfile.correctionTendencies.map((line) => (
+              <span key={line}>{line}</span>
+            ))}
           </div>
         ) : (
           <p className="muted">No style profile yet — save reviewed SOAPs first.</p>

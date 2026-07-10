@@ -22,6 +22,7 @@ import {
   acceptSoapDeltaSection,
   guardRoundSoapDelta,
   restoreSoapDeltaSection,
+  soapPatchMatchesBaseline,
   type SoapDeltaReview,
   type SoapDeltaSection,
 } from "../soapDeltaGuardrails";
@@ -65,11 +66,18 @@ interface RoundSoapComposerProps {
 type WorkflowMode = "dailyUpdate" | "newSoap" | "transferHandoff";
 type RoundSoapQualityMode = "fast" | "balanced" | "highAccuracy";
 
-// First SOAP for a patient with no reviewed history is a New SOAP; once any
-// reviewed note exists, default to Daily update. Transfer stays a manual pick.
-function deriveInitialWorkflowMode(dailyNotes: DailyNote[]): WorkflowMode {
+// A usable fallback SOAP is still a baseline: an existing patient should be
+// patched instead of regenerated just because the baseline predates soapText.
+function deriveInitialWorkflowMode(dailyNotes: DailyNote[], baselineText = ""): WorkflowMode {
   const hasReviewedHistory = dailyNotes.some((note) => note.soapText?.trim() && note.soapStatus === "reviewed");
-  return hasReviewedHistory ? "dailyUpdate" : "newSoap";
+  return hasReviewedHistory || baselineText.trim() ? "dailyUpdate" : "newSoap";
+}
+
+function detectWorkflowMode(dailyNotes: DailyNote[], sourceText: string, fallback: WorkflowMode, baselineText = ""): WorkflowMode {
+  if (/\b(?:transfer|handoff|sbar|icu\s*(?:transfer|stepdown)|轉科|交班|轉出)\b/i.test(sourceText)) return "transferHandoff";
+  const hasReviewedHistory = dailyNotes.some((note) => note.soapText?.trim() && note.soapStatus === "reviewed");
+  if (!hasReviewedHistory && !baselineText.trim()) return "newSoap";
+  return fallback === "newSoap" ? "dailyUpdate" : fallback;
 }
 
 const workflowModes: Array<{ value: WorkflowMode; label: string; helper: string; sourceType: AiClinicalSourceType }> = [
@@ -230,10 +238,11 @@ function RoundSoapComposer({
   onDirtyChange,
 }: RoundSoapComposerProps) {
   const canonical = getCanonicalSoapText(patient, dailyNotes, selectedDate);
-  const [workflowMode, setWorkflowMode] = useState<WorkflowMode>(() => deriveInitialWorkflowMode(dailyNotes));
+  const [workflowMode, setWorkflowMode] = useState<WorkflowMode>(() => deriveInitialWorkflowMode(dailyNotes, canonical.text));
   const [dailyFields, setDailyFields] = useState<DailyUpdateFields>(emptyDailyFields);
   const [newSoapFields, setNewSoapFields] = useState<NewSoapFields>(emptyNewSoapFields);
   const [transferFields, setTransferFields] = useState<TransferSoapFields>(emptyTransferFields);
+  const [mixedSourceText, setMixedSourceText] = useState("");
   const [soapFormat, setSoapFormatState] = useState<SoapEditorFormat>(() =>
     readComposerPref("soapFormat", ["standard", "plain", "compact"] as const, "standard"),
   );
@@ -362,7 +371,7 @@ function RoundSoapComposer({
   }, [externalSoapRevision, externalSoapStatus, externalSoapText]);
 
   useEffect(() => {
-    setQualityMode("balanced");
+    setQualityMode(workflowMode === "dailyUpdate" ? "fast" : "balanced");
   }, [workflowMode]);
 
   function updateEditorDraft(nextDraft: typeof editorDraft) {
@@ -461,14 +470,20 @@ function RoundSoapComposer({
   }
 
   function composeRawText() {
+    if (mixedSourceText.trim()) return mixedSourceText.trim();
     if (workflowMode === "newSoap") return composeNewSoapText();
     if (workflowMode === "transferHandoff") return composeTransferText();
     return composeDailyUpdateText();
   }
 
-  function currentSourceFields(): SoapSourceFields {
-    if (workflowMode === "newSoap") return { ...newSoapFields };
-    if (workflowMode === "transferHandoff") return { ...transferFields };
+  function currentSourceFields(mode: WorkflowMode = workflowMode): SoapSourceFields {
+    if (mixedSourceText.trim()) {
+      if (mode === "newSoap") return { admission: mixedSourceText, other: mixedSourceText };
+      if (mode === "transferHandoff") return { admission: mixedSourceText, lastSoap: mixedSourceText, other: mixedSourceText };
+      return { other: mixedSourceText };
+    }
+    if (mode === "newSoap") return { ...newSoapFields };
+    if (mode === "transferHandoff") return { ...transferFields };
     return { ...dailyFields };
   }
 
@@ -495,6 +510,7 @@ function RoundSoapComposer({
   }
 
   function clearSourceText() {
+    setMixedSourceText("");
     setDailyFields(emptyDailyFields);
     setNewSoapFields(emptyNewSoapFields);
     setTransferFields(emptyTransferFields);
@@ -521,13 +537,20 @@ function RoundSoapComposer({
   async function handleGenerate(requestedQualityMode: RoundSoapQualityMode = qualityMode) {
     const rawText = composeRawText();
     const currentSoapText = editorDraftToSoapText(editorDraftRef.current);
+    const requestWorkflowMode = detectWorkflowMode(dailyNotes, rawText, workflowMode, currentSoapText || canonical.text);
+    const requestWorkflow = workflowModes.find((item) => item.value === requestWorkflowMode) ?? workflowModes[0];
+    const automaticQualityMode: RoundSoapQualityMode = requestedQualityMode === "highAccuracy"
+      ? "highAccuracy"
+      : requestWorkflowMode === "dailyUpdate"
+        ? "fast"
+        : "balanced";
     setError("");
     setStatus("");
     setWarnings([]);
     setDeltaReview(null);
 
     if (rawText.length < 10) {
-      setError("Add source text into at least one guided field first.");
+      setError("Paste today's mixed clinical update first.");
       return;
     }
 
@@ -540,26 +563,27 @@ function RoundSoapComposer({
             warnings: ["Demo mode used a local SOAP merge instead of Firebase Functions."],
             highlightHints: [],
             model: "local-demo",
+            mode: "full" as const,
           }
         : await generateRoundSoap({
             patientId: patient.id,
             selectedDate,
-            sourceType: workflow.sourceType,
-            workflowMode,
+            sourceType: requestWorkflow.sourceType,
+            workflowMode: requestWorkflowMode,
             rawText,
             currentSoapBaseline: currentSoapText || canonical.text,
             deidentifiedConfirmed: true,
-            qualityMode: requestedQualityMode,
+            qualityMode: automaticQualityMode,
             patientContext: patientContext(patient),
             userStyleProfile: aiStyleProfile,
           });
 
       const normalizedResult = normalizeAiSoapText(result.soapText.trim() || canonical.text, result.warnings ?? []);
       const guarded = guardRoundSoapDelta({
-        workflowMode,
+        workflowMode: requestWorkflowMode,
         baselineText: currentSoapText || canonical.text,
         candidateText: normalizedResult.soapText,
-        sourceFields: currentSourceFields(),
+        sourceFields: currentSourceFields(requestWorkflowMode),
         candidateWarnings: normalizedResult.warnings,
         selectedDate,
       });
@@ -567,19 +591,22 @@ function RoundSoapComposer({
       editOriginRef.current = {
         source: "ai",
         beforeText: editorDraftToSoapText(nextDraft),
-        workflowMode,
+        workflowMode: requestWorkflowMode,
         aiDraftId: result.draftId,
         model: result.model,
-        qualityMode: result.qualityMode ?? requestedQualityMode,
+        qualityMode: result.qualityMode ?? automaticQualityMode,
       };
       updateEditorDraft(nextDraft);
-      updatePendingOrderSource(workflowMode, false);
-      setWarnings([...guarded.warnings, ...guarded.highRiskWarnings]);
+      updatePendingOrderSource(requestWorkflowMode, false);
+      const patchWarnings = result.mode === "patch" && !soapPatchMatchesBaseline(result.patch, currentSoapText || canonical.text)
+        ? ["AI patch baseline no longer matches the current editor. Baseline-preserving guardrails were applied; review changed sections."]
+        : [];
+      setWarnings([...patchWarnings, ...guarded.warnings, ...guarded.highRiskWarnings]);
       setDeltaReview(guarded);
       setStatus(
         guarded.highRiskWarnings.length > 0
-          ? `SOAP preview generated (${result.model}, ${result.qualityMode ?? requestedQualityMode}); high-risk unrelated AI changes were held.`
-          : `SOAP preview generated (${result.model}, ${result.qualityMode ?? requestedQualityMode}). Edit, then Save reviewed SOAP.`,
+          ? `SOAP preview generated (${result.model}, ${result.qualityMode ?? automaticQualityMode}); high-risk unrelated AI changes were held.`
+          : `SOAP preview generated (${result.model}, ${result.qualityMode ?? automaticQualityMode}). Edit, then Save reviewed SOAP.`,
       );
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : "SOAP generation failed. No data was saved.");
@@ -704,14 +731,120 @@ function RoundSoapComposer({
     loadDeltaSoapText(nextText, `${deltaSectionLabels[section]} restored from baseline locally.`);
   }
 
+  function resetToCanonical() {
+    pendingSavedSoapRef.current = null;
+    const nextDraft = parseSoapTextToEditorDraft(canonical.text);
+    setEditorDraftState(nextDraft);
+    setRawSoapText(editorDraftToSoapText(nextDraft));
+    setMixedSourceText("");
+    setDirty(false);
+    setStatus("");
+    setError("");
+    setDeltaReview(null);
+    removeRecoveryDraft(recoveryStorage, recoveryScope);
+    setRecoveryDraft(null);
+    setRecoverySavedAt("");
+  }
+
+  function renderDeltaReviewPanel(compactView = false) {
+    if (!deltaReview || deltaReview.changedSections.length === 0) return null;
+    return (
+      <section className={compactView ? "soap-delta-panel soap-delta-panel-compact" : "soap-delta-panel"}>
+        <div className="soap-delta-heading">
+          <div>
+            <strong>Changed sections</strong>
+            {!compactView && <p className="muted">Only source-supported changes are applied; held sections keep the reviewed baseline.</p>}
+          </div>
+          <div className="form-actions">
+            <button type="button" className="secondary compact-button" onClick={rejectAllDeltaChanges}>Reject all</button>
+            <button type="button" className="secondary compact-button" onClick={acceptAllDeltaChanges}>Accept all</button>
+          </div>
+        </div>
+        <div className="soap-delta-section-list">
+          {deltaReview.changedSections.map((section) => (
+            <article className={`soap-delta-section soap-delta-${section.risk}`} key={`${section.id}-${section.reason}-${section.blocked}`}>
+              <div>
+                <strong>{section.label}</strong>
+                <span>{section.blocked ? "Held" : "Applied"}</span>
+                {!compactView && <p>{section.reason}</p>}
+              </div>
+              <div className="form-actions">
+                <button type="button" className="secondary compact-button" onClick={() => restoreDeltaSection(section.id)}>Restore</button>
+                <button type="button" className="secondary compact-button" onClick={() => acceptDeltaSection(section.id)}>Accept</button>
+              </div>
+            </article>
+          ))}
+        </div>
+      </section>
+    );
+  }
+
   const estimatedTokens = Math.ceil((composeRawText().length + soapText.length) / 4);
   const currentRecoveryStaleState = recoveryDraft
     ? recoveryStaleState(recoveryDraft, recoveryFingerprint(recoveryBaseline), recoveryBaselineUpdatedAt)
     : null;
   const recoverySavedLabel = recoveryTimeLabel(recoverySavedAt);
 
+  if (compact) {
+    const automaticMode = detectWorkflowMode(dailyNotes, mixedSourceText, workflowMode, soapText || canonical.text);
+    const automaticModeLabel = workflowModes.find((item) => item.value === automaticMode)?.label ?? "Daily update";
+    return (
+      <section className="round-soap-composer compact-round-soap-composer">
+        <div className="round-soap-toolbar compact-soap-toolbar">
+          <div>
+            <h3>Quick SOAP update</h3>
+            <p className="muted">Auto: {automaticModeLabel} · baseline {canonical.sourceDate || "legacy fallback"}</p>
+          </div>
+          <button type="button" className="secondary compact-button" onClick={resetToCanonical}>Reset</button>
+        </div>
+        <label className="round-soap-paste">
+          Paste mixed update
+          <textarea
+            value={mixedSourceText}
+            onChange={(event) => setMixedSourceText(event.target.value)}
+            onCompositionStart={() => { isComposingRef.current = true; }}
+            onCompositionEnd={() => { isComposingRef.current = false; }}
+            placeholder="Paste today's V/S, labs, imaging, course, orders, consults, and pending tasks together."
+            rows={6}
+          />
+        </label>
+        <div className="round-soap-generate-row compact-generate-row">
+          <span className="muted">Preview only. Save remains explicit.</span>
+          <button type="button" disabled={loading || mixedSourceText.trim().length < 10} onClick={() => void handleGenerate()}>
+            {loading ? "Working..." : "Generate update"}
+          </button>
+        </div>
+        {error && <p className="error-message">{error}</p>}
+        {status && <p className="status-message">{status}</p>}
+        {warnings.length > 0 && (
+          <div className="round-soap-warnings">
+            <strong>Review</strong>
+            <ClinicalText value={warnings.join("\n")} maxLines={3} keywordRules={keywordRules} />
+          </div>
+        )}
+        {renderDeltaReviewPanel(true)}
+        <section className="round-soap-preview compact-soap-preview" aria-label="Quick SOAP preview">
+          <SoapVisualPreview
+            value={soapText}
+            compact
+            sourceFields={currentSourceFields(automaticMode)}
+            layoutPreferences={layoutPreferences}
+            keywordRules={keywordRules}
+            labReferenceDisplay="none"
+          />
+        </section>
+        <div className="compact-soap-save-row">
+          {(dirty || Object.values(pendingOrderSources).some(Boolean)) && <span className="muted">Not saved yet.</span>}
+          <button type="button" disabled={!soapText.trim() || loading || !dirty} onClick={() => void handleSave()}>
+            Save reviewed SOAP
+          </button>
+        </div>
+      </section>
+    );
+  }
+
   return (
-    <section className={compact ? "round-soap-composer compact-round-soap-composer" : "round-soap-composer"}>
+    <section className="round-soap-composer">
       <div className="round-soap-toolbar">
         <div>
           <h3>Update SOAP</h3>
@@ -723,52 +856,31 @@ function RoundSoapComposer({
           </span>
         </div>
         <div className="form-actions">
-          <select value={workflowMode} onChange={(event) => setWorkflowMode(event.target.value as WorkflowMode)}>
-            {workflowModes.map((item) => (
-              <option key={item.value} value={item.value}>
-                {item.label}
-              </option>
-            ))}
-          </select>
-          <select value={soapFormat} onChange={(event) => setSoapFormat(event.target.value as SoapEditorFormat)} title="SOAP editor format">
-            {soapFormatOptions.map((item) => (
-              <option key={item.value} value={item.value}>
-                {item.label}
-              </option>
-            ))}
-          </select>
-          <select value={qualityMode} onChange={(event) => setQualityMode(event.target.value as RoundSoapQualityMode)} title="AI quality / cost">
-            <option value="fast">Fast / cheap</option>
-            <option value="balanced">Balanced</option>
-            <option value="highAccuracy">High accuracy</option>
-          </select>
-          <button type="button" className="secondary" onClick={() => {
-            pendingSavedSoapRef.current = null;
-            const nextDraft = parseSoapTextToEditorDraft(canonical.text);
-            setEditorDraftState(nextDraft);
-            setRawSoapText(editorDraftToSoapText(nextDraft));
-            setDirty(false);
-            setStatus("");
-            setError("");
-            setDeltaReview(null);
-            removeRecoveryDraft(recoveryStorage, recoveryScope);
-            setRecoveryDraft(null);
-            setRecoverySavedAt("");
-          }}>
+          <button type="button" className="secondary" onClick={resetToCanonical}>
             Reset
-          </button>
-          <button type="button" className="secondary" disabled={!rawSoapText.trim() || loading} onClick={handleFormatSoap}>
-            Normalize text
           </button>
           <button type="button" disabled={!soapText.trim() || loading} onClick={() => void handleSave()}>
             Save reviewed SOAP
           </button>
         </div>
       </div>
-      <p className="muted round-soap-mode-helper">{workflow.helper}</p>
-      <p className="muted round-soap-mode-helper">
-        AI mode: {qualityMode === "fast" ? "fast/cheap delta" : qualityMode === "balanced" ? "balanced draft" : "high-accuracy draft"}; approx. {estimatedTokens.toLocaleString()} input+baseline tokens. Save is still manual.
-      </p>
+      <label className="round-soap-paste round-soap-primary-paste">
+        Paste clinical update
+        <textarea
+          value={mixedSourceText}
+          onChange={(event) => setMixedSourceText(event.target.value)}
+          onCompositionStart={() => { isComposingRef.current = true; }}
+          onCompositionEnd={() => { isComposingRef.current = false; }}
+          placeholder="Paste V/S, labs, imaging, course, orders, consults, and tasks together. AI will route sections and preserve the reviewed baseline."
+          rows={7}
+        />
+      </label>
+      <div className="round-soap-generate-row primary-generate-row">
+        <span className="muted">Workflow and cost tier are selected automatically. Nothing is saved until Save reviewed SOAP.</span>
+        <button type="button" disabled={loading || mixedSourceText.trim().length < 10} onClick={() => void handleGenerate()}>
+          {loading ? "Working..." : "Generate SOAP update"}
+        </button>
+      </div>
       {recoveryDraft && (
         <div className={currentRecoveryStaleState?.stale ? "status-message recovery-draft-banner stale-recovery" : "status-message recovery-draft-banner"}>
           <div>
@@ -791,6 +903,25 @@ function RoundSoapComposer({
       {!recoveryDraft && recoverySavedLabel && dirty && (
         <p className="muted round-soap-mode-helper">Session recovery draft autosaved at {recoverySavedLabel}. Firestore still changes only after Save reviewed SOAP.</p>
       )}
+
+      <details className="round-soap-advanced-panel">
+        <summary>Advanced source controls</summary>
+        <div className="round-soap-advanced-body">
+          <div className="form-actions round-soap-advanced-selectors">
+            <select value={workflowMode} onChange={(event) => setWorkflowMode(event.target.value as WorkflowMode)} title="Workflow override">
+              {workflowModes.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+            </select>
+            <select value={soapFormat} onChange={(event) => setSoapFormat(event.target.value as SoapEditorFormat)} title="SOAP editor format">
+              {soapFormatOptions.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+            </select>
+            <select value={qualityMode} onChange={(event) => setQualityMode(event.target.value as RoundSoapQualityMode)} title="AI quality / cost">
+              <option value="fast">Fast / cheap</option>
+              <option value="balanced">Balanced</option>
+              <option value="highAccuracy">High accuracy</option>
+            </select>
+          </div>
+          <p className="muted">{workflow.helper} Clear the primary mixed paste before using these guided fields.</p>
+          <p className="muted">Approx. {estimatedTokens.toLocaleString()} input + baseline tokens. Quality upgrade is manual.</p>
 
       {workflowMode === "dailyUpdate" ? (
         <div className="round-soap-daily-grid round-soap-guided-grid">
@@ -1084,7 +1215,7 @@ function RoundSoapComposer({
         <button type="button" disabled={loading || !composeRawText()} onClick={() => void handleGenerate()}>
           {loading ? "Working..." : "Generate SOAP"}
         </button>
-        {qualityMode !== "highAccuracy" && (
+        {qualityMode !== "highAccuracy" && (warnings.length > 0 || Boolean(deltaReview?.highRiskWarnings.length)) && (
           <button
             type="button"
             className="secondary"
@@ -1098,6 +1229,8 @@ function RoundSoapComposer({
           </button>
         )}
       </div>
+        </div>
+      </details>
 
       {error && <p className="error-message">{error}</p>}
       {status && <p className="status-message">{status}</p>}
@@ -1108,45 +1241,7 @@ function RoundSoapComposer({
         </div>
       )}
 
-      {deltaReview && deltaReview.changedSections.length > 0 && (
-        <section className="soap-delta-panel">
-          <div className="soap-delta-heading">
-            <div>
-              <strong>Changed sections</strong>
-              <p className="muted">
-                Daily update applies safe section changes first. Use Accept all only after review.
-              </p>
-            </div>
-            <div className="form-actions">
-              <button type="button" className="secondary compact-button" onClick={rejectAllDeltaChanges}>
-                Reject all
-              </button>
-              <button type="button" className="secondary compact-button" onClick={acceptAllDeltaChanges}>
-                Accept all
-              </button>
-            </div>
-          </div>
-          <div className="soap-delta-section-list">
-            {deltaReview.changedSections.map((section) => (
-              <article className={`soap-delta-section soap-delta-${section.risk}`} key={`${section.id}-${section.reason}-${section.blocked}`}>
-                <div>
-                  <strong>{section.label}</strong>
-                  <span>{section.blocked ? "Held" : "Applied"}</span>
-                  <p>{section.reason}</p>
-                </div>
-                <div className="form-actions">
-                  <button type="button" className="secondary compact-button" onClick={() => restoreDeltaSection(section.id)}>
-                    Restore baseline
-                  </button>
-                  <button type="button" className="secondary compact-button" onClick={() => acceptDeltaSection(section.id)}>
-                    Accept AI section
-                  </button>
-                </div>
-              </article>
-            ))}
-          </div>
-        </section>
-      )}
+      {renderDeltaReviewPanel()}
 
       <div className="round-soap-editor-grid">
         <section className="round-soap-structured-editor">
@@ -1160,6 +1255,7 @@ function RoundSoapComposer({
             draft={editorDraft}
             onChange={updateEditorDraft}
             compact={compact}
+            showHeader={false}
             onCompositionStart={() => {
               isComposingRef.current = true;
             }}

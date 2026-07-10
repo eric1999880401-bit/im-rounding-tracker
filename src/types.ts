@@ -203,7 +203,22 @@ export interface GenerateRoundSoapInput {
   };
 }
 
-export interface GenerateRoundSoapResult {
+export type SoapPatchSection = "header" | "s" | "vs" | "pe" | "lab" | "image" | "ap" | "orders" | "tasks" | "dc";
+
+export interface SoapPatchChange {
+  section: SoapPatchSection;
+  operation: "add" | "update" | "delete";
+  beforeText: string;
+  afterText: string;
+  evidence: string[];
+}
+
+export interface SoapPatch {
+  baselineHash: string;
+  changedSections: SoapPatchChange[];
+}
+
+interface GenerateRoundSoapResultBase {
   draftId: string;
   soapText: string;
   warnings: string[];
@@ -211,6 +226,23 @@ export interface GenerateRoundSoapResult {
   model: string;
   qualityMode?: "fast" | "balanced" | "highAccuracy";
 }
+
+export interface GenerateRoundSoapPatchResult extends GenerateRoundSoapResultBase {
+  mode: "patch";
+  patch: SoapPatch;
+}
+
+export interface GenerateRoundSoapFullResult extends GenerateRoundSoapResultBase {
+  mode: "full";
+  patch?: never;
+}
+
+export interface GenerateRoundSoapLegacyResult extends GenerateRoundSoapResultBase {
+  mode?: undefined;
+  patch?: undefined;
+}
+
+export type GenerateRoundSoapResult = GenerateRoundSoapPatchResult | GenerateRoundSoapFullResult | GenerateRoundSoapLegacyResult;
 
 export type PatientImportDraftStatus = "new" | "updateCandidate";
 
@@ -570,6 +602,10 @@ export interface UserAiStyleProfile {
   sectionOrder: string[];
   typicalApProblemCount: number;
   typicalApLineLimit: number;
+  correctionFingerprint: string;
+  reviewedAiSaveCount: number;
+  acceptedAiDraftCount: number;
+  correctionTendencies: string[];
   updatedAt: string;
 }
 
@@ -579,6 +615,7 @@ export interface UserPreferences {
   roundingLayout: RoundingLayoutPreferences;
   keywordHighlightRules: KeywordHighlightRule[];
   aiStyleProfile?: UserAiStyleProfile;
+  aiStyleLearningResetAt?: string;
 }
 
 export interface PhonebookContact {

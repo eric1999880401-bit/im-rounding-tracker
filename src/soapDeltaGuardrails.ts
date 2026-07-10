@@ -3,6 +3,7 @@ import { ensureAntibioticApInDraft } from "./antibioticPlan";
 import { imageStudyKey } from "./clinicalFieldRouter";
 import { formatSoapDraft, parseSoapText, type SoapApProblem, type SoapDraft } from "./soapDraft";
 import { parseLabReports, safeClinicalLine, safeClinicalLinePreservingMarks, stripColorMarkup } from "./utils";
+import type { SoapPatch } from "./types";
 
 export type RoundSoapWorkflowMode = "dailyUpdate" | "newSoap" | "transferHandoff";
 
@@ -244,11 +245,26 @@ function isOrderLine(line: string) {
   const text = String(line ?? "").replace(/^!+\s*/, "").trim();
   if (/^\s*\u85e5\u56d1\s*[:\uFF1A]/i.test(text)) return true;
   if (/^\s*(?:order|orders?|meds?|\u85e5\u56d1)\s*[:\uFF1A]/i.test(text)) return true;
+  if (/^\s*(?:check|monitor|f\/u|follow|repeat|update|arrange|call|obtain|assess)\b/i.test(text)) return false;
   return (
     /^\s*(?:order|orders?|meds?|\u85e5\u56d1)\s*[:\uFF1A]/i.test(text) ||
     /^\s*(?:Abx|Anticoag\/AP|Steroid\/Immuno|Cardio\/Renal|Resp|Insulin\/Glucose|IVF\/Lyte|Nutrition|Monitoring|PRN|Routine(?: hidden)?)\s*:/i.test(text) ||
     /\b(?:teicoplanin|vancomycin|ceftriaxone|cefepime|zosyn|pip\/tazo|meropenem|levofloxacin|heparin|apixaban|warfarin|insulin|lasix|furosemide|steroid|methylpred|oxygen|morphine|fentanyl)\b/i.test(text)
   );
+}
+
+export function soapBaselineHash(value: string) {
+  let hash = 0x811c9dc5;
+  const text = String(value ?? "").trim();
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(36);
+}
+
+export function soapPatchMatchesBaseline(patch: SoapPatch | undefined, baselineText: string) {
+  return !patch || patch.baselineHash === soapBaselineHash(baselineText);
 }
 
 function splitTasks(lines: string[]) {
@@ -365,12 +381,17 @@ function findMatchingProblems(problem: SoapApProblem, problems: SoapApProblem[])
   return [...bucketMatches, ...exact];
 }
 
-function mergeApProblemsForDaily(baseline: SoapApProblem[], candidate: SoapApProblem[], allowNewProblem: boolean) {
+function mergeApProblemsForDaily(baseline: SoapApProblem[], candidate: SoapApProblem[], allowNewProblem: boolean, sourceText = "") {
   const warnings: string[] = [];
   const highRiskWarnings: string[] = [];
   const shouldCarryForwardApLine = (line: string, candidateLines: string[]) => {
     if (!isProtectedLine(line)) return false;
     if (/\[\[(?:red|orange|yellow|blue|green|purple)(?:-(?:highlight|text))?:/i.test(line)) return true;
+    if (
+      /\b(?:completed|done|discontinued|stopped)\b/i.test(sourceText) &&
+      /\bcontinue\b.*\b(?:abx|antibiotics?|teicoplanin|vancomycin|cef\w*|meropenem|ertapenem|pip\/?tazo|zosyn)\b/i.test(line) &&
+      /\b(?:abx|antibiotics?|teicoplanin|vancomycin|cef\w*|meropenem|ertapenem|pip\/?tazo|zosyn)\b/i.test(sourceText)
+    ) return false;
     const candidateText = candidateLines.join(" ");
     const staleObjectivePattern = /\b(?:wbc|hb|hgb|plt|cr|bun|na|k\b|ast|alt|t-?bil|inr|lactate|crp|cxr|ct\b|mri\b|echo\b|sono|ultrasound)\b/i;
     if (staleObjectivePattern.test(line) && staleObjectivePattern.test(candidateText)) return false;
@@ -447,6 +468,49 @@ function mergeDailyLines(
   const baselinePlain = options.replacePlainBaseline ? [] : baseline.filter((line) => !isProtectedLine(line));
   const maxItems = Math.max(options.maxItems, candidateLines.length + baselineProtected.length + baselinePlain.length);
   return uniqueLines([...candidateLines, ...baselineProtected, ...baselinePlain], maxItems);
+}
+
+function subjectiveDomains(line: string) {
+  const text = String(line ?? "");
+  const domains: string[] = [];
+  if (/\b(?:dyspnea|sob|shortness of breath|breathless)\b/i.test(text)) domains.push("dyspnea");
+  if (/\b(?:cough|sputum)\b/i.test(text)) domains.push("cough");
+  if (/\b(?:fever|febrile|afebrile|chills)\b/i.test(text)) domains.push("fever");
+  if (/\b(?:chest pain|pain)\b/i.test(text)) domains.push("pain");
+  if (/\b(?:n\/v|nausea|vomit|diarrhea|constipation)\b/i.test(text)) domains.push("gi");
+  if (/\b(?:poor intake|appetite|oral intake)\b/i.test(text)) domains.push("intake");
+  if (/\b(?:dizziness|weakness|confusion|delirium|ams)\b/i.test(text)) domains.push("neuro");
+  return domains;
+}
+
+function mergeSubjectiveLinesForDaily(baseline: string[], candidate: string[], maxItems = 6) {
+  const candidateLines = uniqueLines(candidate, maxItems);
+  if (candidateLines.length === 0) return baseline;
+  const incomingDomains = new Set(candidateLines.flatMap(subjectiveDomains));
+  const carryForward = baseline.filter((line) => {
+    const domains = subjectiveDomains(line);
+    return domains.length === 0 || !domains.some((domain) => incomingDomains.has(domain));
+  });
+  return uniqueLines([...candidateLines, ...carryForward], Math.max(maxItems, candidateLines.length + carryForward.length));
+}
+
+function newestImageStudyLines(lines: string[], maxItems = 8) {
+  const seenStudies = new Set<string>();
+  const selected: string[] = [];
+  [...lines].reverse().forEach((line) => {
+    const key = imageStudyKey(line);
+    if (key && seenStudies.has(key)) return;
+    if (key) seenStudies.add(key);
+    selected.push(line);
+  });
+  return uniqueLines(selected.reverse(), maxItems);
+}
+
+function taskExplicitlyCompleted(task: string, sourceText: string) {
+  if (!/\b(?:completed|done|passed|resolved|final negative|discontinued|stopped)\b/i.test(sourceText)) return false;
+  if (/\b(?:ambulat\w*|walk\w*|exertional oxygen|oxygen saturation)\b/i.test(task) && /\b(?:ambulat\w*|walk\w*)\b.*\b(?:completed|done|passed)\b|\b(?:completed|done|passed)\b.*\b(?:ambulat\w*|walk\w*)\b/i.test(sourceText)) return true;
+  if (/\b(?:culture|b\/c|bcx)\b/i.test(task) && /\b(?:culture|b\/c|bcx)\b.*\b(?:final negative|completed|done)\b|\b(?:final negative|completed|done)\b.*\b(?:culture|b\/c|bcx)\b/i.test(sourceText)) return true;
+  return false;
 }
 
 function labItemKey(label: string) {
@@ -609,12 +673,13 @@ function draftForDailyUpdate(baseline: SoapDraft, candidate: SoapDraft, fields: 
         nextObjective[section] = mergeLabLinesForDaily(baseObjective[section], candidateObjective[section], 12);
       } else if (section === "image") {
         // A fresh report for the same study (e.g., today's CXR) replaces the stale line instead of stacking under it.
-        const incomingStudyKeys = new Set(candidateObjective.image.map(imageStudyKey).filter(Boolean));
+        const newestCandidateImages = newestImageStudyLines(candidateObjective.image, 8);
+        const incomingStudyKeys = new Set(newestCandidateImages.map(imageStudyKey).filter(Boolean));
         const baselineWithoutReplacedStudies = baseObjective.image.filter((line) => {
           const key = imageStudyKey(line);
           return !key || !incomingStudyKeys.has(key);
         });
-        nextObjective[section] = mergeDailyLines(baselineWithoutReplacedStudies, candidateObjective.image, { maxItems: 8 });
+        nextObjective[section] = mergeDailyLines(baselineWithoutReplacedStudies, newestCandidateImages, { maxItems: 8 });
       } else {
         nextObjective[section] = mergeDailyLines(baseObjective[section], candidateObjective[section], { maxItems: 5 });
       }
@@ -627,13 +692,16 @@ function draftForDailyUpdate(baseline: SoapDraft, candidate: SoapDraft, fields: 
 
   const baselineTasks = splitTasks(baseline.taskLines);
   const candidateTasks = splitTasks(candidate.taskLines);
+  const pastedSourceText = sourceFieldsText(fields);
   const nextOrders = profile.allowed.has("orders")
     ? mergeDailyLines(baselineTasks.orders, candidateTasks.orders, { maxItems: 10 })
     : baselineTasks.orders;
   const taskSourceAllowsUpdate = profile.allowed.has("tasks");
   const filteredTasks = filterUnsupportedDailyLines(candidateTasks.tasks, fields, baselineText, "Task");
+  const baselineOpenTasks = baselineTasks.tasks.filter((task) => !taskExplicitlyCompleted(task, pastedSourceText));
+  const candidateOpenTasks = filteredTasks.accepted.filter((task) => !taskExplicitlyCompleted(task, pastedSourceText));
   const nextTasks = taskSourceAllowsUpdate
-    ? mergeDailyLines(baselineTasks.tasks, filteredTasks.accepted, { maxItems: 10 })
+    ? mergeDailyLines(baselineOpenTasks, candidateOpenTasks, { maxItems: 10 })
     : baselineTasks.tasks;
   warnings.push(...filteredTasks.warnings);
   if (!sameLines(baselineTasks.orders, candidateTasks.orders)) {
@@ -652,6 +720,7 @@ function draftForDailyUpdate(baseline: SoapDraft, candidate: SoapDraft, fields: 
         baseline.apProblems,
         filteredAp.problems,
         profile.allowed.has("s") || profile.allowed.has("pe") || profile.allowed.has("lab") || profile.allowed.has("image"),
+        pastedSourceText,
       );
       nextApProblems = merged.apProblems;
       warnings.push(...merged.warnings);
@@ -664,8 +733,15 @@ function draftForDailyUpdate(baseline: SoapDraft, candidate: SoapDraft, fields: 
   }
 
   const filteredDc = filterUnsupportedDailyLines(candidate.dcLines, fields, baselineText, "DC");
+  const hasNewDischargeTarget = /\b(?:dc|discharge)\b[^\n]*(?:today|tomorrow|\d{4}-\d{2}-\d{2})|\b(?:today|tomorrow)\b[^\n]*(?:dc|discharge)\b/i.test(pastedSourceText);
+  const baselineDcForMerge = hasNewDischargeTarget
+    ? baseline.dcLines.filter((line) => !/\btarget\b|\b\d{4}-\d{2}-\d{2}\b/i.test(line))
+    : baseline.dcLines;
+  const candidateDcForMerge = hasNewDischargeTarget
+    ? filteredDc.accepted.filter((line) => !/\btarget\b|\b\d{4}-\d{2}-\d{2}\b/i.test(line) || pastedSourceText.toLowerCase().includes(line.toLowerCase()))
+    : filteredDc.accepted;
   const nextDc = profile.allowed.has("dc")
-    ? mergeDailyLines(baseline.dcLines, filteredDc.accepted, { maxItems: 8 })
+    ? mergeDailyLines(baselineDcForMerge, candidateDcForMerge, { maxItems: 8 })
     : baseline.dcLines;
   warnings.push(...filteredDc.warnings);
   if (!sameLines(baseline.dcLines, candidate.dcLines)) {
@@ -707,7 +783,7 @@ function draftForDailyUpdate(baseline: SoapDraft, candidate: SoapDraft, fields: 
   const draftBeforeAntibiotics = {
       header: baseline.header,
       sLines: profile.allowed.has("s")
-        ? mergeDailyLines(baseline.sLines, filteredS.accepted, { maxItems: 6 })
+        ? mergeSubjectiveLinesForDaily(baseline.sLines, filteredS.accepted, 6)
         : baseline.sLines,
       oLines: mergeObjective(nextObjective, 22),
       apProblems: nextApProblems,
@@ -715,11 +791,14 @@ function draftForDailyUpdate(baseline: SoapDraft, candidate: SoapDraft, fields: 
       dcLines: nextDc,
       warnings: uniqueLines([...baseline.warnings, ...candidate.warnings], 5),
     } satisfies SoapDraft;
-  const draftWithAntibiotics = ensureAntibioticApInDraft(
-    draftBeforeAntibiotics,
-    [sourceFieldsText(fields), formatSoapDraft(candidate), formatSoapDraft(baseline)].join("\n"),
-    selectedDate,
-  );
+  const explicitAntibioticCompletion = /\b(?:completed|done|discontinued|stopped)\b[^\n]*\b(?:abx|antibiotic|teicoplanin|vancomycin|cef\w*|meropenem|ertapenem|pip\/?tazo|zosyn)\b|\b(?:abx|antibiotic|teicoplanin|vancomycin|cef\w*|meropenem|ertapenem|pip\/?tazo|zosyn)\b[^\n]*\b(?:completed|done|discontinued|stopped)\b/i.test(pastedSourceText);
+  const draftWithAntibiotics = explicitAntibioticCompletion
+    ? draftBeforeAntibiotics
+    : ensureAntibioticApInDraft(
+        draftBeforeAntibiotics,
+        [sourceFieldsText(fields), formatSoapDraft(candidate), formatSoapDraft(baseline)].join("\n"),
+        selectedDate,
+      );
   if (!sameProblems(draftBeforeAntibiotics.apProblems, draftWithAntibiotics.apProblems)) {
     pushChanged(changed, "ap", "A/P preserved antibiotic/culture plan from source", "normal", false);
   }

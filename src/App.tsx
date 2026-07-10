@@ -102,7 +102,7 @@ function App() {
   function refreshAiStyleProfile() {
     handlePreferencesChange({
       ...preferences,
-      aiStyleProfile: buildUserAiStyleProfile(patients, dailyNotesByPatient),
+      aiStyleProfile: buildUserAiStyleProfile(patients, dailyNotesByPatient, { after: preferences.aiStyleLearningResetAt }),
     });
   }
 
@@ -111,6 +111,14 @@ function App() {
     document.documentElement.dataset.theme = preferences.theme;
     document.documentElement.dataset.language = preferences.language;
   }, [preferences]);
+
+  useEffect(() => {
+    if (dataLoading) return;
+    const learnedProfile = buildUserAiStyleProfile(patients, dailyNotesByPatient, { after: preferences.aiStyleLearningResetAt });
+    if (learnedProfile.reviewedAiSaveCount < 5) return;
+    if (learnedProfile.correctionFingerprint === preferences.aiStyleProfile?.correctionFingerprint) return;
+    handlePreferencesChange({ ...preferences, aiStyleProfile: learnedProfile });
+  }, [dailyNotesByPatient, dataLoading, patients, preferences.aiStyleLearningResetAt, preferences.aiStyleProfile?.correctionFingerprint]);
 
   useEffect(() => {
     if (isDemoMode || !user) return;
@@ -263,6 +271,7 @@ function App() {
     setDataError("");
     try {
       await updatePatient(user.uid, patient);
+      setPatients((current) => current.map((item) => (item.id === patient.id ? patient : item)));
     } catch (error) {
       const message = formatSyncError("Saving patient", error);
       setDataError(message);
@@ -300,6 +309,11 @@ function App() {
     setDataError("");
     try {
       await saveDailyNote(user.uid, patientId, note);
+      setDailyNotesByPatient((current) => ({
+        ...current,
+        [patientId]: [...(current[patientId] ?? []).filter((item) => item.date !== note.date), note]
+          .sort((left, right) => left.date.localeCompare(right.date)),
+      }));
     } catch (error) {
       const message = formatSyncError("Saving daily note", error);
       setDataError(message);

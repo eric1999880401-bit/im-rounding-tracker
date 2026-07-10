@@ -68,7 +68,7 @@ export function sanitizeUserStyleProfile(input: unknown) {
   const apOrganization = String(source.apOrganization ?? "problemStatusPlan");
   const abbreviationStyle = String(source.abbreviationStyle ?? "moderate");
   return {
-    styleSummary: asStringArray(source.styleSummary).slice(0, 6),
+    styleSummary: asStringArray(source.styleSummary).slice(0, 10),
     apVoice: ["terse", "balanced", "descriptive"].includes(apVoice) ? apVoice : "terse",
     apOrganization: ["problemStatusPlan", "problemEvidencePlan", "problemPlan", "mixed"].includes(apOrganization) ? apOrganization : "problemStatusPlan",
     abbreviationStyle: ["minimal", "moderate", "heavy"].includes(abbreviationStyle) ? abbreviationStyle : "moderate",
@@ -77,6 +77,8 @@ export function sanitizeUserStyleProfile(input: unknown) {
     sectionOrder: asStringArray(source.sectionOrder).filter((item) => ["Header", "S", "O", "A/P", "Orders", "Tasks", "DC"].includes(item)).slice(0, 7),
     typicalApProblemCount: Math.max(1, Math.min(8, Number(source.typicalApProblemCount ?? source.apProblemCount) || 4)),
     typicalApLineLimit: Math.max(1, Math.min(4, Number(source.typicalApLineLimit ?? source.apLineLimit) || 2)),
+    correctionTendencies: asStringArray(source.correctionTendencies).slice(0, 6),
+    reviewedAiSaveCount: Math.max(0, Number(source.reviewedAiSaveCount) || 0),
   };
 }
 
@@ -330,7 +332,7 @@ export function isGenericClinicalFiller(value: string) {
 // full name and its abbreviation (e.g. "diabetes mellitus" + "DM").
 // Keep in sync with src/aiPostprocess/diseaseDedupe.ts in the web app.
 const diseaseSynonyms: Array<[RegExp, string]> = [
-  [/^(?:type\s*(?:2|ii)\s*)?diabetes(?:\s+mellitus)?(?:\s*type\s*(?:2|ii))?$|^t2dm$|^dm$|^dm\s*type\s*(?:2|ii)$/i, "dm"],
+  [/^(?:type\s*(?:2|ii)\s*)?diabetes(?:\s+mellitus)?(?:\s*type\s*(?:2|ii))?$|^t2dm$|^dm$|^type\s*(?:2|ii)\s*dm$|^dm\s*type\s*(?:2|ii)$/i, "dm"],
   [/^hypertension$|^htn$/i, "htn"],
   [/^hyperlipidemia$|^dyslipidemia$|^hld$/i, "hld"],
   [/^coronary artery disease$|^cad$/i, "cad"],
