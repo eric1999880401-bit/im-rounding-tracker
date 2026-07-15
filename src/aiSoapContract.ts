@@ -114,17 +114,17 @@ function numericValue(value: unknown) {
 function criticalLabProblem(label: string, value: number) {
   const key = label.toLowerCase().replace(/[^a-z0-9]+/g, "");
   if (key === "na" || key === "sodium") {
-    if (value > 150) return { bucket: "renal", title: "Hypernatremia", line: `Na ${value}; f/u trend, volume/free water plan.` };
-    if (value < 130) return { bucket: "renal", title: "Hyponatremia", line: `Na ${value}; f/u trend and correction plan.` };
+    if (value > 150) return { bucket: "renal", title: "Hypernatremia", line: `Na ${value}.` };
+    if (value < 130) return { bucket: "renal", title: "Hyponatremia", line: `Na ${value}.` };
   }
   if (key === "k" || key === "potassium") {
-    if (value > 5.5) return { bucket: "renal", title: "Hyperkalemia / renal-lyte", line: `K ${value}; f/u ECG/repeat K and renal plan.` };
-    if (value < 3) return { bucket: "renal", title: "Hypokalemia / renal-lyte", line: `K ${value}; replace and f/u trend.` };
+    if (value > 5.5) return { bucket: "renal", title: "Hyperkalemia / renal-lyte", line: `K ${value}.` };
+    if (value < 3) return { bucket: "renal", title: "Hypokalemia / renal-lyte", line: `K ${value}.` };
   }
-  if ((key === "cr" || key === "creatinine") && value >= 2) return { bucket: "renal", title: "AKI / renal dysfunction", line: `Cr ${value}; f/u UO/renal trend, adjust nephrotoxins.` };
-  if ((key === "ast" || key === "alt") && value >= 200) return { bucket: "liver", title: "Liver injury / transaminitis", line: `${label.toUpperCase()} ${value}; f/u LFT/INR and cause.` };
-  if (key === "inr" && value >= 3) return { bucket: "liver", title: "Coagulopathy", line: `INR ${value}; review bleeding risk/AC plan.` };
-  if ((key === "hb" || key === "hgb" || key === "hemoglobin") && value < 8) return { bucket: "heme", title: "Anemia", line: `Hb ${value}; f/u trend/bleeding signs and transfusion threshold.` };
+  if ((key === "cr" || key === "creatinine") && value >= 2) return { bucket: "renal", title: "Cr elevation / renal dysfunction", line: `Cr ${value}.` };
+  if ((key === "ast" || key === "alt") && value >= 200) return { bucket: "liver", title: "Liver injury / transaminitis", line: `${label.toUpperCase()} ${value}.` };
+  if (key === "inr" && value >= 3) return { bucket: "liver", title: "Coagulopathy / INR elevation", line: `INR ${value}.` };
+  if ((key === "hb" || key === "hgb" || key === "hemoglobin") && value < 8) return { bucket: "heme", title: "Anemia", line: `Hb ${value}.` };
   return null;
 }
 

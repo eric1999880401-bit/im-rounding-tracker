@@ -331,6 +331,40 @@ function guidedSectionKey(label: string): GuidedSoapSourceSection {
   return "other";
 }
 
+function routeUnguidedSoapSourceFragment(
+  fragment: string,
+  buckets: Record<GuidedSoapSourceSection, string[]>,
+) {
+  const trimmed = fragment.trim();
+  if (!trimmed) return;
+
+  if (/^admission\b/i.test(trimmed)) {
+    buckets.admission.push(trimmed);
+    return;
+  }
+  if (/^(?:image|img)\s*:/i.test(trimmed) || /\b(?:CXR|CT\b|MRI|echo|sono|ultrasound|impression)\b/i.test(trimmed)) {
+    buckets.images.push(trimmed.replace(/^(?:image|img)\s*:\s*/i, ""));
+    return;
+  }
+  if (
+    /^(?:orders?|meds?|medication)\s*:/i.test(trimmed) ||
+    /\b(?:ceftriaxone|cefepime|cefazolin|ceftazidime|metronidazole|teicoplanin|vancomycin|meropenem|ertapenem|pip\/?tazo|piperacillin|tazobactam|zosyn|apixaban|heparin|insulin|norepi(?:nephrine)?|vasopressin)\b/i.test(trimmed) ||
+    /\b(?:started|continue|given|administered|hold|resume|stopped|discontinued|NPO|IVF|oxygen|O2)\b/i.test(trimmed)
+  ) {
+    buckets.orders.push(trimmed.replace(/^(?:orders?|meds?|medication)\s*:\s*/i, ""));
+    return;
+  }
+  if (/^labs?\s*:/i.test(trimmed) || /\b(?:WBC|Hb|Hgb|Plt|Cr|BUN|Na|K\b|AST|ALT|INR|lactate|CRP|culture|B\/C|BCx)\b/i.test(trimmed)) {
+    buckets.labs.push(trimmed.replace(/^labs?\s*:\s*/i, ""));
+    return;
+  }
+  if (/^(?:v\/s|vs|vitals?)\s*:/i.test(trimmed) || /\b(?:BP|HR|RR|SpO2|T\s*\d|afebrile|NC\s*\d*L?|RA)\b/i.test(trimmed)) {
+    buckets.vitals.push(trimmed.replace(/^(?:v\/s|vs|vitals?)\s*:\s*/i, ""));
+    return;
+  }
+  buckets.other.push(trimmed);
+}
+
 function splitGuidedSoapSource(rawText: string): Record<GuidedSoapSourceSection, string> {
   const buckets: Record<GuidedSoapSourceSection, string[]> = {
     admission: [],
@@ -363,15 +397,7 @@ function splitGuidedSoapSource(rawText: string): Record<GuidedSoapSourceSection,
         buckets[current].push(trimmed);
         return;
       }
-      if (/^(?:v\/s|vs|vitals?)\s*:/i.test(trimmed) || /\b(?:BP|HR|RR|SpO2|T\s*\d|afebrile|NC\s*\d*L?|RA)\b/i.test(trimmed)) {
-        buckets.vitals.push(trimmed.replace(/^(?:v\/s|vs|vitals?)\s*:\s*/i, ""));
-      } else if (/^lab\s*:/i.test(trimmed) || /\b(?:WBC|Hb|Hgb|Plt|Cr|BUN|Na|K\b|AST|ALT|INR|lactate|CRP|culture|B\/C|BCx)\b/i.test(trimmed)) {
-        buckets.labs.push(trimmed.replace(/^lab\s*:\s*/i, ""));
-      } else if (/^(?:image|img)\s*:/i.test(trimmed) || /\b(?:CXR|CT\b|MRI|echo|sono|ultrasound|impression)\b/i.test(trimmed)) {
-        buckets.images.push(trimmed.replace(/^(?:image|img)\s*:\s*/i, ""));
-      } else {
-        buckets.other.push(trimmed);
-      }
+      sourceSentences(trimmed).forEach((fragment) => routeUnguidedSoapSourceFragment(fragment, buckets));
     });
 
   return {
@@ -433,8 +459,17 @@ function compactProblemLine(parts: unknown[]) {
     .join(", ");
 }
 
-export function localRoundSoapFromPaste(patient: Patient, dailyNotes: DailyNote[] = [], selectedDate = "", rawText = "") {
-  const baseline = parseSoapText(getCanonicalSoapText(patient, dailyNotes, selectedDate).text);
+export function localRoundSoapFromPaste(
+  patient: Patient,
+  dailyNotes: DailyNote[] = [],
+  selectedDate = "",
+  rawText = "",
+  workflowMode: "dailyUpdate" | "newSoap" | "transferHandoff" = "dailyUpdate",
+) {
+  const canonicalDraft = parseSoapText(getCanonicalSoapText(patient, dailyNotes, selectedDate).text);
+  const baseline = workflowMode === "newSoap"
+    ? { ...canonicalDraft, sLines: [], oLines: [], apProblems: [], taskLines: [], dcLines: [], warnings: [] }
+    : canonicalDraft;
   const source = splitGuidedSoapSource(rawText);
   const sourceAll = Object.values(source).join("\n");
   const fragments = sourceSentences(sourceAll);
@@ -495,7 +530,7 @@ export function localRoundSoapFromPaste(patient: Patient, dailyNotes: DailyNote[
     }
   });
 
-  sourceSentences(source.other)
+  sourceSentences([source.other, source.orders].join("\n"))
     .filter((line) => /\b(?:completed|done|passed|resolved|final negative|discontinued|stopped)\b/i.test(line))
     .forEach((line) => {
       if (/\b(?:ambulat\w*|walk\w*)\b/i.test(line)) {
@@ -507,7 +542,7 @@ export function localRoundSoapFromPaste(patient: Patient, dailyNotes: DailyNote[
     });
 
   const nextProblems = removeEmptyApProblems(baseline.apProblems);
-  const completedAntibiotic = sourceSentences(source.other).find((line) =>
+  const completedAntibiotic = sourceSentences([source.other, source.orders].join("\n")).find((line) =>
     /\b(?:completed|done|discontinued|stopped)\b/i.test(line) &&
     /\b(?:abx|antibiotic|teicoplanin|vancomycin|cef\w*|meropenem|ertapenem|pip\/?tazo|zosyn)\b/i.test(line),
   );
@@ -568,7 +603,8 @@ export function localRoundSoapFromPaste(patient: Patient, dailyNotes: DailyNote[
     .filter((line) => /\b(f\/u|follow|pending|repeat|call|consult|arrange|opd|culture|cx)\b/i.test(line))
     .forEach((line) => addUniqueLine(baseline.taskLines, line.replace(/^tasks?\s*:\s*/i, ""), 6, 130));
   sourceSentences(source.orders)
-    .filter((line) => /\b(meropenem|vanco|vancomycin|piperacillin|tazobactam|pip\/?tazo|zosyn|hold|resume|lokelma|o2|strict i\/o|vs q|insulin|lasix|heparin|apixaban)\b/i.test(line))
+    .filter((line) => !/\b(?:completed|done|discontinued|stopped)\b/i.test(line))
+    .filter((line) => /\b(ceftriaxone|cefepime|cefazolin|ceftazidime|metronidazole|teicoplanin|meropenem|vanco|vancomycin|piperacillin|tazobactam|pip\/?tazo|zosyn|hold|resume|lokelma|o2|strict i\/o|vs q|insulin|lasix|heparin|apixaban|npo|ivf)\b/i.test(line))
     .forEach((line) => addUniqueLine(baseline.taskLines, `Order: ${line}`, 6, 130));
   const incomingDcLines = sourceSentences(source.other)
     .filter((line) => /\b(dc|discharge|not ready|barrier|opd|certificate)\b/i.test(line))
@@ -968,7 +1004,10 @@ function sectionFromLine(line: string): { section: SoapSection; label: string; r
   if (label === "s" || label === "subjective") return { section: "s", label: "S", rest };
   if (label === "o" || label === "objective") return { section: "o", label: "O", rest };
   if (label === "a/p" || label === "ap" || label === "assessment/plan") return { section: "ap", label: "A/P", rest };
-  if (label === "task" || label === "tasks" || label === "todo" || label === "to do" || label === "order" || label === "orders" || label === "med" || label === "meds" || label === "藥囑") return { section: "tasks", label: "Tasks", rest };
+  if (label === "order" || label === "orders" || label === "med" || label === "meds" || label === "藥囑") {
+    return { section: "tasks", label: "Tasks", rest: rest ? `Order: ${rest}` : "" };
+  }
+  if (label === "task" || label === "tasks" || label === "todo" || label === "to do") return { section: "tasks", label: "Tasks", rest };
   if (label === "dc" || label === "discharge") return { section: "dc", label: "DC", rest };
   return { section: "warnings", label: "Warnings", rest };
 }
@@ -1037,6 +1076,10 @@ export function normalizeSoapTextForEditor(text: string) {
 
     const sectionLine = sectionFromLine(raw);
     if (sectionLine) {
+      if (section === "tasks" && sectionLine.section === "tasks" && /^Order\s*:/i.test(sectionLine.rest)) {
+        pushContent(sectionLine.rest);
+        return;
+      }
       section = sectionLine.section;
       if (lines.length > 0 && lines[lines.length - 1] !== "") lines.push("");
       lines.push(`${sectionLine.label}:`);
@@ -1124,7 +1167,13 @@ export function parseSoapText(text: string): SoapDraft {
       if (apRest) addLine(apRest);
       return;
     }
-    const taskRest = sectionRest(line, "Tasks?|TODO|To do|Orders?|Meds?|藥囑");
+    const orderRest = sectionRest(line, "Orders?|Meds?|藥囑");
+    if (orderRest !== null) {
+      section = "tasks";
+      if (orderRest) addLine(`Order: ${orderRest}`);
+      return;
+    }
+    const taskRest = sectionRest(line, "Tasks?|TODO|To do");
     if (taskRest !== null) {
       section = "tasks";
       if (taskRest) addLine(taskRest);

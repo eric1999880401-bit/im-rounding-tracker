@@ -45,6 +45,12 @@ import {
   type RecoveryDraft,
 } from "../draftRecovery";
 import SoapEditHistoryPanel from "./SoapEditHistoryPanel";
+import {
+  deriveInitialRoundSoapWorkflow,
+  roundSoapBaselineForWorkflow,
+  suggestedRoundSoapWorkflow,
+  type RoundSoapWorkflowMode,
+} from "../roundSoapWorkflow";
 
 interface RoundSoapComposerProps {
   patient: Patient;
@@ -63,22 +69,8 @@ interface RoundSoapComposerProps {
   onDirtyChange?: (dirty: boolean) => void;
 }
 
-type WorkflowMode = "dailyUpdate" | "newSoap" | "transferHandoff";
+type WorkflowMode = RoundSoapWorkflowMode;
 type RoundSoapQualityMode = "fast" | "balanced" | "highAccuracy";
-
-// A usable fallback SOAP is still a baseline: an existing patient should be
-// patched instead of regenerated just because the baseline predates soapText.
-function deriveInitialWorkflowMode(dailyNotes: DailyNote[], baselineText = ""): WorkflowMode {
-  const hasReviewedHistory = dailyNotes.some((note) => note.soapText?.trim() && note.soapStatus === "reviewed");
-  return hasReviewedHistory || baselineText.trim() ? "dailyUpdate" : "newSoap";
-}
-
-function detectWorkflowMode(dailyNotes: DailyNote[], sourceText: string, fallback: WorkflowMode, baselineText = ""): WorkflowMode {
-  if (/\b(?:transfer|handoff|sbar|icu\s*(?:transfer|stepdown)|轉科|交班|轉出)\b/i.test(sourceText)) return "transferHandoff";
-  const hasReviewedHistory = dailyNotes.some((note) => note.soapText?.trim() && note.soapStatus === "reviewed");
-  if (!hasReviewedHistory && !baselineText.trim()) return "newSoap";
-  return fallback === "newSoap" ? "dailyUpdate" : fallback;
-}
 
 const workflowModes: Array<{ value: WorkflowMode; label: string; helper: string; sourceType: AiClinicalSourceType }> = [
   {
@@ -99,6 +91,12 @@ const workflowModes: Array<{ value: WorkflowMode; label: string; helper: string;
     helper: "First SOAP after transfer: paste admission, last SOAP/SBAR, V/S, lab, image, and description/other.",
     sourceType: "mixed",
   },
+];
+
+const qualityModeOptions: Array<{ value: RoundSoapQualityMode; label: string; helper: string }> = [
+  { value: "fast", label: "Efficient (GPT-5.6 Luna)", helper: "Lower cost for narrow, low-risk updates." },
+  { value: "balanced", label: "Recommended (GPT-5.6 Terra)", helper: "Best value for routine New SOAP and Daily updates." },
+  { value: "highAccuracy", label: "Best quality (GPT-5.6 Sol)", helper: "Use for ICU transfer or clinically complex source text." },
 ];
 
 interface DailyUpdateFields {
@@ -238,7 +236,7 @@ function RoundSoapComposer({
   onDirtyChange,
 }: RoundSoapComposerProps) {
   const canonical = getCanonicalSoapText(patient, dailyNotes, selectedDate);
-  const [workflowMode, setWorkflowMode] = useState<WorkflowMode>(() => deriveInitialWorkflowMode(dailyNotes, canonical.text));
+  const [workflowMode, setWorkflowMode] = useState<WorkflowMode>(() => deriveInitialRoundSoapWorkflow(dailyNotes, patient.isNewAdmission));
   const [dailyFields, setDailyFields] = useState<DailyUpdateFields>(emptyDailyFields);
   const [newSoapFields, setNewSoapFields] = useState<NewSoapFields>(emptyNewSoapFields);
   const [transferFields, setTransferFields] = useState<TransferSoapFields>(emptyTransferFields);
@@ -290,6 +288,10 @@ function RoundSoapComposer({
   useEffect(() => {
     editOriginRef.current = null;
   }, [patient.id, selectedDate]);
+
+  useEffect(() => {
+    setWorkflowMode(deriveInitialRoundSoapWorkflow(dailyNotes, patient.isNewAdmission));
+  }, [patient.id]);
 
   const hasUnsavedEdits = dirty || Object.values(pendingOrderSources).some(Boolean);
 
@@ -534,11 +536,13 @@ function RoundSoapComposer({
   async function handleGenerate(requestedQualityMode: RoundSoapQualityMode = qualityMode) {
     const rawText = composeRawText();
     const currentSoapText = editorDraftToSoapText(editorDraftRef.current);
-    const requestWorkflowMode = detectWorkflowMode(dailyNotes, rawText, workflowMode, currentSoapText || canonical.text);
+    const requestWorkflowMode = workflowMode;
     const requestWorkflow = workflowModes.find((item) => item.value === requestWorkflowMode) ?? workflowModes[0];
-    const automaticQualityMode: RoundSoapQualityMode = requestWorkflowMode === "transferHandoff"
-      ? "highAccuracy"
-      : requestedQualityMode;
+    const requestQualityMode = requestedQualityMode;
+    const requestBaseline = roundSoapBaselineForWorkflow(requestWorkflowMode, {
+      text: currentSoapText || canonical.text,
+      source: canonical.source,
+    });
     setError("");
     setStatus("");
     setWarnings([]);
@@ -554,7 +558,7 @@ function RoundSoapComposer({
       const result = isDemoMode
         ? {
             draftId: "local-demo-round-soap",
-            soapText: localRoundSoapFromPaste(patient, dailyNotes, selectedDate, rawText),
+            soapText: localRoundSoapFromPaste(patient, dailyNotes, selectedDate, rawText, requestWorkflowMode),
             warnings: ["Demo mode used a local SOAP merge instead of Firebase Functions."],
             highlightHints: [],
             model: "local-demo",
@@ -566,17 +570,17 @@ function RoundSoapComposer({
             sourceType: requestWorkflow.sourceType,
             workflowMode: requestWorkflowMode,
             rawText,
-            currentSoapBaseline: currentSoapText || canonical.text,
+            currentSoapBaseline: requestBaseline,
             deidentifiedConfirmed: true,
-            qualityMode: automaticQualityMode,
+            qualityMode: requestQualityMode,
             patientContext: patientContext(patient),
             userStyleProfile: aiStyleProfile,
           });
 
-      const normalizedResult = normalizeAiSoapText(result.soapText.trim() || canonical.text, result.warnings ?? []);
+      const normalizedResult = normalizeAiSoapText(result.soapText.trim() || requestBaseline || canonical.text, result.warnings ?? []);
       const guarded = guardRoundSoapDelta({
         workflowMode: requestWorkflowMode,
-        baselineText: currentSoapText || canonical.text,
+        baselineText: requestBaseline,
         candidateText: normalizedResult.soapText,
         sourceFields: currentSourceFields(requestWorkflowMode),
         candidateWarnings: normalizedResult.warnings,
@@ -589,19 +593,19 @@ function RoundSoapComposer({
         workflowMode: requestWorkflowMode,
         aiDraftId: result.draftId,
         model: result.model,
-        qualityMode: result.qualityMode ?? automaticQualityMode,
+        qualityMode: result.qualityMode ?? requestQualityMode,
       };
       updateEditorDraft(nextDraft);
       updatePendingOrderSource(requestWorkflowMode, false);
-      const patchWarnings = result.mode === "patch" && !soapPatchMatchesBaseline(result.patch, currentSoapText || canonical.text)
+      const patchWarnings = result.mode === "patch" && !soapPatchMatchesBaseline(result.patch, requestBaseline)
         ? ["AI patch baseline no longer matches the current editor. Baseline-preserving guardrails were applied; review changed sections."]
         : [];
       setWarnings([...patchWarnings, ...guarded.warnings, ...guarded.highRiskWarnings]);
       setDeltaReview(guarded);
       setStatus(
         guarded.highRiskWarnings.length > 0
-          ? `SOAP preview generated (${result.model}, ${result.qualityMode ?? automaticQualityMode}); high-risk unrelated AI changes were held.`
-          : `SOAP preview generated (${result.model}, ${result.qualityMode ?? automaticQualityMode}). Edit, then Save reviewed SOAP.`,
+          ? `SOAP preview generated (${result.model}, ${result.qualityMode ?? requestQualityMode}); high-risk unrelated AI changes were held.`
+          : `SOAP preview generated (${result.model}, ${result.qualityMode ?? requestQualityMode}). Edit, then Save reviewed SOAP.`,
       );
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : "SOAP generation failed. No data was saved.");
@@ -781,32 +785,52 @@ function RoundSoapComposer({
   const recoverySavedLabel = recoveryTimeLabel(recoverySavedAt);
 
   if (compact) {
-    const automaticMode = detectWorkflowMode(dailyNotes, mixedSourceText, workflowMode, soapText || canonical.text);
-    const automaticModeLabel = workflowModes.find((item) => item.value === automaticMode)?.label ?? "Daily update";
+    const transferSuggestion = suggestedRoundSoapWorkflow(mixedSourceText);
     return (
       <section className="round-soap-composer compact-round-soap-composer">
         <div className="round-soap-toolbar compact-soap-toolbar">
           <div>
             <h3>Quick SOAP update</h3>
-            <p className="muted">Auto: {automaticModeLabel} · baseline {canonical.sourceDate || "legacy fallback"}</p>
+            <p className="muted">Baseline: {canonical.sourceDate || "legacy fallback"}</p>
           </div>
           <button type="button" className="secondary compact-button" onClick={resetToCanonical}>Reset</button>
         </div>
+        <div className="round-soap-mode-bar compact-soap-mode-bar" aria-label="SOAP generation controls">
+          <label>
+            Workflow
+            <select aria-label="SOAP workflow" value={workflowMode} onChange={(event) => setWorkflowMode(event.target.value as WorkflowMode)}>
+              {workflowModes.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+            </select>
+          </label>
+          <label>
+            Model
+            <select aria-label="AI model quality" value={qualityMode} onChange={(event) => setQualityMode(event.target.value as RoundSoapQualityMode)}>
+              {qualityModeOptions.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+            </select>
+          </label>
+        </div>
+        {transferSuggestion && transferSuggestion !== workflowMode && (
+          <p className="status-message compact-workflow-suggestion">Transfer/SBAR wording detected. Switch Workflow to Transfer only if this is the receiving team's first SOAP.</p>
+        )}
         <label className="round-soap-paste">
-          Paste mixed update
+          Paste all source data for {workflow.label}
           <textarea
             value={mixedSourceText}
             onChange={(event) => setMixedSourceText(event.target.value)}
             onCompositionStart={() => { isComposingRef.current = true; }}
             onCompositionEnd={() => { isComposingRef.current = false; }}
-            placeholder="Paste today's V/S, labs, imaging, course, orders, consults, and pending tasks together."
+            placeholder={workflowMode === "dailyUpdate"
+              ? "Paste today's V/S, labs, imaging, course, orders, consults, and pending tasks together."
+              : workflowMode === "newSoap"
+                ? "Paste admission note, current V/S, labs, imaging, orders, and a short description together."
+                : "Paste admission, last SOAP/SBAR, current V/S, labs, imaging, orders, and transfer context together."}
             rows={6}
           />
         </label>
         <div className="round-soap-generate-row compact-generate-row">
           <span className="muted">Preview only. Save remains explicit.</span>
           <button type="button" disabled={loading || mixedSourceText.trim().length < 10} onClick={() => void handleGenerate()}>
-            {loading ? "Working..." : "Generate update"}
+            {loading ? "Working..." : `Generate ${workflow.label}`}
           </button>
         </div>
         {error && <p className="error-message">{error}</p>}
@@ -822,7 +846,7 @@ function RoundSoapComposer({
           <SoapVisualPreview
             value={soapText}
             compact
-            sourceFields={currentSourceFields(automaticMode)}
+            sourceFields={currentSourceFields(workflowMode)}
             layoutPreferences={layoutPreferences}
             keywordRules={keywordRules}
             labReferenceDisplay="none"
@@ -859,21 +883,44 @@ function RoundSoapComposer({
           </button>
         </div>
       </div>
+      <div className="round-soap-mode-bar" aria-label="SOAP generation controls">
+        <label>
+          Workflow
+          <select aria-label="SOAP workflow" value={workflowMode} onChange={(event) => setWorkflowMode(event.target.value as WorkflowMode)}>
+            {workflowModes.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+          </select>
+        </label>
+        <label>
+          Model
+          <select aria-label="AI model quality" value={qualityMode} onChange={(event) => setQualityMode(event.target.value as RoundSoapQualityMode)}>
+            {qualityModeOptions.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+          </select>
+        </label>
+        <div className="round-soap-mode-copy">
+          <strong>{workflow.label}</strong>
+          <span>{workflow.helper}</span>
+          <span>{qualityModeOptions.find((item) => item.value === qualityMode)?.helper}</span>
+        </div>
+      </div>
       <label className="round-soap-paste round-soap-primary-paste">
-        Paste clinical update
+        Paste all source data for {workflow.label}
         <textarea
           value={mixedSourceText}
           onChange={(event) => setMixedSourceText(event.target.value)}
           onCompositionStart={() => { isComposingRef.current = true; }}
           onCompositionEnd={() => { isComposingRef.current = false; }}
-          placeholder="Paste V/S, labs, imaging, course, orders, consults, and tasks together. AI will route sections and preserve the reviewed baseline."
+          placeholder={workflowMode === "dailyUpdate"
+            ? "Paste today's V/S, labs, imaging, course, orders, consults, and tasks together. AI will update the reviewed baseline."
+            : workflowMode === "newSoap"
+              ? "Paste admission note, current V/S, labs, imaging, orders, and description together. AI will create the first SOAP."
+              : "Paste admission, last SOAP/SBAR, current V/S, labs, imaging, orders, and transfer context together."}
           rows={7}
         />
       </label>
       <div className="round-soap-generate-row primary-generate-row">
-        <span className="muted">Workflow and cost tier are selected automatically. Nothing is saved until Save reviewed SOAP.</span>
+        <span className="muted">The selected workflow and model are used as shown. Nothing is saved until Save reviewed SOAP.</span>
         <button type="button" disabled={loading || mixedSourceText.trim().length < 10} onClick={() => void handleGenerate()}>
-          {loading ? "Working..." : "Generate SOAP update"}
+          {loading ? "Working..." : `Generate ${workflow.label}`}
         </button>
       </div>
       {recoveryDraft && (
@@ -903,21 +950,13 @@ function RoundSoapComposer({
         <summary>Advanced source controls</summary>
         <div className="round-soap-advanced-body">
           <div className="form-actions round-soap-advanced-selectors">
-            <select value={workflowMode} onChange={(event) => setWorkflowMode(event.target.value as WorkflowMode)} title="Workflow override">
-              {workflowModes.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
-            </select>
             <select value={soapFormat} onChange={(event) => setSoapFormat(event.target.value as SoapEditorFormat)} title="SOAP editor format">
               {soapFormatOptions.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
             </select>
-            <select value={qualityMode} onChange={(event) => setQualityMode(event.target.value as RoundSoapQualityMode)} title="AI quality / cost">
-              <option value="fast">Efficient (GPT-5.4 mini)</option>
-              <option value="balanced">Recommended (GPT-5.4)</option>
-              <option value="highAccuracy">Best quality (GPT-5.5)</option>
-            </select>
           </div>
-          <p className="muted">{workflow.helper} Clear the primary mixed paste before using these guided fields.</p>
+          <p className="muted">Clear the primary mixed paste before using these guided fields.</p>
           <p className="muted">
-            Approx. {estimatedTokens.toLocaleString()} input + baseline tokens. Transfer uses GPT-5.5; complex first SOAP may be upgraded by the backend.
+            Approx. {estimatedTokens.toLocaleString()} input + baseline tokens. The backend falls back to the prior model generation only if the selected model is unavailable.
           </p>
 
       {workflowMode === "dailyUpdate" ? (

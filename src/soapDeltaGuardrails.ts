@@ -1,5 +1,4 @@
 import { classifyClinicalLine } from "./clinicalLineClassifier";
-import { ensureAntibioticApInDraft } from "./antibioticPlan";
 import { imageStudyKey } from "./clinicalFieldRouter";
 import { formatSoapDraft, parseSoapText, type SoapApProblem, type SoapDraft } from "./soapDraft";
 import { parseLabReports, safeClinicalLine, safeClinicalLinePreservingMarks, stripColorMarkup } from "./utils";
@@ -251,6 +250,48 @@ function isOrderLine(line: string) {
     /^\s*(?:Abx|Anticoag\/AP|Steroid\/Immuno|Cardio\/Renal|Resp|Insulin\/Glucose|IVF\/Lyte|Nutrition|Monitoring|PRN|Routine(?: hidden)?)\s*:/i.test(text) ||
     /\b(?:teicoplanin|vancomycin|ceftriaxone|cefepime|zosyn|pip\/tazo|meropenem|levofloxacin|heparin|apixaban|warfarin|insulin|lasix|furosemide|steroid|methylpred|oxygen|morphine|fentanyl)\b/i.test(text)
   );
+}
+
+const highYieldMedicationPattern = /\b(?:teicoplanin|vancomycin|vanco|ceftriaxone|cefepime|cefazolin|ceftazidime|unasyn|pip\/?tazo|zosyn|meropenem|imipenem|ertapenem|azithro(?:mycin)?|levofloxacin|ciprofloxacin|metronidazole|linezolid|daptomycin|apixaban|heparin|warfarin|insulin|norepi(?:nephrine)?|vasopressin)\b/gi;
+
+function criticalSourceLabTokens(value: string) {
+  const next: string[] = [];
+  const pattern = /\b(Na|K|Cr|Hb|Hgb|INR|AST|ALT|lactate)\s*[:=]?\s*(-?\d+(?:\.\d+)?)/gi;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(value)) !== null) {
+    const label = match[1];
+    const key = label.toLowerCase();
+    const numeric = Number(match[2]);
+    const critical =
+      (key === "na" && (numeric <= 125 || numeric >= 150)) ||
+      (key === "k" && (numeric <= 3 || numeric >= 5.5)) ||
+      (key === "cr" && numeric >= 2) ||
+      ((key === "hb" || key === "hgb") && numeric < 8) ||
+      (key === "inr" && numeric >= 3) ||
+      ((key === "ast" || key === "alt") && numeric >= 200) ||
+      (key === "lactate" && numeric >= 2);
+    if (critical) next.push(`${label} ${match[2]}`);
+  }
+  return [...new Set(next)];
+}
+
+function sourceCoverageWarnings(sourceText: string, candidateText: string) {
+  const source = String(sourceText ?? "");
+  const candidate = String(candidateText ?? "");
+  const warnings: string[] = [];
+  const medicationNames = [...new Set((source.match(highYieldMedicationPattern) ?? []).map((item) => item.toLowerCase()))];
+  medicationNames.forEach((name) => {
+    if (!candidate.toLowerCase().includes(name)) warnings.push(`AI omitted source medication '${name}'; verify A/P or Orders before saving.`);
+  });
+  criticalSourceLabTokens(source).forEach((token) => {
+    if (!candidate.toLowerCase().includes(token.toLowerCase())) warnings.push(`AI omitted high-yield source lab '${token}'; verify O/Lab and A/P before saving.`);
+  });
+  ["CXR", "CT", "MRI", "Echo"].forEach((study) => {
+    if (new RegExp(`\\b${study}\\b`, "i").test(source) && !new RegExp(`\\b${study}\\b`, "i").test(candidate)) {
+      warnings.push(`AI omitted source study '${study}'; verify O/Image before saving.`);
+    }
+  });
+  return warnings;
 }
 
 export function soapBaselineHash(value: string) {
@@ -648,7 +689,7 @@ function analyzeChangedSections(baseline: SoapDraft, candidate: SoapDraft) {
   return changed;
 }
 
-function draftForDailyUpdate(baseline: SoapDraft, candidate: SoapDraft, fields: RoundSoapSourceFields, selectedDate = "") {
+function draftForDailyUpdate(baseline: SoapDraft, candidate: SoapDraft, fields: RoundSoapSourceFields, _selectedDate = "") {
   const profile = sourceProfile(fields);
   const warnings: string[] = [];
   const highRiskWarnings: string[] = [];
@@ -791,20 +832,8 @@ function draftForDailyUpdate(baseline: SoapDraft, candidate: SoapDraft, fields: 
       dcLines: nextDc,
       warnings: uniqueLines([...baseline.warnings, ...candidate.warnings], 5),
     } satisfies SoapDraft;
-  const explicitAntibioticCompletion = /\b(?:completed|done|discontinued|stopped)\b[^\n]*\b(?:abx|antibiotic|teicoplanin|vancomycin|cef\w*|meropenem|ertapenem|pip\/?tazo|zosyn)\b|\b(?:abx|antibiotic|teicoplanin|vancomycin|cef\w*|meropenem|ertapenem|pip\/?tazo|zosyn)\b[^\n]*\b(?:completed|done|discontinued|stopped)\b/i.test(pastedSourceText);
-  const draftWithAntibiotics = explicitAntibioticCompletion
-    ? draftBeforeAntibiotics
-    : ensureAntibioticApInDraft(
-        draftBeforeAntibiotics,
-        [sourceFieldsText(fields), formatSoapDraft(candidate), formatSoapDraft(baseline)].join("\n"),
-        selectedDate,
-      );
-  if (!sameProblems(draftBeforeAntibiotics.apProblems, draftWithAntibiotics.apProblems)) {
-    pushChanged(changed, "ap", "A/P preserved antibiotic/culture plan from source", "normal", false);
-  }
-
   return {
-    draft: draftWithAntibiotics,
+    draft: draftBeforeAntibiotics,
     changed,
     warnings,
     highRiskWarnings,
@@ -829,15 +858,11 @@ export function guardRoundSoapDelta({
   const baseline = parseSoapText(baselineText);
   const parsedCandidate = parseSoapText(candidateText || baselineText);
   const malformedDailyCandidate = workflowMode === "dailyUpdate" && candidateText.trim().length > 0 && !hasSoapBody(parsedCandidate);
-  const candidateWithAntibiotics = ensureAntibioticApInDraft(
-    parsedCandidate,
-    [sourceFieldsText(sourceFields), candidateText, baselineText].join("\n"),
-    selectedDate,
-  );
-  const protectedCandidate = carryForwardProtectedDraft(baseline, candidateWithAntibiotics);
+  const protectedCandidate = carryForwardProtectedDraft(baseline, parsedCandidate);
   const candidate = workflowMode === "dailyUpdate" ? parsedCandidate : protectedCandidate.draft;
   const normalizedBaselineText = formatSoapDraft(baseline);
   const normalizedCandidateText = formatSoapDraft(candidate);
+  const coverageWarnings = sourceCoverageWarnings(sourceFieldsText(sourceFields), normalizedCandidateText);
   if (workflowMode !== "dailyUpdate") {
     return {
       workflowMode,
@@ -845,7 +870,7 @@ export function guardRoundSoapDelta({
       candidateText: normalizedCandidateText,
       acceptedText: normalizedCandidateText,
       changedSections: analyzeChangedSections(baseline, candidate),
-      warnings: uniqueLines([...candidateWarnings, ...protectedCandidate.warnings], 6),
+      warnings: uniqueLines([...candidateWarnings, ...protectedCandidate.warnings, ...coverageWarnings], 8),
       highRiskWarnings: protectedCandidate.warnings.length > 0 ? protectedCandidate.warnings : [],
     };
   }
@@ -860,6 +885,7 @@ export function guardRoundSoapDelta({
     changedSections: daily.changed,
     warnings: uniqueLines([
       ...candidateWarnings,
+      ...coverageWarnings,
       ...(malformedDailyCandidate ? ["AI returned malformed SOAP text; reviewed baseline was preserved except source-supported local guardrails."] : []),
       ...daily.warnings,
     ], 8),

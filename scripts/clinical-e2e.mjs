@@ -506,7 +506,7 @@ function icuTransferScenario() {
   assertCanonicalSurfaces(snapshot, "ICU ward daily Print");
   assertCompactAp(snapshot.draft, "ICU ward daily Print");
   assert(snapshot.visibleObjective.some((line) => /^Lab:/i.test(line)) && snapshot.visibleObjective.some((line) => /^Image:/i.test(line)), "ICU print should show lab and image sections");
-  assert(snapshot.visibleTaskLines.some((line) => /Meropenem|Vanco|apixaban/i.test(line)), "ICU print should keep high-yield order/task line");
+  assert([...snapshot.visibleOrderLines, ...snapshot.visibleTaskLines].some((line) => /Meropenem|Vanco|apixaban/i.test(line)), "ICU print should keep high-yield order/task line");
   assert(snapshot.isComplexPrint, "ICU transfer should auto-expand in Print");
   assertIncludes(snapshot.printPriorityText, /ERCP|source control|shock resolved/i, "ICU priority print keeps source control/resolved shock context");
   assertIncludes(snapshot.printPriorityText, /Cr 2\.1 from 2\.7|K 4\.7|UO/i, "ICU priority print keeps AKI/K/UO");

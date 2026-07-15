@@ -116,6 +116,11 @@ const {
   roundSoapHistoryLimit,
   sanitizeQualityMode,
 } = await server.ssrLoadModule("/functions/src/modelRouting.ts");
+const {
+  deriveInitialRoundSoapWorkflow,
+  roundSoapBaselineForWorkflow,
+  suggestedRoundSoapWorkflow,
+} = await server.ssrLoadModule("/src/roundSoapWorkflow.ts");
 
 function haystack(plan) {
   return [
@@ -1491,6 +1496,16 @@ try {
   if (normalizedDraft.apProblems[0]?.title !== "MRSA/Enterococcus bacteremia" || normalizedDraft.taskLines[0] !== "! f/u repeat B/C") {
     throw new Error(`SOAP bullet guard output did not parse cleanly:\n${JSON.stringify(normalizedDraft, null, 2)}`);
   }
+  const normalizedOrderSoap = normalizeSoapTextForEditor([
+    "Tasks:",
+    "- Order: Ceftriaxone 2 g IV q24h",
+    "- f/u B/C result",
+  ].join("\n"));
+  const normalizedOrderDraft = parseSoapTextToEditorDraft(normalizedOrderSoap);
+  const normalizedOrderOwnership = splitSoapEditorTaskLines(normalizedOrderDraft.taskLines);
+  if (normalizedOrderOwnership.orderLines.length !== 1 || !/Ceftriaxone 2 g IV q24h/i.test(normalizedOrderOwnership.orderLines[0]?.text ?? "")) {
+    throw new Error(`SOAP normalizer stripped Order ownership:\n${normalizedOrderSoap}`);
+  }
   const legacyRedFlagPatient = {
     ...fallbackPatient,
     importantRedFlags: "! Strict I/O\n! recurrent fever or BP drop",
@@ -1637,12 +1652,32 @@ try {
       "藥囑:",
       "piperacillin/tazobactam 5/28-, hold apixaban, O2 NC 3L.",
     ].join("\n"),
+    "newSoap",
   );
   if (!/piperacillin\/tazobactam 5\/28-/i.test(cholangitisLocalSoap) || !/ERCP 5\/28/i.test(cholangitisLocalSoap) || !/PE: icteric sclera/i.test(cholangitisLocalSoap)) {
     throw new Error(`Local demo New SOAP merge lost abx/procedure/PE facts:\n${cholangitisLocalSoap}`);
   }
   if (/V\/S:\s*PE:/i.test(cholangitisLocalSoap)) {
     throw new Error(`Local demo New SOAP merge mislabeled PE as V/S:\n${cholangitisLocalSoap}`);
+  }
+  if (/^# Active problem$|Pending Meds\/OPD\/Cert/m.test(cholangitisLocalSoap)) {
+    throw new Error(`Local demo New SOAP retained legacy fallback placeholders:\n${cholangitisLocalSoap}`);
+  }
+  const mixedSinglePasteSoap = localRoundSoapFromPaste(
+    { ...emptyPatient(), bed: "T-NEW", patientCode: "FAKE-NEW", age: 63, sex: "F" },
+    [],
+    "2026-07-15",
+    "Admission 7/15: fever and RUQ pain. T 38.7, BP 92/58, HR 118, SpO2 94% RA. WBC 18.2, Cr 2.1, K 5.6, lactate 3.4. Blood culture: GNR pending ID. CT A/P 7/15: CBD stone with biliary dilatation. Ceftriaxone plus metronidazole started after cultures. GI consulted for ERCP.",
+    "newSoap",
+  );
+  if (/V\/S:\s*(?:WBC|Blood culture|CT A\/P|Ceftriaxone|GI consulted)/i.test(mixedSinglePasteSoap)) {
+    throw new Error(`Unguided mixed New SOAP still routed non-vital facts into V/S:\n${mixedSinglePasteSoap}`);
+  }
+  if (!/Lab:\s*WBC 18\.2/i.test(mixedSinglePasteSoap) || !/Image:\s*CT A\/P 7\/15/i.test(mixedSinglePasteSoap)) {
+    throw new Error(`Unguided mixed New SOAP did not route lab/image facts correctly:\n${mixedSinglePasteSoap}`);
+  }
+  if (!/# Cholangitis \/ sepsis[\s\S]*(?:ceftriaxone|metronidazole|GNR pending)/i.test(mixedSinglePasteSoap)) {
+    throw new Error(`Unguided mixed New SOAP did not synthesize infection evidence into one A/P:\n${mixedSinglePasteSoap}`);
   }
   const highlighted = soapTextWithDerivedHighlights(reviewedSoapText);
   if (!/!!- Teicoplanin 5\/13-/i.test(highlighted) || !/\[\[orange:.*OPD oncology/i.test(highlighted)) {
@@ -1823,6 +1858,9 @@ try {
   }
   if (!/# Hypernatremia[\s\S]*Na 156/i.test(repetitiveAi.soapText)) {
     throw new Error(`AI SOAP normalizer did not preserve/create sodium A/P from critical O/Lab:\n${repetitiveAi.soapText}`);
+  }
+  if (/free water|transfusion threshold|adjust nephrotoxins|repeat K|f\/u ECG/i.test(repetitiveAi.soapText)) {
+    throw new Error(`AI SOAP validator invented an unsupported treatment plan:\n${repetitiveAi.soapText}`);
   }
   const respiratorySplitAi = normalizeAiSoapText([
     "S:",
@@ -3978,37 +4016,63 @@ try {
 }
 
 try {
+  const fakeNewPatient = { ...emptyPatient(), id: "fake-new", isNewAdmission: true };
+  if (deriveInitialRoundSoapWorkflow([], fakeNewPatient.isNewAdmission) !== "newSoap") {
+    throw new Error("new patient without saved SOAP did not default to New SOAP");
+  }
+  const reviewedNote = { ...emptyDailyNote("2026-07-15"), soapText: "S:\n- stable\nO:\n- V/S: BP 110/70\nA/P:\n# PNA\n- improving", soapStatus: "reviewed" };
+  if (deriveInitialRoundSoapWorkflow([reviewedNote], true) !== "dailyUpdate") {
+    throw new Error("patient with saved SOAP did not default to Daily update");
+  }
+  const fallbackCanonical = { text: "S:\n- -\nO:\nA/P:\n# Active problem", source: "fallback" };
+  if (roundSoapBaselineForWorkflow("newSoap", fallbackCanonical) !== "") {
+    throw new Error("New SOAP still sends legacy fallback text as the AI baseline");
+  }
+  if (roundSoapBaselineForWorkflow("dailyUpdate", fallbackCanonical) !== fallbackCanonical.text) {
+    throw new Error("Daily update lost its available fallback baseline");
+  }
+  if (suggestedRoundSoapWorkflow("ICU transfer SBAR") !== "transferHandoff") {
+    throw new Error("transfer source suggestion no longer detects ICU/SBAR context");
+  }
+  console.log("PASS SOAP workflow selection is explicit and first SOAP excludes legacy fallback baseline");
+  supplementalPasses += 1;
+} catch (error) {
+  failures.push({ name: "SOAP workflow selection", error: error instanceof Error ? error.message : String(error) });
+  console.error(`FAIL SOAP workflow selection: ${failures[failures.length - 1].error}`);
+}
+
+try {
   if (sanitizeQualityMode(undefined) !== "balanced") throw new Error("missing quality did not default to balanced");
-  if (DEFAULT_FAST_MODEL !== "gpt-5.4-mini-2026-03-17") throw new Error(`unexpected fast model: ${DEFAULT_FAST_MODEL}`);
-  if (DEFAULT_BALANCED_MODEL !== "gpt-5.4-2026-03-05") throw new Error(`unexpected balanced model: ${DEFAULT_BALANCED_MODEL}`);
-  if (DEFAULT_HIGH_ACCURACY_MODEL !== "gpt-5.5-2026-04-23") throw new Error(`unexpected high-accuracy model: ${DEFAULT_HIGH_ACCURACY_MODEL}`);
+  if (DEFAULT_FAST_MODEL !== "gpt-5.6-luna") throw new Error(`unexpected fast model: ${DEFAULT_FAST_MODEL}`);
+  if (DEFAULT_BALANCED_MODEL !== "gpt-5.6-terra") throw new Error(`unexpected balanced model: ${DEFAULT_BALANCED_MODEL}`);
+  if (DEFAULT_HIGH_ACCURACY_MODEL !== "gpt-5.6-sol") throw new Error(`unexpected high-accuracy model: ${DEFAULT_HIGH_ACCURACY_MODEL}`);
   if (resolveRoundSoapQuality("balanced", "dailyUpdate", "BP 110/70") !== "balanced") {
     throw new Error("daily update was silently downgraded from balanced");
   }
-  if (resolveRoundSoapQuality("balanced", "transferHandoff", "stable transfer") !== "highAccuracy") {
-    throw new Error("transfer did not route to high accuracy");
+  if (resolveRoundSoapQuality("balanced", "transferHandoff", "stable transfer") !== "balanced") {
+    throw new Error("transfer workflow silently overrode the selected model tier");
   }
   const complexAdmission = "ICU septic shock on norepinephrine with AKI and respiratory failure";
-  if (resolveRoundSoapQuality("balanced", "newSoap", complexAdmission) !== "highAccuracy") {
-    throw new Error("complex first SOAP did not auto-upgrade");
+  if (resolveRoundSoapQuality("balanced", "newSoap", complexAdmission) !== "balanced") {
+    throw new Error("complex first SOAP silently overrode the selected model tier");
   }
-  if (resolveDocumentQuality("balanced", "admissionSummary", complexAdmission) !== "highAccuracy") {
-    throw new Error("complex admission summary did not auto-upgrade");
+  if (resolveDocumentQuality("balanced", "admissionSummary", complexAdmission) !== "balanced") {
+    throw new Error("complex admission summary silently overrode the selected model tier");
   }
-  if (getResponseTuning("balanced", "roundSoapDaily").reasoning.effort !== "low") {
-    throw new Error("routine daily SOAP should use low reasoning on GPT-5.4");
+  if (getResponseTuning("balanced", "roundSoapDaily").reasoning.effort !== "medium") {
+    throw new Error("routine daily SOAP should use medium reasoning on GPT-5.6 Terra");
   }
-  if (getResponseTuning("highAccuracy", "roundSoapFull").reasoning.effort !== "medium") {
-    throw new Error("high-accuracy SOAP should use medium reasoning");
+  if (getResponseTuning("highAccuracy", "roundSoapFull").reasoning.effort !== "high") {
+    throw new Error("high-accuracy SOAP should use high reasoning");
   }
   if (roundSoapHistoryLimit("dailyUpdate") !== 3 || roundSoapHistoryLimit("newSoap") !== 5 || roundSoapHistoryLimit("transferHandoff") !== 10) {
     throw new Error("SOAP history limits no longer match daily/new/transfer context needs");
   }
   const highCandidates = getModelCandidates(DEFAULT_HIGH_ACCURACY_MODEL, "highAccuracy");
-  if (!highCandidates.includes("gpt-5.5") || !highCandidates.some((model) => /^gpt-5\.4(?:-|$)/.test(model))) {
+  if (!highCandidates.includes("gpt-5.6-sol") || !highCandidates.includes("gpt-5.5") || !highCandidates.some((model) => /^gpt-5\.4(?:-|$)/.test(model))) {
     throw new Error(`high-accuracy fallback chain is incomplete: ${highCandidates.join(", ")}`);
   }
-  console.log("PASS AI model routing defaults to GPT-5.4, upgrades complex work, and preserves fallbacks");
+  console.log("PASS AI model routing defaults to GPT-5.6, honors explicit tiers, and preserves fallbacks");
   supplementalPasses += 1;
 } catch (error) {
   failures.push({ name: "AI model routing", error: error instanceof Error ? error.message : String(error) });
@@ -4032,11 +4096,25 @@ try {
     /dangerous Na\/K change/i,
     /same treatment into multiple problems/i,
     /A baseline omission is an intentional clinician edit/i,
+    /SILENT FINAL CHECK BEFORE RETURNING JSON/i,
+    /every current high-risk fact is present once/i,
     /Today's pasted de-identified clinical data:\nNa 158 from 142/i,
   ];
   requiredRules.forEach((pattern) => {
     if (!pattern.test(prompt)) throw new Error(`missing SOAP prompt guardrail: ${pattern}`);
   });
+  const firstSoapPrompt = makeRoundSoapPrompt({
+    sourceType: "admission",
+    workflowMode: "newSoap",
+    selectedDate: "2026-07-10",
+    rawText: "CAP admission with current V/S and labs",
+    currentSoapBaseline: "",
+    patientContext: {},
+    dailyNotes: [],
+  });
+  if (!/do not inherit placeholder, empty-state, legacy-fallback/i.test(firstSoapPrompt)) {
+    throw new Error("New SOAP prompt did not reject legacy fallback/default content");
+  }
   if (prompt.indexOf("SOURCE PACKAGE") < prompt.indexOf("CLINICAL PRIORITIZATION")) {
     throw new Error("dynamic source package appeared before stable clinical instructions");
   }

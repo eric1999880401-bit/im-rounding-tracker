@@ -145,7 +145,7 @@ export function SoapVisualPreview({ value, compact = false, sourceFields = {}, l
         <div className="soap-preview-header">
           {headerLines.slice(0, 4).map((line, index) => (
             <span key={`${line}-${index}`}>
-              <ClinicalInlineText value={normalizeClinicalDisplayTextPreservingMarks(line)} keywordRules={keywordRules} labReferenceDisplay={labReferenceDisplay} />
+              <ClinicalInlineText value={normalizeClinicalDisplayTextPreservingMarks(line)} keywordRules={keywordRules} />
             </span>
           ))}
         </div>
@@ -155,7 +155,7 @@ export function SoapVisualPreview({ value, compact = false, sourceFields = {}, l
         {isLayoutSectionVisible(layoutPreferences, "subjective") && (
           <Section title="S" badge={`${sLines.length || 0}`}>
             {sLines.length > 0 ? (
-              sLines.map((line, index) => <VisualLine key={`${line}-${index}`} text={line} fallbackKind="s" keywordRules={keywordRules} labReferenceDisplay={labReferenceDisplay} />)
+              sLines.map((line, index) => <VisualLine key={`${line}-${index}`} text={line} fallbackKind="s" keywordRules={keywordRules} />)
             ) : (
               <EmptyLine />
             )}
@@ -167,7 +167,7 @@ export function SoapVisualPreview({ value, compact = false, sourceFields = {}, l
             {displayObjectiveCount > 0 ? (
               <>
                 {objectiveNonLabLines.map((line, index) => (
-                  <VisualLine key={`${line}-${index}`} text={line} keywordRules={keywordRules} labReferenceDisplay={labReferenceDisplay} />
+                  <VisualLine key={`${line}-${index}`} text={line} keywordRules={keywordRules} />
                 ))}
                 {labVisualLines.map((line, index) => (
                   <VisualLine key={`lab-visual-${line}-${index}`} label="LAB" text={line} fallbackKind="lab" keywordRules={keywordRules} labReferenceDisplay={labReferenceDisplay} />
@@ -181,7 +181,7 @@ export function SoapVisualPreview({ value, compact = false, sourceFields = {}, l
 
         {isLayoutSectionVisible(layoutPreferences, "assessmentPlan") && layoutPreferences?.apDisplayMode === "merged" && (
           <Section title="A/P" badge={apProblems.length ? "merged" : "0"} important={apProblems.length > 0}>
-            {mergedApLine ? <VisualLine text={mergedApLine} fallbackKind="ap" keywordRules={keywordRules} labReferenceDisplay={labReferenceDisplay} /> : <EmptyLine />}
+            {mergedApLine ? <VisualLine text={mergedApLine} fallbackKind="ap" keywordRules={keywordRules} /> : <EmptyLine />}
           </Section>
         )}
 
@@ -196,12 +196,12 @@ export function SoapVisualPreview({ value, compact = false, sourceFields = {}, l
                   >
                     <div className="soap-preview-problem-title">
                       <span>#</span>
-                      <ClinicalText value={highlighted(problem.title)} maxCharsPerLine={100} keywordRules={keywordRules} labReferenceDisplay={labReferenceDisplay} />
+                      <ClinicalText value={highlighted(problem.title)} maxCharsPerLine={100} keywordRules={keywordRules} />
                     </div>
                     {problem.lines.length > 0 && (
                       <div className="soap-preview-problem-lines">
                         {problem.lines.map((line, lineIndex) => (
-                          <VisualLine key={`${line}-${lineIndex}`} text={line} fallbackKind="ap" keywordRules={keywordRules} labReferenceDisplay={labReferenceDisplay} />
+                          <VisualLine key={`${line}-${lineIndex}`} text={line} fallbackKind="ap" keywordRules={keywordRules} />
                         ))}
                       </div>
                     )}
@@ -217,7 +217,7 @@ export function SoapVisualPreview({ value, compact = false, sourceFields = {}, l
         {isLayoutSectionVisible(layoutPreferences, "orders") && (
           <Section title="藥囑" badge={`${displayOrderLines.length || 0}`}>
             {displayOrderLines.length > 0 ? (
-              displayOrderLines.map((line, index) => <VisualLine key={`${line}-${index}`} text={line} fallbackKind="task" keywordRules={keywordRules} labReferenceDisplay={labReferenceDisplay} />)
+              displayOrderLines.map((line, index) => <VisualLine key={`${line}-${index}`} text={line} fallbackKind="task" keywordRules={keywordRules} />)
             ) : (
               <EmptyLine text={layoutPreferences?.orderDisplayMode === "collapsed" ? "藥囑已收起" : "無藥囑"} />
             )}
@@ -227,7 +227,7 @@ export function SoapVisualPreview({ value, compact = false, sourceFields = {}, l
         {isLayoutSectionVisible(layoutPreferences, "tasks") && (
           <Section title="Tasks" badge={`${taskLines.length || 0}`}>
             {taskLines.length > 0 ? (
-              taskLines.map((line, index) => <VisualLine key={`${line}-${index}`} text={line} fallbackKind="task" keywordRules={keywordRules} labReferenceDisplay={labReferenceDisplay} />)
+              taskLines.map((line, index) => <VisualLine key={`${line}-${index}`} text={line} fallbackKind="task" keywordRules={keywordRules} />)
             ) : (
               <EmptyLine text="No pending task" />
             )}
@@ -237,7 +237,7 @@ export function SoapVisualPreview({ value, compact = false, sourceFields = {}, l
         {(isLayoutSectionVisible(layoutPreferences, "dcBarriers") || isLayoutSectionVisible(layoutPreferences, "dcPrep")) && (
           <Section title="DC" badge={`${dcLines.length || 0}`}>
             {dcLines.length > 0 ? (
-              dcLines.map((line, index) => <VisualLine key={`${line}-${index}`} text={line} fallbackKind="dc" keywordRules={keywordRules} labReferenceDisplay={labReferenceDisplay} />)
+              dcLines.map((line, index) => <VisualLine key={`${line}-${index}`} text={line} fallbackKind="dc" keywordRules={keywordRules} />)
             ) : (
               <EmptyLine text="No DC item" />
             )}

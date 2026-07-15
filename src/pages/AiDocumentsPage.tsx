@@ -67,9 +67,9 @@ const isbarHeadings = ["Situation", "Background", "Assessment", "Recommendation"
 type AiQualityMode = "fast" | "balanced" | "highAccuracy";
 
 const qualityModeOptions: Array<{ value: AiQualityMode; label: string; helper: string }> = [
-  { value: "fast", label: "Efficient (GPT-5.4 mini)", helper: "Use only for simple, low-risk formatting when cost matters most." },
-  { value: "balanced", label: "Recommended (GPT-5.4)", helper: "Best value for routine SOAP, discharge, and weekly drafts." },
-  { value: "highAccuracy", label: "Best quality (GPT-5.5)", helper: "Recommended for admission summaries and complex ICU/oncology material." },
+  { value: "fast", label: "Efficient (GPT-5.6 Luna)", helper: "Use for simple, low-risk formatting when cost matters most." },
+  { value: "balanced", label: "Recommended (GPT-5.6 Terra)", helper: "Best value for routine discharge and weekly drafts." },
+  { value: "highAccuracy", label: "Best quality (GPT-5.6 Sol)", helper: "Recommended for admission summaries, iSBAR, and complex ICU/oncology material." },
 ];
 
 function recommendedQualityForDocument(documentType: AiDocumentType): AiQualityMode {
