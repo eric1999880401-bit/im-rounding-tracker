@@ -9,47 +9,33 @@ import type {
   GenerateRoundSoapInput,
   GenerateRoundSoapResult,
 } from "../types";
+import { aiCallableMessage } from "../aiErrorMessage";
+import { DEFAULT_AI_CALLABLE_TIMEOUT_MS, ROUND_SOAP_CALLABLE_TIMEOUT_MS } from "../aiTimeouts";
 import { functions } from "./firebase";
 
 const analyzeClinicalTextCallable = httpsCallable<AnalyzeClinicalTextInput, AnalyzeClinicalTextResult>(
   functions,
   "analyzeClinicalText",
+  { timeout: DEFAULT_AI_CALLABLE_TIMEOUT_MS },
 );
 
 const generateClinicalDocumentCallable = httpsCallable<GenerateClinicalDocumentInput, GenerateClinicalDocumentResult>(
   functions,
   "generateClinicalDocument",
+  { timeout: DEFAULT_AI_CALLABLE_TIMEOUT_MS },
 );
 
 const analyzePatientBatchTextCallable = httpsCallable<AnalyzePatientBatchTextInput, AnalyzePatientBatchTextResult>(
   functions,
   "analyzePatientBatchText",
+  { timeout: DEFAULT_AI_CALLABLE_TIMEOUT_MS },
 );
 
 const generateRoundSoapCallable = httpsCallable<GenerateRoundSoapInput, GenerateRoundSoapResult>(
   functions,
   "generateRoundSoap",
+  { timeout: ROUND_SOAP_CALLABLE_TIMEOUT_MS },
 );
-
-function aiCallableMessage(error: unknown, feature: string) {
-  const value = error as { code?: string; message?: string; details?: unknown };
-  const code = String(value?.code ?? "").toLowerCase();
-  const message = String(value?.message ?? "").trim();
-  const details = typeof value?.details === "string" ? value.details.trim() : "";
-  const text = message && message.toLowerCase() !== "internal" ? message : details;
-
-  if (text && !/^internal$/i.test(text)) return text;
-  if (code.includes("unauthenticated")) return "Sign in again, then retry.";
-  if (code.includes("not-found")) return `${feature} is not available. Check the Functions deployment and configured OpenAI model route.`;
-  if (code.includes("failed-precondition")) return `${feature} is not configured. Check OPENAI_API_KEY in Firebase Functions.`;
-  if (code.includes("invalid-argument")) return `${feature} could not run because the request was incomplete or unsafe. Check de-identification and pasted text length.`;
-  if (code.includes("permission-denied")) return `${feature} is blocked by OpenAI or Firebase permissions. Check the API key, model access, and function logs.`;
-  if (code.includes("resource-exhausted")) return "AI quota or rate limit reached. Retry later or check OpenAI billing/limits.";
-  if (code.includes("unavailable")) return "AI service is temporarily unavailable. Retry later.";
-  if (code.includes("data-loss")) return "AI returned malformed output. Retry generation; no patient data was saved.";
-  if (code.includes("internal")) return `${feature} failed inside Firebase Functions. Check function logs for OpenAI key/model/schema errors.`;
-  return `${feature} failed. No patient data was saved.`;
-}
 
 export async function analyzeClinicalText(input: AnalyzeClinicalTextInput) {
   const result = await analyzeClinicalTextCallable(input);

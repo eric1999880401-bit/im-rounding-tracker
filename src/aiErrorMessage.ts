@@ -1,0 +1,22 @@
+export function aiCallableMessage(error: unknown, feature: string) {
+  const value = error as { code?: string; message?: string; details?: unknown };
+  const code = String(value?.code ?? "").toLowerCase();
+  const message = String(value?.message ?? "").trim();
+  const details = typeof value?.details === "string" ? value.details.trim() : "";
+  const text = message && message.toLowerCase() !== "internal" ? message : details;
+
+  if (code.includes("deadline-exceeded")) {
+    return `${feature} exceeded the generation time limit. The current SOAP was preserved; retry once or use Recommended rather than Best quality for a very long admission.`;
+  }
+  if (code.includes("unauthenticated")) return "Sign in again, then retry.";
+  if (code.includes("not-found")) return `${feature} is not available. Check the Functions deployment and configured OpenAI model route.`;
+  if (code.includes("failed-precondition")) return `${feature} is not configured. Check OPENAI_API_KEY in Firebase Functions.`;
+  if (code.includes("invalid-argument")) return `${feature} could not run because the request was incomplete or unsafe. Check de-identification and pasted text length.`;
+  if (code.includes("permission-denied")) return `${feature} is blocked by OpenAI or Firebase permissions. Check the API key, model access, and function logs.`;
+  if (code.includes("resource-exhausted")) return "AI quota or rate limit reached. Retry later or check OpenAI billing/limits.";
+  if (code.includes("unavailable")) return "AI service is temporarily unavailable. Retry later.";
+  if (code.includes("data-loss")) return "AI returned malformed output. Retry generation; no patient data was saved.";
+  if (code.includes("internal")) return `${feature} failed inside Firebase Functions. Check function logs for OpenAI key/model/schema errors.`;
+  if (text && !/^internal$/i.test(text)) return text;
+  return `${feature} failed. No patient data was saved.`;
+}

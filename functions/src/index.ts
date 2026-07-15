@@ -12,7 +12,7 @@ import { documentTypes, sourceTypes } from "./types";
 import type { CallableInput, DocumentCallableInput, DocumentType, PatientBatchCallableInput, RoundSoapCallableInput, SourceType } from "./types";
 import { OPENAI_API_KEY, extractOutputText, extractRefusal, getModel, getModelForQuality, getOpenAiApiKey, getOpenAiErrorMessage, getResponseTuning, openAiHttpsError, postOpenAiResponse, sanitizeQualityMode } from "./openai";
 import type { AiQualityMode } from "./openai";
-import { resolveDocumentQuality, resolveRoundSoapQuality, roundSoapHistoryLimit } from "./modelRouting";
+import { resolveDocumentQuality, resolveRoundSoapQuality, ROUND_SOAP_FUNCTION_TIMEOUT_SECONDS, ROUND_SOAP_OPENAI_RESPONSE_TIMEOUT_MS, roundSoapHistoryLimit } from "./modelRouting";
 import { asPlainObject, compactDailyNote, compactPatientContext, concretizeVagueFollowUps, findTargetPatientForBatch, leanSoapCleanup, sanitizeExistingPatientsForBatch, sanitizePatientBatchImportMode, sanitizePatientBatchOutput, sanitizePatientContext, sanitizeUserStyleProfile, truncateString } from "./sanitize";
 import { buildSoapPatch } from "./soapPatch";
 import { admissionSummaryStyleBullets, documentInstructions, makeBatchImportPrompt, makeDocumentPrompt, makePrompt } from "./prompts";
@@ -134,7 +134,7 @@ export const analyzePatientBatchText = onCall(
 export const generateRoundSoap = onCall(
   {
     secrets: [OPENAI_API_KEY],
-    timeoutSeconds: 120,
+    timeoutSeconds: ROUND_SOAP_FUNCTION_TIMEOUT_SECONDS,
     memory: "512MiB",
   },
   async (request) => {
@@ -156,6 +156,7 @@ export const generateRoundSoap = onCall(
     const deidentifiedConfirmed = data.deidentifiedConfirmed === true;
     const requestedQualityMode = sanitizeQualityMode(data.qualityMode);
     const qualityMode = resolveRoundSoapQuality(requestedQualityMode, workflowMode, rawText);
+    const requestStartedAt = Date.now();
 
     if (!patientId) {
       throw new HttpsError("invalid-argument", "patientId is required.");
@@ -188,10 +189,11 @@ export const generateRoundSoap = onCall(
       throw new HttpsError("failed-precondition", "SOAP generation is not configured. Set OPENAI_API_KEY for Firebase Functions.");
     }
 
-    const notesSnapshot = await patientRef.collection("dailyNotes").orderBy("date", "asc").get();
+    const historyLimit = roundSoapHistoryLimit(workflowMode);
+    const notesSnapshot = await patientRef.collection("dailyNotes").orderBy("date", "desc").limit(historyLimit).get();
     const dailyNotes = notesSnapshot.docs
       .map((noteDoc) => compactDailyNote(noteDoc.id, noteDoc.data()))
-      .slice(-roundSoapHistoryLimit(workflowMode));
+      .reverse();
     const patientContext = {
       ...compactPatientContext(patientSnapshot.data()),
       ...(sanitizePatientContext(data.patientContext) ?? {}),
@@ -199,10 +201,21 @@ export const generateRoundSoap = onCall(
     const userStyleProfile = sanitizeUserStyleProfile(data.userStyleProfile);
     const requestedModel = getModelForQuality(qualityMode);
     const tuning = getResponseTuning(qualityMode, workflowMode === "dailyUpdate" ? "roundSoapDaily" : "roundSoapFull");
+    logger.info("generateRoundSoap request prepared", {
+      workflowMode,
+      sourceType,
+      qualityMode,
+      requestedModel,
+      rawTextChars: rawText.length,
+      baselineChars: currentSoapBaseline.length,
+      historyNotes: dailyNotes.length,
+      maxOutputTokens: tuning.max_output_tokens,
+    });
     const { response: openAiResponse, body: responseBody, model } = await postOpenAiResponse({
       apiKey,
       model: requestedModel,
       qualityMode,
+      timeoutMs: ROUND_SOAP_OPENAI_RESPONSE_TIMEOUT_MS,
       payload: {
         reasoning: tuning.reasoning,
         max_output_tokens: tuning.max_output_tokens,
@@ -272,6 +285,14 @@ export const generateRoundSoap = onCall(
     if (!soapText) {
       throw new HttpsError("data-loss", "OpenAI returned an empty SOAP draft. Retry generation; no patient data was saved.");
     }
+
+    logger.info("generateRoundSoap draft completed", {
+      workflowMode,
+      qualityMode,
+      model,
+      durationMs: Date.now() - requestStartedAt,
+      soapTextChars: soapText.length,
+    });
 
     return {
       draftId: admin.firestore().collection("_aiDraftIds").doc().id,

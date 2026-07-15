@@ -11,6 +11,40 @@ interface RoundSoapPromptParams {
   dailyNotes: Array<Record<string, unknown>>;
 }
 
+function shortPromptValue(value: unknown, maxLength: number) {
+  const text = String(value ?? "").trim();
+  if (text.length <= maxLength) return text;
+  return `${text.slice(0, Math.max(0, maxLength - 14)).trimEnd()} [truncated]`;
+}
+
+export function compactRoundSoapPromptHistory(dailyNotes: Array<Record<string, unknown>>) {
+  return dailyNotes.map((note) => {
+    const date = shortPromptValue(note.date, 20);
+    const soapText = shortPromptValue(note.soapText, 6_000);
+    if (soapText) {
+      return {
+        date,
+        soapStatus: shortPromptValue(note.soapStatus, 40),
+        soapText,
+      };
+    }
+
+    return {
+      date,
+      redFlags: shortPromptValue(note.redFlags, 600),
+      overnight: shortPromptValue(note.overnight, 800),
+      subjective: shortPromptValue(note.subjective, 800),
+      vitalSigns: shortPromptValue(note.vitalSigns, 600),
+      physicalExam: shortPromptValue(note.physicalExam, 800),
+      labs: shortPromptValue(note.labs, 1_200),
+      images: shortPromptValue(note.images, 1_000),
+      assessment: shortPromptValue(note.assessment, 1_200),
+      plan: shortPromptValue(note.plan, 1_200),
+      dischargePlan: shortPromptValue(note.dischargePlan, 800),
+    };
+  });
+}
+
 function workflowContract(workflowMode: string) {
   if (workflowMode === "dailyUpdate") {
     return [
@@ -97,11 +131,11 @@ export function makeRoundSoapPrompt(params: RoundSoapPromptParams) {
     `Source type: ${params.sourceType}`,
     `Workflow mode: ${params.workflowMode}`,
     "Allowed patient context:",
-    JSON.stringify(params.patientContext, null, 2),
+    JSON.stringify(params.patientContext),
     "Abstract user style profile; use for voice only, never as patient facts:",
-    JSON.stringify(params.userStyleProfile ?? {}, null, 2),
+    JSON.stringify(params.userStyleProfile ?? {}),
     "Recent saved daily notes, oldest to newest:",
-    JSON.stringify(params.dailyNotes, null, 2),
+    JSON.stringify(compactRoundSoapPromptHistory(params.dailyNotes)),
     "Current reviewed SOAP baseline:",
     params.currentSoapBaseline || "(none)",
     "Today's pasted de-identified clinical data:",

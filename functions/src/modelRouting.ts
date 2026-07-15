@@ -7,6 +7,9 @@ export const DEFAULT_FAST_MODEL = "gpt-5.6-luna";
 export const DEFAULT_BALANCED_MODEL = "gpt-5.6-terra";
 export const DEFAULT_HIGH_ACCURACY_MODEL = "gpt-5.6-sol";
 export const DEFAULT_MODEL = DEFAULT_BALANCED_MODEL;
+export const OPENAI_RESPONSE_TIMEOUT_MS = 105_000;
+export const ROUND_SOAP_OPENAI_RESPONSE_TIMEOUT_MS = 145_000;
+export const ROUND_SOAP_FUNCTION_TIMEOUT_SECONDS = 180;
 
 const LEGACY_FAST_MODEL = "gpt-5.4-mini-2026-03-17";
 const LEGACY_BALANCED_MODEL = "gpt-5.4-2026-03-05";
@@ -65,7 +68,13 @@ export function getResponseTuning(qualityMode: AiQualityMode, workload: AiWorklo
     : qualityMode === "highAccuracy"
       ? "high"
       : "medium";
-  const maxOutputTokens = workload === "batch" ? 16000 : workload === "document" ? 8000 : workload === "roundSoapFull" ? 7000 : 5000;
+  const maxOutputTokens = workload === "batch"
+    ? 16000
+    : workload === "document"
+      ? 8000
+      : workload === "roundSoapFull"
+        ? qualityMode === "highAccuracy" ? 6000 : qualityMode === "balanced" ? 4500 : 3500
+        : qualityMode === "highAccuracy" ? 4500 : qualityMode === "balanced" ? 3200 : 2400;
   return {
     reasoning: { effort: reasoningEffort },
     max_output_tokens: maxOutputTokens,
@@ -83,7 +92,7 @@ export function resolveDocumentQuality(requested: AiQualityMode, _documentType: 
 }
 
 export function roundSoapHistoryLimit(workflowMode: string) {
-  if (workflowMode === "transferHandoff") return 10;
-  if (workflowMode === "newSoap") return 5;
-  return 3;
+  if (workflowMode === "transferHandoff") return 5;
+  if (workflowMode === "newSoap") return 1;
+  return 2;
 }

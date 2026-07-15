@@ -104,18 +104,23 @@ const {
 } = await server.ssrLoadModule("/src/draftRecovery.ts");
 const { appendSoapEditTrace, buildSoapEditTrace, nextSoapVersion, SOAP_EDIT_HISTORY_LIMIT } = await server.ssrLoadModule("/src/soapEditTrace.ts");
 const { SoapVisualPreview } = await server.ssrLoadModule("/src/components/SoapVisualPreview.tsx");
-const { makeRoundSoapPrompt } = await server.ssrLoadModule("/functions/src/roundSoapPrompt.ts");
+const { compactRoundSoapPromptHistory, makeRoundSoapPrompt } = await server.ssrLoadModule("/functions/src/roundSoapPrompt.ts");
 const {
   DEFAULT_BALANCED_MODEL,
   DEFAULT_FAST_MODEL,
   DEFAULT_HIGH_ACCURACY_MODEL,
   getModelCandidates,
   getResponseTuning,
+  OPENAI_RESPONSE_TIMEOUT_MS,
   resolveDocumentQuality,
   resolveRoundSoapQuality,
+  ROUND_SOAP_FUNCTION_TIMEOUT_SECONDS,
+  ROUND_SOAP_OPENAI_RESPONSE_TIMEOUT_MS,
   roundSoapHistoryLimit,
   sanitizeQualityMode,
 } = await server.ssrLoadModule("/functions/src/modelRouting.ts");
+const { DEFAULT_AI_CALLABLE_TIMEOUT_MS, ROUND_SOAP_CALLABLE_TIMEOUT_MS } = await server.ssrLoadModule("/src/aiTimeouts.ts");
+const { aiCallableMessage } = await server.ssrLoadModule("/src/aiErrorMessage.ts");
 const {
   deriveInitialRoundSoapWorkflow,
   roundSoapBaselineForWorkflow,
@@ -4059,24 +4064,71 @@ try {
   if (resolveDocumentQuality("balanced", "admissionSummary", complexAdmission) !== "balanced") {
     throw new Error("complex admission summary silently overrode the selected model tier");
   }
-  if (getResponseTuning("balanced", "roundSoapDaily").reasoning.effort !== "medium") {
+  const balancedDailyTuning = getResponseTuning("balanced", "roundSoapDaily");
+  const balancedFullTuning = getResponseTuning("balanced", "roundSoapFull");
+  if (balancedDailyTuning.reasoning.effort !== "medium") {
     throw new Error("routine daily SOAP should use medium reasoning on GPT-5.6 Terra");
+  }
+  if (balancedDailyTuning.max_output_tokens !== 3200 || balancedFullTuning.max_output_tokens !== 4500) {
+    throw new Error(`balanced SOAP output budgets are too large or unstable: daily=${balancedDailyTuning.max_output_tokens}, full=${balancedFullTuning.max_output_tokens}`);
   }
   if (getResponseTuning("highAccuracy", "roundSoapFull").reasoning.effort !== "high") {
     throw new Error("high-accuracy SOAP should use high reasoning");
   }
-  if (roundSoapHistoryLimit("dailyUpdate") !== 3 || roundSoapHistoryLimit("newSoap") !== 5 || roundSoapHistoryLimit("transferHandoff") !== 10) {
-    throw new Error("SOAP history limits no longer match daily/new/transfer context needs");
+  if (roundSoapHistoryLimit("dailyUpdate") !== 2 || roundSoapHistoryLimit("newSoap") !== 1 || roundSoapHistoryLimit("transferHandoff") !== 5) {
+    throw new Error("SOAP history limits no longer match the deadline-safe daily/new/transfer context budget");
+  }
+  if (
+    DEFAULT_AI_CALLABLE_TIMEOUT_MS <= 120_000 ||
+    ROUND_SOAP_CALLABLE_TIMEOUT_MS <= ROUND_SOAP_FUNCTION_TIMEOUT_SECONDS * 1_000 ||
+    OPENAI_RESPONSE_TIMEOUT_MS >= 120_000 ||
+    ROUND_SOAP_OPENAI_RESPONSE_TIMEOUT_MS >= ROUND_SOAP_FUNCTION_TIMEOUT_SECONDS * 1_000
+  ) {
+    throw new Error(
+      `AI deadlines are not ordered safely: defaultClient=${DEFAULT_AI_CALLABLE_TIMEOUT_MS}, roundClient=${ROUND_SOAP_CALLABLE_TIMEOUT_MS}, defaultOpenAI=${OPENAI_RESPONSE_TIMEOUT_MS}, roundOpenAI=${ROUND_SOAP_OPENAI_RESPONSE_TIMEOUT_MS}, function=${ROUND_SOAP_FUNCTION_TIMEOUT_SECONDS * 1_000}`,
+    );
   }
   const highCandidates = getModelCandidates(DEFAULT_HIGH_ACCURACY_MODEL, "highAccuracy");
   if (!highCandidates.includes("gpt-5.6-sol") || !highCandidates.includes("gpt-5.5") || !highCandidates.some((model) => /^gpt-5\.4(?:-|$)/.test(model))) {
     throw new Error(`high-accuracy fallback chain is incomplete: ${highCandidates.join(", ")}`);
   }
-  console.log("PASS AI model routing defaults to GPT-5.6, honors explicit tiers, and preserves fallbacks");
+  const deadlineMessage = aiCallableMessage(
+    { code: "functions/deadline-exceeded", message: "deadline-exceeded" },
+    "SOAP generation",
+  );
+  if (!/time limit.*current SOAP was preserved/i.test(deadlineMessage)) {
+    throw new Error(`deadline error is not actionable or baseline-safe: ${deadlineMessage}`);
+  }
+  console.log("PASS AI model routing uses deadline-safe budgets, explicit tiers, and preserved fallbacks");
   supplementalPasses += 1;
 } catch (error) {
   failures.push({ name: "AI model routing", error: error instanceof Error ? error.message : String(error) });
   console.error(`FAIL AI model routing: ${failures[failures.length - 1].error}`);
+}
+
+try {
+  const oversizedReviewedSoap = [
+    {
+      date: "2026-07-14",
+      soapStatus: "reviewed",
+      soapText: `S:\n- stable\nO:\n${"Lab: WBC 12.7, Cr 2.1, K 5.3\n".repeat(400)}`,
+      labs: "This duplicate legacy lab payload must not be included beside canonical soapText.",
+      images: "This duplicate legacy image payload must not be included beside canonical soapText.",
+    },
+  ];
+  const compactHistory = compactRoundSoapPromptHistory(oversizedReviewedSoap);
+  const compactJson = JSON.stringify(compactHistory);
+  if (compactJson.length > 6_500 || !/\[truncated\]/.test(compactJson)) {
+    throw new Error(`reviewed SOAP history did not respect its prompt budget: ${compactJson.length}`);
+  }
+  if (/duplicate legacy lab payload|duplicate legacy image payload/i.test(compactJson)) {
+    throw new Error("reviewed SOAP history duplicated legacy lab/image fields beside canonical soapText");
+  }
+  console.log("PASS SOAP prompt history is compact, canonical-first, and deadline-safe");
+  supplementalPasses += 1;
+} catch (error) {
+  failures.push({ name: "SOAP prompt history budget", error: error instanceof Error ? error.message : String(error) });
+  console.error(`FAIL SOAP prompt history budget: ${failures[failures.length - 1].error}`);
 }
 
 try {

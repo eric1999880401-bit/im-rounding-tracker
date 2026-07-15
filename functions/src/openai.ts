@@ -2,7 +2,7 @@
 import { logger } from "firebase-functions";
 import { defineSecret } from "firebase-functions/params";
 import { HttpsError } from "firebase-functions/v2/https";
-import { getModelCandidates } from "./modelRouting";
+import { getModelCandidates, OPENAI_RESPONSE_TIMEOUT_MS } from "./modelRouting";
 import type { AiQualityMode } from "./modelRouting";
 
 export {
@@ -41,23 +41,77 @@ export async function postOpenAiResponse(params: {
   model: string;
   qualityMode: AiQualityMode;
   payload: Record<string, unknown>;
+  timeoutMs?: number;
 }) {
   const candidates = getModelCandidates(params.model, params.qualityMode);
   let lastResponse: Response | null = null;
   let lastBody: Record<string, unknown> = {};
   let usedModel = params.model;
+  const requestStartedAt = Date.now();
+  const requestTimeoutMs = params.timeoutMs ?? OPENAI_RESPONSE_TIMEOUT_MS;
+  const requestDeadlineAt = requestStartedAt + requestTimeoutMs;
 
-  for (const candidate of candidates) {
+  for (const [candidateIndex, candidate] of candidates.entries()) {
     usedModel = candidate;
-    const response = await fetch("https://api.openai.com/v1/responses", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${params.apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ ...params.payload, model: candidate }),
+    const remainingMs = requestDeadlineAt - Date.now();
+    if (remainingMs < 1_000) {
+      throw new HttpsError(
+        "deadline-exceeded",
+        "OpenAI did not finish the SOAP draft in time. The current SOAP was preserved; retry generation.",
+      );
+    }
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), remainingMs);
+    const candidateStartedAt = Date.now();
+    logger.info("OpenAI response request started", {
+      model: candidate,
+      qualityMode: params.qualityMode,
+      candidateIndex,
+      candidateCount: candidates.length,
+      timeoutMs: requestTimeoutMs,
     });
+
+    let response: Response;
+    try {
+      response = await fetch("https://api.openai.com/v1/responses", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${params.apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ ...params.payload, model: candidate }),
+        signal: controller.signal,
+      });
+    } catch (error) {
+      if (controller.signal.aborted || (error instanceof Error && error.name === "AbortError")) {
+        logger.warn("OpenAI response request exceeded deadline", {
+          model: candidate,
+          qualityMode: params.qualityMode,
+          durationMs: Date.now() - candidateStartedAt,
+        });
+        throw new HttpsError(
+          "deadline-exceeded",
+          "OpenAI did not finish the SOAP draft in time. The current SOAP was preserved; retry generation.",
+        );
+      }
+      logger.error("OpenAI response request failed before a response", {
+        model: candidate,
+        qualityMode: params.qualityMode,
+        errorName: error instanceof Error ? error.name : "unknown",
+      });
+      throw new HttpsError("unavailable", "OpenAI could not be reached. Retry generation; no patient data was saved.");
+    } finally {
+      clearTimeout(timeoutId);
+    }
+
     const body = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+    logger.info("OpenAI response request completed", {
+      model: candidate,
+      qualityMode: params.qualityMode,
+      status: response.status,
+      durationMs: Date.now() - candidateStartedAt,
+    });
     lastResponse = response;
     lastBody = body;
     if (response.ok || !isModelUnavailable(response.status, body)) break;
