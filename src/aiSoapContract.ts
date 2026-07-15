@@ -2,6 +2,7 @@ import { formatSoapDraft, normalizeSoapTextForEditor, parseSoapText, type SoapDr
 import { classifyClinicalLine } from "./clinicalLineClassifier";
 import { normalizeApProblems } from "./apProblemNormalizer";
 import { leanSoapCleanup } from "./aiPostprocess/soapLeanCleanup";
+import { formatObjectiveLabVisualSummaryLines } from "./labVisualSummary";
 import { parseLabReports, safeClinicalLinePreservingMarks } from "./utils";
 
 export const AI_SOAP_OUTPUT_CONTRACT_VERSION = "ai-soap-v2";
@@ -211,12 +212,21 @@ function normalizeTaskAndDcOwnership(taskLines: string[], dcLines: string[], apP
 }
 
 export function normalizeAiSoapDraft(draft: SoapDraft): SoapDraft {
-  const apProblems = normalizedApProblems(draft);
+  const oLines = normalizeLines(
+    formatObjectiveLabVisualSummaryLines(draft.oLines.map(normalizeObjectiveLine), {
+      maxGroups: 7,
+      maxItemsPerGroup: 12,
+      maxCharsPerGroup: 240,
+    }),
+    12,
+    240,
+  );
+  const apProblems = normalizedApProblems({ ...draft, oLines });
   const owned = normalizeTaskAndDcOwnership(draft.taskLines, draft.dcLines, apProblems);
   return {
     header: normalizeLines(draft.header, 8, 150),
     sLines: normalizeLines(draft.sLines, 8, 140),
-    oLines: normalizeLines(draft.oLines.map(normalizeObjectiveLine), 16, 180),
+    oLines,
     apProblems,
     taskLines: owned.taskLines,
     dcLines: owned.dcLines,

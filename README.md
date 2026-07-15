@@ -96,7 +96,7 @@ OPENAI_MODEL_FAST=gpt-5.6-luna
 OPENAI_MODEL_HIGH_ACCURACY=gpt-5.6-sol
 ```
 
-`OPENAI_MODEL` remains a legacy override for the balanced route. The UI recommends Sol for Transfer SOAP, but the selected tier is always honored. If a GPT-5.6 route is unavailable, the callable falls back to its prior GPT-5.4/5.5 equivalent; the high-accuracy route can then fall back to the balanced model.
+`OPENAI_MODEL` remains a legacy environment-variable name for the balanced route, but its value must be a GPT-5.6 model. The UI recommends Sol for Transfer SOAP, and the selected tier is always honored. Fallbacks stay inside the GPT-5.6 family: Sol -> Terra -> Luna, Terra -> Luna, and Luna -> Terra. Older GPT-5.4/5.5 environment values are ignored and replaced by the matching default GPT-5.6 route.
 
 Deploy backend functions and rules:
 

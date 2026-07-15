@@ -172,7 +172,7 @@ export function getOpenAiErrorMessage(status: number, responseBody: Record<strin
   }
 
   if (status === 404 || code === "model_not_found") {
-    return "OpenAI model is unavailable. Check the selected model and OPENAI_MODEL_BALANCED / FAST / HIGH_ACCURACY in Firebase Functions.";
+    return "The selected GPT-5.6 model is unavailable. Check OPENAI_MODEL_BALANCED / FAST / HIGH_ACCURACY in Firebase Functions.";
   }
 
   if (status === 429) {

@@ -111,6 +111,7 @@ const {
   DEFAULT_HIGH_ACCURACY_MODEL,
   getModelCandidates,
   getResponseTuning,
+  isGpt56Model,
   OPENAI_RESPONSE_TIMEOUT_MS,
   resolveDocumentQuality,
   resolveRoundSoapQuality,
@@ -654,10 +655,9 @@ try {
   const lines = formatLabVisualSummaryLinesFromText(groupedLabText, { maxGroups: 8, maxItemsPerGroup: 8 });
   const joined = lines.join("\n");
   for (const required of [
-    /CBC:.*WBC 12\.7.*Neu 88\.9.*Hb 9\.4.*Plt 259/i,
-    /Renal\/Lyte:.*Cr 0\.46.*Na 139.*K 3\.0/i,
+    /CBC\/DC:.*WBC 12\.7.*Neu 88\.9.*Hb 9\.4.*Plt 259/i,
+    /Chem\/Renal:.*BUN 16.*Cr 0\.46.*Na 139.*K 3\.0.*Lactate 3\.1/i,
     /Liver\/Coag:.*AST 175.*ALT 419.*INR 1\.8/i,
-    /Infx\/Perfusion:.*Lactate 3\.1/i,
     /Cardiac:.*Troponin I 0\.011/i,
   ]) {
     if (!required.test(joined)) throw new Error(`visual lab summary missing grouped line ${required}:\n${joined}`);
@@ -666,7 +666,7 @@ try {
     throw new Error(`visual lab summary should not include reference ranges or hidden-routine placeholders:\n${joined}`);
   }
   const toneMap = new Map(groups.map((group) => [group.label, group.tone]));
-  if (toneMap.get("Liver/Coag") !== "critical" || toneMap.get("Renal/Lyte") !== "important") {
+  if (toneMap.get("Liver/Coag") !== "critical" || toneMap.get("Chem/Renal") !== "important") {
     throw new Error(`visual lab tone should be stable across renderers: ${JSON.stringify([...toneMap.entries()])}`);
   }
   console.log("PASS Visual lab summary groups labs consistently for Board/Preview/Print");
@@ -674,6 +674,39 @@ try {
 } catch (error) {
   failures.push({ name: "Visual lab summary groups labs consistently for Board/Preview/Print", error: error instanceof Error ? error.message : String(error) });
   console.error(`FAIL Visual lab summary groups labs consistently for Board/Preview/Print: ${failures[failures.length - 1].error}`);
+}
+
+try {
+  const fragmentedAiLab = normalizeAiSoapText([
+    "S:",
+    "- No new complaint.",
+    "O:",
+    "- Lab: WBC 12.7",
+    "- Lab: Neu 88.9",
+    "- Lab: Hb 9.4",
+    "- Lab: Plt 259",
+    "- Lab: CRP 10",
+    "- Lab: BUN 16, Cr 0.46",
+    "- Lab: Na 139, K 3.0",
+    "A/P:",
+    "# Infection",
+    "- Continue current treatment.",
+  ].join("\n"));
+  const labLines = fragmentedAiLab.soapText.split(/\r?\n/).filter((line) => /^- Lab:/i.test(line));
+  if (labLines.length !== 2) {
+    throw new Error(`fragmented AI lab output did not compact to two panel lines:\n${fragmentedAiLab.soapText}`);
+  }
+  if (!/CBC\/DC:.*WBC 12\.7.*Neu 88\.9.*Hb 9\.4.*Plt 259/i.test(labLines[0] ?? "")) {
+    throw new Error(`CBC/DC panel is incomplete: ${labLines.join(" | ")}`);
+  }
+  if (!/Chem\/Renal:.*BUN 16.*Cr 0\.46.*Na 139.*K 3\.0.*CRP 10/i.test(labLines[1] ?? "")) {
+    throw new Error(`Chem/Renal panel is incomplete: ${labLines.join(" | ")}`);
+  }
+  console.log("PASS Fragmented AI lab lines compact into CBC/DC and Chem/Renal panels");
+  supplementalPasses += 1;
+} catch (error) {
+  failures.push({ name: "AI lab panel compaction", error: error instanceof Error ? error.message : String(error) });
+  console.error(`FAIL AI lab panel compaction: ${failures[failures.length - 1].error}`);
 }
 
 try {
@@ -4089,8 +4122,21 @@ try {
     );
   }
   const highCandidates = getModelCandidates(DEFAULT_HIGH_ACCURACY_MODEL, "highAccuracy");
-  if (!highCandidates.includes("gpt-5.6-sol") || !highCandidates.includes("gpt-5.5") || !highCandidates.some((model) => /^gpt-5\.4(?:-|$)/.test(model))) {
+  if (!highCandidates.includes("gpt-5.6-sol") || !highCandidates.includes("gpt-5.6-terra") || !highCandidates.includes("gpt-5.6-luna")) {
     throw new Error(`high-accuracy fallback chain is incomplete: ${highCandidates.join(", ")}`);
+  }
+  const sanitizedLegacyCandidates = getModelCandidates("gpt-5.4-2026-03-05", "balanced");
+  if (sanitizedLegacyCandidates[0] !== "gpt-5.6-terra") {
+    throw new Error(`legacy configured model did not fall back to GPT-5.6 Terra: ${sanitizedLegacyCandidates.join(", ")}`);
+  }
+  const allCandidates = [
+    ...getModelCandidates(DEFAULT_FAST_MODEL, "fast"),
+    ...getModelCandidates(DEFAULT_BALANCED_MODEL, "balanced"),
+    ...highCandidates,
+    ...sanitizedLegacyCandidates,
+  ];
+  if (allCandidates.some((model) => !isGpt56Model(model))) {
+    throw new Error(`non-GPT-5.6 fallback remains active: ${allCandidates.join(", ")}`);
   }
   const deadlineMessage = aiCallableMessage(
     { code: "functions/deadline-exceeded", message: "deadline-exceeded" },
@@ -4099,7 +4145,7 @@ try {
   if (!/time limit.*current SOAP was preserved/i.test(deadlineMessage)) {
     throw new Error(`deadline error is not actionable or baseline-safe: ${deadlineMessage}`);
   }
-  console.log("PASS AI model routing uses deadline-safe budgets, explicit tiers, and preserved fallbacks");
+  console.log("PASS AI model routing uses deadline-safe budgets and GPT-5.6-only fallbacks");
   supplementalPasses += 1;
 } catch (error) {
   failures.push({ name: "AI model routing", error: error instanceof Error ? error.message : String(error) });

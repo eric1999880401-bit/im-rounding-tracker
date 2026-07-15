@@ -58,10 +58,10 @@ interface LabSourceLine {
 }
 
 const labGroupOrder: Array<{ id: LabVisualGroupId; label: string; keys: string[] }> = [
-  { id: "cbc", label: "CBC", keys: ["WBC", "Neu", "Hb", "Hct", "Plt", "RBC", "MCV", "RDW", "Lym", "Mono", "Eos", "Baso", "Band"] },
-  { id: "renalLyte", label: "Renal/Lyte", keys: ["Cr", "BUN", "eGFR", "Na", "K", "Cl", "Ca", "Mg", "P", "Uric acid", "Osm"] },
+  { id: "cbc", label: "CBC/DC", keys: ["WBC", "Neu", "Hb", "Hct", "Plt", "RBC", "MCV", "RDW", "Lym", "Mono", "Eos", "Baso", "Band"] },
+  { id: "renalLyte", label: "Chem/Renal", keys: ["BUN", "Cr", "eGFR", "Na", "K", "Cl", "Ca", "Mg", "P", "Uric acid", "Osm", "CRP", "PCT", "Lactate", "ESR"] },
   { id: "liverCoag", label: "Liver/Coag", keys: ["AST", "ALT", "ALP", "GGT", "T-Bil", "D-Bil", "Alb", "PT", "INR", "aPTT", "D-dimer", "Fibrinogen", "FDP"] },
-  { id: "infxPerfusion", label: "Infx/Perfusion", keys: ["CRP", "PCT", "Lactate", "ESR", "Blood culture", "Sputum culture", "Urine culture"] },
+  { id: "infxPerfusion", label: "Micro", keys: ["Blood culture", "Sputum culture", "Urine culture"] },
   { id: "gas", label: "ABG/VBG", keys: ["pH", "pCO2", "pO2", "HCO3", "BE", "SaO2", "SpO2"] },
   { id: "cardiac", label: "Cardiac", keys: ["Troponin I", "Troponin T", "Troponin", "CK", "CK-MB", "BNP", "NT-proBNP"] },
   { id: "other", label: "Other", keys: [] },
@@ -249,7 +249,9 @@ function groupIdForItem(item: ParsedLabItem): LabVisualGroupId {
   if (dictionaryGroup === "CBC / DC") return "cbc";
   if (dictionaryGroup === "Renal / Electrolytes") return "renalLyte";
   if (dictionaryGroup === "Liver / GI" || dictionaryGroup === "Coagulation") return "liverCoag";
-  if (dictionaryGroup === "Inflammation / Infection") return "infxPerfusion";
+  if (dictionaryGroup === "Inflammation / Infection") {
+    return /culture/i.test(String(item.name || item.label || "")) ? "infxPerfusion" : "renalLyte";
+  }
   if (dictionaryGroup === "ABG / VBG") return "gas";
   if (dictionaryGroup === "Cardiac") return "cardiac";
   return "other";

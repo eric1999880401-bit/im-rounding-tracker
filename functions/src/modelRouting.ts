@@ -11,12 +11,17 @@ export const OPENAI_RESPONSE_TIMEOUT_MS = 105_000;
 export const ROUND_SOAP_OPENAI_RESPONSE_TIMEOUT_MS = 145_000;
 export const ROUND_SOAP_FUNCTION_TIMEOUT_SECONDS = 180;
 
-const LEGACY_FAST_MODEL = "gpt-5.4-mini-2026-03-17";
-const LEGACY_BALANCED_MODEL = "gpt-5.4-2026-03-05";
-const LEGACY_HIGH_ACCURACY_MODEL = "gpt-5.5-2026-04-23";
+export function isGpt56Model(model: string) {
+  return /^gpt-5\.6(?:$|-(?:sol|terra|luna)(?:-\d{4}-\d{2}-\d{2})?$)/i.test(String(model ?? "").trim());
+}
+
+function configuredGpt56Model(value: string | undefined, fallback: string) {
+  const configured = String(value ?? "").trim();
+  return isGpt56Model(configured) ? configured : fallback;
+}
 
 export function getModel() {
-  return process.env.OPENAI_MODEL_BALANCED || process.env.OPENAI_MODEL || DEFAULT_BALANCED_MODEL;
+  return configuredGpt56Model(process.env.OPENAI_MODEL_BALANCED || process.env.OPENAI_MODEL, DEFAULT_BALANCED_MODEL);
 }
 
 export function sanitizeQualityMode(value: unknown): AiQualityMode {
@@ -28,38 +33,36 @@ export function sanitizeQualityMode(value: unknown): AiQualityMode {
 
 export function getModelForQuality(qualityMode: AiQualityMode) {
   if (qualityMode === "highAccuracy") {
-    return process.env.OPENAI_MODEL_HIGH_ACCURACY || DEFAULT_HIGH_ACCURACY_MODEL;
+    return configuredGpt56Model(process.env.OPENAI_MODEL_HIGH_ACCURACY, DEFAULT_HIGH_ACCURACY_MODEL);
   }
   if (qualityMode === "balanced") {
-    return process.env.OPENAI_MODEL_BALANCED || process.env.OPENAI_MODEL || DEFAULT_BALANCED_MODEL;
+    return configuredGpt56Model(process.env.OPENAI_MODEL_BALANCED || process.env.OPENAI_MODEL, DEFAULT_BALANCED_MODEL);
   }
-  return process.env.OPENAI_MODEL_FAST || DEFAULT_FAST_MODEL;
+  return configuredGpt56Model(process.env.OPENAI_MODEL_FAST, DEFAULT_FAST_MODEL);
 }
 
 function modelAlias(model: string) {
   if (/^gpt-5\.6-sol-\d{4}-\d{2}-\d{2}$/i.test(model)) return "gpt-5.6-sol";
   if (/^gpt-5\.6-terra-\d{4}-\d{2}-\d{2}$/i.test(model)) return "gpt-5.6-terra";
   if (/^gpt-5\.6-luna-\d{4}-\d{2}-\d{2}$/i.test(model)) return "gpt-5.6-luna";
-  if (/^gpt-5\.5-\d{4}-\d{2}-\d{2}$/i.test(model)) return "gpt-5.5";
-  if (/^gpt-5\.4-mini-\d{4}-\d{2}-\d{2}$/i.test(model)) return "gpt-5.4-mini";
-  if (/^gpt-5\.4-\d{4}-\d{2}-\d{2}$/i.test(model)) return "gpt-5.4";
   return "";
 }
 
 export function getModelCandidates(model: string, qualityMode: AiQualityMode) {
-  const candidates = [model, modelAlias(model)];
+  const primary = configuredGpt56Model(model, getModelForQuality(qualityMode));
+  const candidates = [primary, modelAlias(primary)];
   if (qualityMode === "fast") {
-    candidates.push(DEFAULT_FAST_MODEL, LEGACY_FAST_MODEL, modelAlias(LEGACY_FAST_MODEL));
+    candidates.push(DEFAULT_FAST_MODEL, DEFAULT_BALANCED_MODEL);
   }
   if (qualityMode === "balanced") {
-    candidates.push(DEFAULT_BALANCED_MODEL, LEGACY_BALANCED_MODEL, modelAlias(LEGACY_BALANCED_MODEL));
+    candidates.push(DEFAULT_BALANCED_MODEL, DEFAULT_FAST_MODEL);
   }
   if (qualityMode === "highAccuracy") {
-    candidates.push(DEFAULT_HIGH_ACCURACY_MODEL, LEGACY_HIGH_ACCURACY_MODEL, modelAlias(LEGACY_HIGH_ACCURACY_MODEL));
+    candidates.push(DEFAULT_HIGH_ACCURACY_MODEL, "gpt-5.6");
     const balanced = getModelForQuality("balanced");
-    candidates.push(balanced, modelAlias(balanced), DEFAULT_BALANCED_MODEL, LEGACY_BALANCED_MODEL, modelAlias(LEGACY_BALANCED_MODEL));
+    candidates.push(balanced, modelAlias(balanced), DEFAULT_BALANCED_MODEL, DEFAULT_FAST_MODEL);
   }
-  return [...new Set(candidates.filter(Boolean))];
+  return [...new Set(candidates.filter((candidate) => candidate && isGpt56Model(candidate)))];
 }
 
 export function getResponseTuning(qualityMode: AiQualityMode, workload: AiWorkload) {
