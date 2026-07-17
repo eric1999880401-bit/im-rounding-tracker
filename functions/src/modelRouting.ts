@@ -84,6 +84,23 @@ export function getResponseTuning(qualityMode: AiQualityMode, workload: AiWorklo
   };
 }
 
+export function getRoundSoapMaxOutputTokens(
+  qualityMode: AiQualityMode,
+  workflowMode: string,
+  promptSourceChars: number,
+) {
+  const workload = workflowMode === "dailyUpdate" ? "roundSoapDaily" : "roundSoapFull";
+  const base = getResponseTuning(qualityMode, workload).max_output_tokens;
+  const longClinicalSource = workflowMode === "transferHandoff" || promptSourceChars > 18_000;
+  if (!longClinicalSource) return base;
+
+  // Responses API max_output_tokens includes hidden reasoning tokens. Long transfer
+  // records need enough headroom to finish reasoning and still emit strict JSON.
+  if (qualityMode === "highAccuracy") return Math.max(base, 14_000);
+  if (qualityMode === "balanced") return Math.max(base, 9_000);
+  return Math.max(base, 6_000);
+}
+
 export function resolveRoundSoapQuality(requested: AiQualityMode, _workflowMode: string, _rawText: string): AiQualityMode {
   return requested;
 }

@@ -194,6 +194,7 @@ export interface GenerateRoundSoapInput {
   currentSoapBaseline: string;
   deidentifiedConfirmed: boolean;
   qualityMode?: "fast" | "balanced" | "highAccuracy";
+  supportsBackgroundPolling?: boolean;
   userStyleProfile?: UserAiStyleProfile;
   patientContext?: {
     age?: string | number;

@@ -112,6 +112,7 @@ const {
   DEFAULT_FAST_MODEL,
   DEFAULT_HIGH_ACCURACY_MODEL,
   getModelCandidates,
+  getRoundSoapMaxOutputTokens,
   getResponseTuning,
   isGpt56Model,
   OPENAI_RESPONSE_TIMEOUT_MS,
@@ -124,6 +125,7 @@ const {
   shouldUseBackgroundRoundSoap,
 } = await server.ssrLoadModule("/functions/src/modelRouting.ts");
 const { MAX_ROUND_SOAP_RAW_CHARS, prepareRoundSoapSource } = await server.ssrLoadModule("/functions/src/sourceCompaction.ts");
+const { openAiBackgroundState } = await server.ssrLoadModule("/functions/src/openai.ts");
 const { DEFAULT_AI_CALLABLE_TIMEOUT_MS, ROUND_SOAP_CALLABLE_TIMEOUT_MS } = await server.ssrLoadModule("/src/aiTimeouts.ts");
 const { aiCallableMessage } = await server.ssrLoadModule("/src/aiErrorMessage.ts");
 const {
@@ -4413,6 +4415,15 @@ try {
   if (getResponseTuning("highAccuracy", "roundSoapFull").reasoning.effort !== "high") {
     throw new Error("high-accuracy SOAP should use high reasoning");
   }
+  if (getRoundSoapMaxOutputTokens("highAccuracy", "transferHandoff", 34_000) < 12_000) {
+    throw new Error("long high-accuracy transfer SOAP lacks reasoning/output headroom");
+  }
+  if (getRoundSoapMaxOutputTokens("balanced", "transferHandoff", 34_000) < 8_000) {
+    throw new Error("long balanced transfer SOAP lacks reasoning/output headroom");
+  }
+  if (getRoundSoapMaxOutputTokens("balanced", "dailyUpdate", 2_000) !== balancedDailyTuning.max_output_tokens) {
+    throw new Error("short daily SOAP unexpectedly received the expensive long-transfer token budget");
+  }
   if (roundSoapHistoryLimit("dailyUpdate") !== 2 || roundSoapHistoryLimit("newSoap") !== 1 || roundSoapHistoryLimit("transferHandoff") !== 5) {
     throw new Error("SOAP history limits no longer match the deadline-safe daily/new/transfer context budget");
   }
@@ -4467,6 +4478,42 @@ try {
 } catch (error) {
   failures.push({ name: "AI model routing", error: error instanceof Error ? error.message : String(error) });
   console.error(`FAIL AI model routing: ${failures[failures.length - 1].error}`);
+}
+
+try {
+  if (openAiBackgroundState({ status: "queued" }) !== "pending") throw new Error("queued response was not recognized as pending");
+  if (openAiBackgroundState({ status: "in_progress" }) !== "pending") throw new Error("in-progress response was not recognized as pending");
+  if (openAiBackgroundState({ status: "completed" }) !== "completed") throw new Error("completed response was not recognized");
+  if (openAiBackgroundState({ status: "failed" }) !== "terminal-error") throw new Error("failed response was not recognized as terminal");
+
+  const detailedUnavailable = aiCallableMessage(
+    { code: "functions/unavailable", message: "OpenAI could not complete the background SOAP job (server_error). Retry generation; no patient data was saved." },
+    "SOAP generation",
+  );
+  if (!/background SOAP job \(server_error\)/i.test(detailedUnavailable)) {
+    throw new Error(`backend SOAP failure detail was hidden: ${detailedUnavailable}`);
+  }
+
+  const functionsSource = readFileSync("functions/src/index.ts", "utf8");
+  const clientSource = readFileSync("src/firebase/aiService.ts", "utf8");
+  if (!/export const pollRoundSoapGeneration = onCall/.test(functionsSource)) {
+    throw new Error("long SOAP generation does not expose a short polling callable");
+  }
+  if (!/deferBackground:\s*background\s*&&\s*supportsBackgroundPolling/.test(functionsSource) || !/users\/\$\{uid\}\/aiJobs/.test(functionsSource)) {
+    throw new Error("background SOAP jobs are still held on one callable connection or are not user-bound");
+  }
+  const jobObject = functionsSource.match(/const job: RoundSoapJobData = \{([\s\S]*?)\n\s*\};/i)?.[1] ?? "";
+  if (!jobObject || /rawText|currentSoapBaseline|preparedSource\.text/.test(jobObject)) {
+    throw new Error("background SOAP metadata stores raw clinical text or the metadata contract could not be verified");
+  }
+  if (!/supportsBackgroundPolling:\s*true/.test(clientSource) || !/pollRoundSoapGenerationCallable/.test(clientSource) || !/consecutivePollErrors <= 3/.test(clientSource)) {
+    throw new Error("client does not poll background SOAP jobs or tolerate transient poll failures");
+  }
+  console.log("PASS Long SOAP generation uses user-bound async polling without storing raw clinical text");
+  supplementalPasses += 1;
+} catch (error) {
+  failures.push({ name: "Async SOAP polling", error: error instanceof Error ? error.message : String(error) });
+  console.error(`FAIL Async SOAP polling: ${failures[failures.length - 1].error}`);
 }
 
 try {

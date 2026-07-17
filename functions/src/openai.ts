@@ -43,6 +43,7 @@ export async function postOpenAiResponse(params: {
   payload: Record<string, unknown>;
   timeoutMs?: number;
   background?: boolean;
+  deferBackground?: boolean;
 }) {
   const candidates = getModelCandidates(params.model, params.qualityMode);
   let lastResponse: Response | null = null;
@@ -115,6 +116,15 @@ export async function postOpenAiResponse(params: {
       const responseId = typeof body.id === "string" ? body.id : "";
       if (!responseId) throw new HttpsError("data-loss", "OpenAI started a background SOAP draft without a response ID. Retry generation.");
       logger.info("OpenAI background response queued", { model: candidate, qualityMode: params.qualityMode, responseId });
+      if (params.deferBackground) {
+        return {
+          response,
+          body,
+          model: candidate,
+          pendingResponseId: responseId,
+        };
+      }
+      let transientPollFailures = 0;
       while (["queued", "in_progress"].includes(String(body.status ?? ""))) {
         const pollRemainingMs = requestDeadlineAt - Date.now();
         if (pollRemainingMs < 3_000) {
@@ -140,8 +150,31 @@ export async function postOpenAiResponse(params: {
             signal: pollController.signal,
           });
           body = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+          if (!response.ok && (response.status === 429 || response.status >= 500)) {
+            transientPollFailures += 1;
+            if (transientPollFailures <= 3) {
+              logger.warn("OpenAI background SOAP poll returned a transient status", {
+                model: candidate,
+                responseStatus: response.status,
+                transientPollFailures,
+              });
+              body = { status: "in_progress" };
+              continue;
+            }
+          } else if (response.ok) {
+            transientPollFailures = 0;
+          }
         } catch (error) {
           if (pollController.signal.aborted || (error instanceof Error && error.name === "AbortError")) continue;
+          transientPollFailures += 1;
+          if (transientPollFailures <= 3) {
+            logger.warn("OpenAI background SOAP poll failed transiently", {
+              model: candidate,
+              errorName: error instanceof Error ? error.name : "unknown",
+              transientPollFailures,
+            });
+            continue;
+          }
           throw new HttpsError("unavailable", "OpenAI background SOAP status could not be checked. Retry generation; no patient data was saved.");
         } finally {
           clearTimeout(pollTimeout);
@@ -173,7 +206,42 @@ export async function postOpenAiResponse(params: {
   }
 
   if (!lastResponse) throw new HttpsError("internal", "OpenAI request could not be started.");
-  return { response: lastResponse, body: lastBody, model: usedModel };
+  return { response: lastResponse, body: lastBody, model: usedModel, pendingResponseId: "" };
+}
+
+export function openAiBackgroundState(responseBody: Record<string, unknown>) {
+  const status = String(responseBody.status ?? "").toLowerCase();
+  if (status === "queued" || status === "in_progress") return "pending" as const;
+  if (status === "completed" || (!status && (responseBody.output_text || responseBody.output))) return "completed" as const;
+  return "terminal-error" as const;
+}
+
+export async function retrieveOpenAiResponse(params: {
+  apiKey: string;
+  responseId: string;
+  timeoutMs?: number;
+}) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), params.timeoutMs ?? 15_000);
+  try {
+    const response = await fetch(`https://api.openai.com/v1/responses/${encodeURIComponent(params.responseId)}`, {
+      headers: { Authorization: `Bearer ${params.apiKey}` },
+      signal: controller.signal,
+    });
+    const body = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+    return { response, body };
+  } catch (error) {
+    if (controller.signal.aborted || (error instanceof Error && error.name === "AbortError")) {
+      throw new HttpsError("unavailable", "The SOAP job status check timed out. It will be retried automatically; no patient data was saved.");
+    }
+    logger.warn("OpenAI background response retrieval failed", {
+      responseId: params.responseId,
+      errorName: error instanceof Error ? error.name : "unknown",
+    });
+    throw new HttpsError("unavailable", "The SOAP job status could not be checked. It will be retried automatically; no patient data was saved.");
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
 export function extractOutputText(response: Record<string, unknown>) {

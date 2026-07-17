@@ -31,11 +31,45 @@ const analyzePatientBatchTextCallable = httpsCallable<AnalyzePatientBatchTextInp
   { timeout: DEFAULT_AI_CALLABLE_TIMEOUT_MS },
 );
 
-const generateRoundSoapCallable = httpsCallable<GenerateRoundSoapInput, GenerateRoundSoapResult>(
+interface PendingRoundSoapGeneration {
+  status: "pending";
+  jobId: string;
+  model: string;
+  qualityMode: "fast" | "balanced" | "highAccuracy";
+  pollAfterMs: number;
+}
+
+type CompletedRoundSoapGeneration = GenerateRoundSoapResult & { status: "completed" };
+
+type StartRoundSoapGenerationResult = GenerateRoundSoapResult | PendingRoundSoapGeneration;
+type PollRoundSoapGenerationResult = PendingRoundSoapGeneration | CompletedRoundSoapGeneration;
+
+const startRoundSoapGenerationCallable = httpsCallable<GenerateRoundSoapInput, StartRoundSoapGenerationResult>(
   functions,
   "generateRoundSoap",
-  { timeout: ROUND_SOAP_CALLABLE_TIMEOUT_MS },
+  { timeout: 60_000 },
 );
+
+const pollRoundSoapGenerationCallable = httpsCallable<{ jobId: string }, PollRoundSoapGenerationResult>(
+  functions,
+  "pollRoundSoapGeneration",
+  { timeout: 30_000 },
+);
+
+function isPendingRoundSoapGeneration(value: StartRoundSoapGenerationResult | PollRoundSoapGenerationResult): value is PendingRoundSoapGeneration {
+  return "status" in value && value.status === "pending" && typeof value.jobId === "string";
+}
+
+function retryableSoapPollError(error: unknown) {
+  const value = error as { code?: unknown; message?: unknown };
+  const code = String(value?.code ?? "").toLowerCase();
+  const message = String(value?.message ?? "").toLowerCase();
+  return code.includes("unavailable") || /network|fetch|connection|status check timed out|could not be checked/.test(message);
+}
+
+function wait(milliseconds: number) {
+  return new Promise<void>((resolve) => globalThis.setTimeout(resolve, milliseconds));
+}
 
 export async function analyzeClinicalText(input: AnalyzeClinicalTextInput) {
   const result = await analyzeClinicalTextCallable(input);
@@ -58,8 +92,33 @@ export async function generateClinicalDocument(input: GenerateClinicalDocumentIn
 
 export async function generateRoundSoap(input: GenerateRoundSoapInput) {
   try {
-    const result = await generateRoundSoapCallable(input);
-    return result.data;
+    const started = await startRoundSoapGenerationCallable({ ...input, supportsBackgroundPolling: true });
+    if (!isPendingRoundSoapGeneration(started.data)) return started.data;
+
+    const deadlineAt = Date.now() + ROUND_SOAP_CALLABLE_TIMEOUT_MS - 10_000;
+    let nextPollMs = Math.max(800, Math.min(5_000, started.data.pollAfterMs || 2_000));
+    let consecutivePollErrors = 0;
+    while (Date.now() + nextPollMs < deadlineAt) {
+      await wait(nextPollMs);
+      try {
+        const polled = await pollRoundSoapGenerationCallable({ jobId: started.data.jobId });
+        consecutivePollErrors = 0;
+        if (isPendingRoundSoapGeneration(polled.data)) {
+          nextPollMs = Math.max(800, Math.min(5_000, polled.data.pollAfterMs || 2_000));
+          continue;
+        }
+        const { status: _status, ...completed } = polled.data;
+        return completed as GenerateRoundSoapResult;
+      } catch (pollError) {
+        consecutivePollErrors += 1;
+        if (consecutivePollErrors <= 3 && retryableSoapPollError(pollError)) {
+          nextPollMs = Math.min(5_000, 1_000 * (consecutivePollErrors + 1));
+          continue;
+        }
+        throw pollError;
+      }
+    }
+    throw new Error("SOAP generation exceeded the extended background-job window. The current SOAP was preserved; retry with the same source.");
   } catch (error) {
     throw new Error(aiCallableMessage(error, "SOAP generation"));
   }

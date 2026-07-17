@@ -63,8 +63,13 @@ export interface RoundSoapCallableInput {
   currentSoapBaseline?: unknown;
   deidentifiedConfirmed?: unknown;
   qualityMode?: unknown;
+  supportsBackgroundPolling?: unknown;
   userStyleProfile?: unknown;
   patientContext?: CallableInput["patientContext"];
+}
+
+export interface PollRoundSoapCallableInput {
+  jobId?: unknown;
 }
 
 export interface DocumentCallableInput {

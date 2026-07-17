@@ -14,8 +14,14 @@ export function aiCallableMessage(error: unknown, feature: string) {
   if (code.includes("invalid-argument")) return `${feature} could not run because the request was incomplete or unsafe. Check de-identification; only split the raw export when it exceeds the displayed maximum.`;
   if (code.includes("permission-denied")) return `${feature} is blocked by OpenAI or Firebase permissions. Check the API key, model access, and function logs.`;
   if (code.includes("resource-exhausted")) return "AI quota or rate limit reached. Retry later or check OpenAI billing/limits.";
-  if (code.includes("unavailable")) return "AI service is temporarily unavailable. Retry later.";
-  if (code.includes("data-loss")) return "AI returned malformed output. Retry generation; no patient data was saved.";
+  if (code.includes("unavailable")) {
+    if (text && !/^(?:unavailable|functions\/unavailable|ai service is temporarily unavailable)/i.test(text)) return text;
+    return "AI service is temporarily unavailable. Retry later.";
+  }
+  if (code.includes("data-loss")) {
+    if (text && !/^(?:data-loss|functions\/data-loss)/i.test(text)) return text;
+    return "AI returned malformed output. Retry generation; no patient data was saved.";
+  }
   if (code.includes("internal")) return `${feature} failed inside Firebase Functions. Check function logs for OpenAI key/model/schema errors.`;
   if (text && !/^internal$/i.test(text)) return text;
   return `${feature} failed. No patient data was saved.`;

@@ -11,10 +11,10 @@ const MAX_RAW_TEXT_CHARS = 18000;
 
 import { aiDocumentDraftSchema, aiSoapDraftSchema, patientBatchImportSchema, roundSoapDraftSchema } from "./schemas";
 import { documentTypes, sourceTypes } from "./types";
-import type { CallableInput, DocumentCallableInput, DocumentType, PatientBatchCallableInput, RoundSoapCallableInput, SourceType } from "./types";
-import { OPENAI_API_KEY, extractOutputText, extractRefusal, getModel, getModelForQuality, getOpenAiApiKey, getOpenAiErrorMessage, getResponseTuning, openAiHttpsError, postOpenAiResponse, sanitizeQualityMode } from "./openai";
+import type { CallableInput, DocumentCallableInput, DocumentType, PatientBatchCallableInput, PollRoundSoapCallableInput, RoundSoapCallableInput, SourceType } from "./types";
+import { OPENAI_API_KEY, extractOutputText, extractRefusal, getModel, getModelForQuality, getOpenAiApiKey, getOpenAiErrorMessage, getResponseTuning, openAiBackgroundState, openAiHttpsError, postOpenAiResponse, retrieveOpenAiResponse, sanitizeQualityMode } from "./openai";
 import type { AiQualityMode } from "./openai";
-import { resolveDocumentQuality, resolveRoundSoapQuality, ROUND_SOAP_FUNCTION_TIMEOUT_SECONDS, ROUND_SOAP_OPENAI_RESPONSE_TIMEOUT_MS, roundSoapHistoryLimit, shouldUseBackgroundRoundSoap } from "./modelRouting";
+import { getRoundSoapMaxOutputTokens, resolveDocumentQuality, resolveRoundSoapQuality, ROUND_SOAP_FUNCTION_TIMEOUT_SECONDS, ROUND_SOAP_OPENAI_RESPONSE_TIMEOUT_MS, roundSoapHistoryLimit, shouldUseBackgroundRoundSoap } from "./modelRouting";
 import { asPlainObject, compactDailyNote, compactPatientContext, concretizeVagueFollowUps, findTargetPatientForBatch, leanSoapCleanup, sanitizeExistingPatientsForBatch, sanitizePatientBatchImportMode, sanitizePatientBatchOutput, sanitizePatientContext, sanitizeUserStyleProfile, truncateString } from "./sanitize";
 import { MAX_ROUND_SOAP_RAW_CHARS, prepareRoundSoapSource, type RoundSoapWorkflowMode } from "./sourceCompaction";
 import { buildSoapPatch } from "./soapPatch";
@@ -134,6 +134,97 @@ export const analyzePatientBatchText = onCall(
   },
 );
 
+interface RoundSoapJobData {
+  kind: "roundSoap";
+  patientId: string;
+  responseId: string;
+  model: string;
+  qualityMode: AiQualityMode;
+  workflowMode: RoundSoapWorkflowMode;
+  baselineHash: string;
+  sourceCompacted: boolean;
+  originalChars: number;
+  promptChars: number;
+  omittedBlocks: number;
+  createdAt?: unknown;
+  expiresAt?: unknown;
+}
+
+function roundSoapCompactionWarning(job: Pick<RoundSoapJobData, "sourceCompacted" | "workflowMode" | "originalChars" | "promptChars">) {
+  if (!job.sourceCompacted) return "";
+  return `Long ${job.workflowMode === "transferHandoff" ? "transfer" : "clinical"} source condensed automatically (${job.originalChars.toLocaleString()} -> ${job.promptChars.toLocaleString()} characters); no manual shortening was required.`;
+}
+
+function parseRoundSoapResponse(responseBody: Record<string, unknown>, workflowMode: RoundSoapWorkflowMode, model: string) {
+  const refusal = extractRefusal(responseBody);
+  if (refusal) throw new HttpsError("failed-precondition", refusal);
+
+  const outputText = extractOutputText(responseBody);
+  if (!outputText) {
+    throw new HttpsError("data-loss", "OpenAI returned no SOAP draft. Retry generation; no patient data was saved.");
+  }
+
+  let parsedDraft: unknown;
+  try {
+    parsedDraft = JSON.parse(outputText);
+  } catch (error) {
+    logger.error("Failed to parse OpenAI round SOAP JSON", {
+      errorName: error instanceof Error ? error.name : "unknown",
+      workflowMode,
+      model,
+    });
+    throw new HttpsError("data-loss", "OpenAI returned malformed SOAP JSON. Retry generation; no patient data was saved.");
+  }
+
+  const parsed = asPlainObject(parsedDraft);
+  const soapText = leanSoapCleanup(concretizeVagueFollowUps(truncateString(parsed.soapText, 14000).trim()));
+  if (!soapText) {
+    throw new HttpsError("data-loss", "OpenAI returned an empty SOAP draft. Retry generation; no patient data was saved.");
+  }
+
+  return {
+    soapText,
+    warnings: Array.isArray(parsed.warnings) ? parsed.warnings.map((item) => truncateString(item, 240)) : [],
+    highlightHints: Array.isArray(parsed.highlightHints) ? parsed.highlightHints.map((item) => truncateString(item, 180)).slice(0, 12) : [],
+  };
+}
+
+function roundSoapResult(params: {
+  responseBody: Record<string, unknown>;
+  workflowMode: RoundSoapWorkflowMode;
+  qualityMode: AiQualityMode;
+  model: string;
+  baselineHash: string;
+  sourceCompacted: boolean;
+  originalChars: number;
+  promptChars: number;
+  patch?: ReturnType<typeof buildSoapPatch>;
+  parsed?: ReturnType<typeof parseRoundSoapResponse>;
+}) {
+  const parsed = params.parsed ?? parseRoundSoapResponse(params.responseBody, params.workflowMode, params.model);
+  const compactionWarning = roundSoapCompactionWarning(params);
+  return {
+    draftId: db.collection("_aiDraftIds").doc().id,
+    soapText: parsed.soapText,
+    mode: params.workflowMode === "dailyUpdate" ? "patch" as const : "full" as const,
+    ...(params.workflowMode === "dailyUpdate"
+      ? { patch: params.patch ?? { baselineHash: params.baselineHash, changedSections: [] } }
+      : {}),
+    warnings: [compactionWarning, ...parsed.warnings].filter(Boolean).slice(0, 8),
+    highlightHints: parsed.highlightHints,
+    model: params.model,
+    qualityMode: params.qualityMode,
+  };
+}
+
+function timestampMillis(value: unknown) {
+  if (value && typeof value === "object" && "toMillis" in value && typeof (value as { toMillis?: unknown }).toMillis === "function") {
+    return (value as { toMillis: () => number }).toMillis();
+  }
+  if (value instanceof Date) return value.getTime();
+  return 0;
+}
+
 export const generateRoundSoap = onCall(
   {
     secrets: [OPENAI_API_KEY],
@@ -159,6 +250,7 @@ export const generateRoundSoap = onCall(
     const deidentifiedConfirmed = data.deidentifiedConfirmed === true;
     const requestedQualityMode = sanitizeQualityMode(data.qualityMode);
     const qualityMode = resolveRoundSoapQuality(requestedQualityMode, workflowMode, rawText);
+    const supportsBackgroundPolling = data.supportsBackgroundPolling === true;
     const requestStartedAt = Date.now();
 
     if (!patientId) {
@@ -207,6 +299,7 @@ export const generateRoundSoap = onCall(
     const requestedModel = getModelForQuality(qualityMode);
     const tuning = getResponseTuning(qualityMode, workflowMode === "dailyUpdate" ? "roundSoapDaily" : "roundSoapFull");
     const background = shouldUseBackgroundRoundSoap(qualityMode, workflowMode, preparedSource.promptChars);
+    const maxOutputTokens = getRoundSoapMaxOutputTokens(qualityMode, workflowMode, preparedSource.promptChars);
     logger.info("generateRoundSoap request prepared", {
       workflowMode,
       sourceType,
@@ -218,18 +311,20 @@ export const generateRoundSoap = onCall(
       sourceBlocksOmitted: preparedSource.omittedBlocks,
       baselineChars: currentSoapBaseline.length,
       historyNotes: dailyNotes.length,
-      maxOutputTokens: tuning.max_output_tokens,
+      maxOutputTokens,
       background,
+      supportsBackgroundPolling,
     });
-    const { response: openAiResponse, body: responseBody, model } = await postOpenAiResponse({
+    const { response: openAiResponse, body: responseBody, model, pendingResponseId } = await postOpenAiResponse({
       apiKey,
       model: requestedModel,
       qualityMode,
       timeoutMs: ROUND_SOAP_OPENAI_RESPONSE_TIMEOUT_MS,
       background,
+      deferBackground: background && supportsBackgroundPolling,
       payload: {
         reasoning: tuning.reasoning,
-        max_output_tokens: tuning.max_output_tokens,
+        max_output_tokens: maxOutputTokens,
         prompt_cache_key: `${tuning.prompt_cache_key}:${workflowMode}`,
         input: [
           {
@@ -276,53 +371,187 @@ export const generateRoundSoap = onCall(
       throw openAiHttpsError(openAiResponse.status, responseBody);
     }
 
-    const refusal = extractRefusal(responseBody);
-    if (refusal) {
-      throw new HttpsError("failed-precondition", refusal);
+    const baselineHash = buildSoapPatch(currentSoapBaseline, currentSoapBaseline, "").baselineHash;
+    if (pendingResponseId) {
+      const jobRef = db.collection(`users/${uid}/aiJobs`).doc();
+      const job: RoundSoapJobData = {
+        kind: "roundSoap",
+        patientId,
+        responseId: pendingResponseId,
+        model,
+        qualityMode,
+        workflowMode: workflowMode as RoundSoapWorkflowMode,
+        baselineHash,
+        sourceCompacted: preparedSource.compacted,
+        originalChars: preparedSource.originalChars,
+        promptChars: preparedSource.promptChars,
+        omittedBlocks: preparedSource.omittedBlocks,
+        createdAt: FieldValue.serverTimestamp(),
+        expiresAt: new Date(Date.now() + 8 * 60_000),
+      };
+      await jobRef.set(job);
+      logger.info("generateRoundSoap background job handed off", {
+        jobId: jobRef.id,
+        workflowMode,
+        qualityMode,
+        model,
+        durationMs: Date.now() - requestStartedAt,
+      });
+      return {
+        status: "pending" as const,
+        jobId: jobRef.id,
+        model,
+        qualityMode,
+        pollAfterMs: 2_000,
+      };
     }
 
-    const outputText = extractOutputText(responseBody);
-    if (!outputText) {
-      throw new HttpsError("data-loss", "OpenAI returned no SOAP draft. Retry generation; no patient data was saved.");
-    }
-
-    let parsedDraft: unknown;
-    try {
-      parsedDraft = JSON.parse(outputText);
-    } catch (error) {
-      logger.error("Failed to parse OpenAI round SOAP JSON", { error, workflowMode, model });
-      throw new HttpsError("data-loss", "OpenAI returned malformed SOAP JSON. Retry generation; no patient data was saved.");
-    }
-
-    const parsed = asPlainObject(parsedDraft);
-    const soapText = leanSoapCleanup(concretizeVagueFollowUps(truncateString(parsed.soapText, 14000).trim()));
-    if (!soapText) {
-      throw new HttpsError("data-loss", "OpenAI returned an empty SOAP draft. Retry generation; no patient data was saved.");
-    }
-
+    const parsedResponse = parseRoundSoapResponse(responseBody, workflowMode as RoundSoapWorkflowMode, model);
+    const result = roundSoapResult({
+      responseBody,
+      workflowMode: workflowMode as RoundSoapWorkflowMode,
+      qualityMode,
+      model,
+      baselineHash,
+      sourceCompacted: preparedSource.compacted,
+      originalChars: preparedSource.originalChars,
+      promptChars: preparedSource.promptChars,
+      patch: workflowMode === "dailyUpdate" ? buildSoapPatch(currentSoapBaseline, parsedResponse.soapText, rawText) : undefined,
+      parsed: parsedResponse,
+    });
     logger.info("generateRoundSoap draft completed", {
       workflowMode,
       qualityMode,
       model,
       durationMs: Date.now() - requestStartedAt,
-      soapTextChars: soapText.length,
+      soapTextChars: result.soapText.length,
+    });
+    return result;
+  },
+);
+
+export const pollRoundSoapGeneration = onCall(
+  {
+    secrets: [OPENAI_API_KEY],
+    timeoutSeconds: 30,
+    memory: "256MiB",
+  },
+  async (request) => {
+    if (!request.auth) {
+      throw new HttpsError("unauthenticated", "Sign in is required before checking SOAP generation.");
+    }
+
+    const data = request.data as PollRoundSoapCallableInput;
+    const jobId = String(data.jobId ?? "").trim();
+    if (!/^[A-Za-z0-9_-]{8,80}$/.test(jobId)) {
+      throw new HttpsError("invalid-argument", "A valid SOAP generation job ID is required.");
+    }
+
+    const jobRef = db.doc(`users/${request.auth.uid}/aiJobs/${jobId}`);
+    const snapshot = await jobRef.get();
+    if (!snapshot.exists) {
+      throw new HttpsError("not-found", "This SOAP generation job expired or was already completed. Generate the draft again; no patient data was saved.");
+    }
+
+    const stored = snapshot.data() as Partial<RoundSoapJobData>;
+    if (stored.kind !== "roundSoap" || !stored.responseId || !stored.patientId) {
+      await jobRef.delete();
+      throw new HttpsError("data-loss", "The SOAP generation job metadata was invalid. Generate the draft again; no patient data was saved.");
+    }
+    if (timestampMillis(stored.expiresAt) > 0 && timestampMillis(stored.expiresAt) <= Date.now()) {
+      await jobRef.delete();
+      throw new HttpsError("deadline-exceeded", "The high-quality SOAP job exceeded the extended generation window. The current SOAP was preserved; retry with the same source.");
+    }
+
+    const apiKey = getOpenAiApiKey();
+    if (!apiKey) {
+      throw new HttpsError("failed-precondition", "SOAP generation is not configured. Set OPENAI_API_KEY for Firebase Functions.");
+    }
+
+    const { response, body } = await retrieveOpenAiResponse({
+      apiKey,
+      responseId: stored.responseId,
+      timeoutMs: 15_000,
     });
 
-    return {
-      draftId: db.collection("_aiDraftIds").doc().id,
-      soapText,
-      mode: workflowMode === "dailyUpdate" ? "patch" : "full",
-      ...(workflowMode === "dailyUpdate" ? { patch: buildSoapPatch(currentSoapBaseline, soapText, rawText) } : {}),
-      warnings: [
-        ...(preparedSource.compacted
-          ? [`Long ${workflowMode === "transferHandoff" ? "transfer" : "clinical"} source condensed automatically (${preparedSource.originalChars.toLocaleString()} -> ${preparedSource.promptChars.toLocaleString()} characters); no manual shortening was required.`]
-          : []),
-        ...(Array.isArray(parsed.warnings) ? parsed.warnings.map((item) => truncateString(item, 240)) : []),
-      ].slice(0, 8),
-      highlightHints: Array.isArray(parsed.highlightHints) ? parsed.highlightHints.map((item) => truncateString(item, 180)).slice(0, 12) : [],
-      model,
-      qualityMode,
-    };
+    if (!response.ok) {
+      if (response.status === 429 || response.status >= 500) {
+        logger.warn("OpenAI SOAP job poll returned a transient status", {
+          jobId,
+          responseStatus: response.status,
+        });
+        return { status: "pending" as const, jobId, pollAfterMs: 3_000 };
+      }
+      await jobRef.delete();
+      throw openAiHttpsError(response.status, body);
+    }
+
+    const state = openAiBackgroundState(body);
+    if (state === "pending") {
+      return { status: "pending" as const, jobId, pollAfterMs: 2_000 };
+    }
+
+    const workflowMode = ["dailyUpdate", "newSoap", "transferHandoff"].includes(String(stored.workflowMode))
+      ? stored.workflowMode as RoundSoapWorkflowMode
+      : "dailyUpdate";
+    const qualityMode = sanitizeQualityMode(stored.qualityMode);
+    const model = truncateString(stored.model, 80) || getModelForQuality(qualityMode);
+
+    if (state === "completed") {
+      try {
+        const result = roundSoapResult({
+          responseBody: body,
+          workflowMode,
+          qualityMode,
+          model,
+          baselineHash: String(stored.baselineHash ?? ""),
+          sourceCompacted: stored.sourceCompacted === true,
+          originalChars: Number(stored.originalChars ?? 0),
+          promptChars: Number(stored.promptChars ?? 0),
+        });
+        logger.info("generateRoundSoap background job completed", {
+          jobId,
+          workflowMode,
+          qualityMode,
+          model,
+          soapTextChars: result.soapText.length,
+        });
+        await jobRef.delete();
+        return { status: "completed" as const, ...result };
+      } catch (error) {
+        await jobRef.delete();
+        throw error;
+      }
+    }
+
+    const responseError = asPlainObject(body.error);
+    const incompleteDetails = asPlainObject(body.incomplete_details);
+    const terminalStatus = truncateString(body.status, 40) || "failed";
+    const errorCode = truncateString(responseError.code, 80);
+    const errorType = truncateString(responseError.type, 80);
+    const incompleteReason = truncateString(incompleteDetails.reason, 120);
+    logger.warn("OpenAI SOAP background job ended without a completed draft", {
+      jobId,
+      terminalStatus,
+      errorCode,
+      errorType,
+      incompleteReason,
+    });
+    await jobRef.delete();
+
+    if (terminalStatus === "incomplete") {
+      throw new HttpsError(
+        "data-loss",
+        `OpenAI stopped before completing the SOAP draft${incompleteReason ? ` (${incompleteReason})` : ""}. Retry generation; no patient data was saved.`,
+      );
+    }
+    if (errorCode === "rate_limit_exceeded" || errorType === "rate_limit_error") {
+      throw new HttpsError("resource-exhausted", "OpenAI rate limit was reached while generating this SOAP. Retry shortly; no patient data was saved.");
+    }
+    throw new HttpsError(
+      "unavailable",
+      `OpenAI could not complete the background SOAP job${errorCode ? ` (${errorCode})` : ""}. Retry generation; no patient data was saved.`,
+    );
   },
 );
 
