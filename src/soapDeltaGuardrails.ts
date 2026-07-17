@@ -1,5 +1,6 @@
 import { classifyClinicalLine } from "./clinicalLineClassifier";
 import { imageStudyKey } from "./clinicalFieldRouter";
+import { ensureAntibioticApInDraft, extractActiveAntibioticNames } from "./antibioticPlan";
 import {
   parseMedicationOrders,
   summarizeMedicationOrders,
@@ -258,7 +259,7 @@ function isOrderLine(line: string) {
   );
 }
 
-const highYieldMedicationPattern = /\b(?:teicoplanin|vancomycin|vanco|ceftriaxone|cefepime|cefazolin|ceftazidime|unasyn|pip\/?tazo|zosyn|meropenem|imipenem|ertapenem|azithro(?:mycin)?|levofloxacin|ciprofloxacin|metronidazole|linezolid|daptomycin|apixaban|heparin|warfarin|insulin|norepi(?:nephrine)?|vasopressin)\b/gi;
+const highYieldNonAntibioticMedicationPattern = /\b(?:apixaban|heparin|warfarin|insulin|norepi(?:nephrine)?|vasopressin)\b/gi;
 
 function criticalSourceLabTokens(value: string) {
   const next: string[] = [];
@@ -285,7 +286,10 @@ function sourceCoverageWarnings(sourceText: string, candidateText: string) {
   const source = String(sourceText ?? "");
   const candidate = String(candidateText ?? "");
   const warnings: string[] = [];
-  const medicationNames = [...new Set((source.match(highYieldMedicationPattern) ?? []).map((item) => item.toLowerCase()))];
+  const medicationNames = [
+    ...extractActiveAntibioticNames(source),
+    ...new Set((source.match(highYieldNonAntibioticMedicationPattern) ?? []).map((item) => item.toLowerCase())),
+  ];
   medicationNames.forEach((name) => {
     if (!candidate.toLowerCase().includes(name)) warnings.push(`AI omitted source medication '${name}'; verify A/P or Orders before saving.`);
   });
@@ -344,6 +348,73 @@ function sourceFieldsText(fields: RoundSoapSourceFields) {
   ]
     .filter(sourceHas)
     .join("\n");
+}
+
+function hemoglobinObservations(value: string) {
+  const observations: Array<{ current: number; previous: number | null }> = [];
+  const pattern = /\b(?:Hb|Hgb|hemoglobin)\s*[:=]?\s*(\d+(?:\.\d+)?)(?:\s*(?:\(|from\s+|<-|->|to\s+)(\d+(?:\.\d+)?))?/gi;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(String(value ?? ""))) !== null) {
+    observations.push({
+      current: Number(match[1]),
+      previous: match[2] ? Number(match[2]) : null,
+    });
+  }
+  return observations.filter((item) => Number.isFinite(item.current));
+}
+
+function sourceHasMeaningfulAnemiaEvidence(value: string) {
+  const text = String(value ?? "")
+    .replace(/\b(?:no|denies|without)\s+(?:overt\s+)?(?:active\s+)?bleed(?:ing)?\b/gi, "")
+    .replace(/\bno\s+(?:known\s+)?anemia\b/gi, "");
+  if (/\b(?:anemia|anaemia|acute blood loss|symptomatic anemia|hb drop)\b/i.test(text)) return true;
+  if (/\b(?:melena|hematemesis|hematochezia|active bleed(?:ing)?|prbc|transfus(?:e|ed|ion)|iron deficiency|iron replacement|epoetin|erythropoietin)\b/i.test(text)) return true;
+  // This is an automatic A/P promotion gate, not a diagnostic anemia cutoff.
+  // Mild isolated Hb values remain objective data unless the source supplies clinical context.
+  return hemoglobinObservations(text).some((item) =>
+    item.current < 8 || (item.previous !== null && item.previous - item.current >= 2),
+  );
+}
+
+function titleHasAnemia(value: string) {
+  return /\b(?:anemia|anaemia|hb drop)\b/i.test(value);
+}
+
+function stripUnsupportedAnemiaTitle(value: string) {
+  return String(value ?? "")
+    .replace(/\b(?:mild\s+|chronic\s+)?(?:anemia|anaemia|hb drop)\b/gi, "")
+    .replace(/\s*[/,+&]\s*(?=$)/g, "")
+    .replace(/^\s*[/,+&]\s*|\s*[/,+&]\s*$/g, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
+function filterUnsupportedAnemiaProblem(
+  candidate: SoapDraft,
+  baseline: SoapDraft,
+  sourceText: string,
+  workflowMode: RoundSoapWorkflowMode,
+) {
+  const reviewedBaselineHasAnemia = workflowMode === "dailyUpdate" && baseline.apProblems.some((problem) => titleHasAnemia(problem.title));
+  if (reviewedBaselineHasAnemia || sourceHasMeaningfulAnemiaEvidence(sourceText)) {
+    return { draft: candidate, warnings: [] as string[] };
+  }
+
+  let changed = false;
+  const apProblems = candidate.apProblems.flatMap((problem) => {
+    if (!titleHasAnemia(problem.title)) return [problem];
+    const nextTitle = stripUnsupportedAnemiaTitle(problem.title);
+    changed = true;
+    if (!nextTitle || /^(?:mild|chronic|stable|active problem)$/i.test(nextTitle)) return [];
+    return [{ ...problem, title: nextTitle }];
+  });
+
+  return {
+    draft: changed ? { ...candidate, apProblems } : candidate,
+    warnings: changed
+      ? ["Unsupported standalone anemia A/P was removed; the supplied Hb remains in O/Lab for clinician review."]
+      : [],
+  };
 }
 
 const medicationSourceSignalPattern = /\b(?:abx|antibiotics?|anti-infective|teicoplanin|vancomycin|vanco|cef\w*|pip\/?tazo|piptazo|zosyn|meropenem|ertapenem|azithro\w*|levofloxacin|ciprofloxacin|metronidazole|linezolid|daptomycin|heparin|enoxaparin|apixaban|rivaroxaban|warfarin|insulin|norepi\w*|vasopressin|furosemide|lasix|steroid|predni\w*|methylpred\w*|oxygen|o2|tube feed|tpn|ivf|kcl|mgso4)\b/i;
@@ -513,7 +584,7 @@ function problemSignatures(problem: SoapApProblem | string) {
   add("effusion", /\b(?:pleural effusion|chylothorax|thoracentesis)\b/);
   add("heart-failure", /\b(?:heart failure|hfref|hfpef|adhf)\b/);
   add("arrhythmia", /\b(?:af\b|afib|rvr|arrhythmia)\b/);
-  add("anemia", /\b(?:anemia|hb\s*[<>]?\s*\d+)\b/);
+  if (sourceHasMeaningfulAnemiaEvidence(text)) signatures.push("anemia");
   add("bleeding", /\b(?:bleed|melena|hematemesis|hematochezia)\b/);
   add("liver", /\b(?:liver injury|transaminitis|elevated lft|ast\s*\d+|alt\s*\d+)\b/);
   return [...new Set(signatures)];
@@ -672,6 +743,7 @@ function mergeApProblemsForDaily(
   const realNewProblems = unmatched.filter((problem) => {
     const text = `${problem.title} ${problem.lines.join(" ")}`;
     if (/\b(clinical improvement|improving after|improvement after|post[- ]?procedure improvement)\b/i.test(problem.title)) return false;
+    if (titleHasAnemia(problem.title) && !sourceHasMeaningfulAnemiaEvidence(sourceText)) return false;
     const diagnosisSupported = lineHasSourceSupport(problem.title, sourceText, "") || trustedNewProblemTitles.has(apKey(problem.title));
     return diagnosisSupported && Boolean(problemBucket(problem) || /\b(new|acute|positive|worsening|thrombus|bleed|respiratory failure|effusion|aki|lft|coag)\b/i.test(text));
   });
@@ -1244,12 +1316,26 @@ export function guardRoundSoapDelta({
 }): SoapDeltaReview {
   const baseline = parseSoapText(baselineText);
   const parsedCandidate = parseSoapText(candidateText || baselineText);
+  const sourceText = sourceFieldsText(sourceFields);
+  const significanceFiltered = filterUnsupportedAnemiaProblem(parsedCandidate, baseline, sourceText, workflowMode);
+  const activeAntibiotics = extractActiveAntibioticNames(sourceText);
+  const beforeAntibioticText = formatSoapDraft(significanceFiltered.draft).toLowerCase();
+  const missingAntibiotics = activeAntibiotics.filter((name) => !beforeAntibioticText.includes(name));
+  const sourceGroundedCandidate = ensureAntibioticApInDraft(significanceFiltered.draft, sourceText, selectedDate);
+  const afterAntibioticText = formatSoapDraft(sourceGroundedCandidate).toLowerCase();
+  const restoredAntibiotics = missingAntibiotics.filter((name) => afterAntibioticText.includes(name));
+  const fidelityWarnings = [
+    ...significanceFiltered.warnings,
+    ...(restoredAntibiotics.length > 0
+      ? [`Restored source-grounded active antimicrobial(s) omitted by AI: ${restoredAntibiotics.join(", ")}.`]
+      : []),
+  ];
   const malformedDailyCandidate = workflowMode === "dailyUpdate" && candidateText.trim().length > 0 && !hasSoapBody(parsedCandidate);
-  const protectedCandidate = carryForwardProtectedDraft(baseline, parsedCandidate);
-  const candidate = workflowMode === "dailyUpdate" ? parsedCandidate : protectedCandidate.draft;
+  const protectedCandidate = carryForwardProtectedDraft(baseline, sourceGroundedCandidate);
+  const candidate = workflowMode === "dailyUpdate" ? sourceGroundedCandidate : protectedCandidate.draft;
   const normalizedBaselineText = formatSoapDraft(baseline);
   const normalizedCandidateText = formatSoapDraft(candidate);
-  const coverageWarnings = sourceCoverageWarnings(sourceFieldsText(sourceFields), normalizedCandidateText);
+  const coverageWarnings = sourceCoverageWarnings(sourceText, normalizedCandidateText);
   if (workflowMode !== "dailyUpdate") {
     return {
       workflowMode,
@@ -1257,7 +1343,7 @@ export function guardRoundSoapDelta({
       candidateText: normalizedCandidateText,
       acceptedText: normalizedCandidateText,
       changedSections: analyzeChangedSections(baseline, candidate),
-      warnings: uniqueLines([...candidateWarnings, ...protectedCandidate.warnings, ...coverageWarnings], 8),
+      warnings: uniqueLines([...candidateWarnings, ...fidelityWarnings, ...protectedCandidate.warnings, ...coverageWarnings], 8),
       highRiskWarnings: protectedCandidate.warnings.length > 0 ? protectedCandidate.warnings : [],
     };
   }
@@ -1272,6 +1358,7 @@ export function guardRoundSoapDelta({
     changedSections: daily.changed,
     warnings: uniqueLines([
       ...candidateWarnings,
+      ...fidelityWarnings,
       ...coverageWarnings,
       ...(malformedDailyCandidate ? ["AI returned malformed SOAP text; reviewed baseline was preserved except source-supported local guardrails."] : []),
       ...daily.warnings,

@@ -599,7 +599,7 @@ export function localRoundSoapFromPaste(
   );
   if (treatmentLines.length > 0) {
     const infectionLine = treatmentLines.find((line) => /mrsa|enterococcus|bacteremia|culture|teicoplanin|vancomycin|abx/i.test(line));
-    if (infectionLine && !nextProblems.some((problem) => /cholangitis|sepsis|bacteremia|infection|mrsa|enterococcus/i.test(problem.title))) {
+    if (infectionLine && !nextProblems.some((problem) => /cholangitis|sepsis|bacteremia|infection|infx|mrsa|enterococcus|cap|hap|vap|pna|pneumonia|aspiration/i.test(problem.title))) {
       nextProblems.unshift({
         title: /cholangitis|biliary|ercp/i.test(sourceAll) ? "Cholangitis / infection" : "Bacteremia / infection",
         lines: uniqueSoapLines([infectionLine], 3, 140),

@@ -2737,8 +2737,11 @@ try {
     "B/C grew MRSA and Enterococcus faecalis. Order: Teicoplanin 400 mg IV qd 5/13-. f/u repeat blood culture and define source.",
     "2026-05-15",
   );
-  if (!abxSummary || !/MRSA\/Enterococcus bacteremia/i.test(abxSummary.title) || !/Teicoplanin 400 mg IV qd 5\/13- \(D3\)/i.test(abxSummary.line) || !/f\/u B\/C clearance\/susceptibility/i.test(abxSummary.line)) {
-    throw new Error(`Antibiotic A/P summary did not preserve drug/day/culture follow-up: ${JSON.stringify(abxSummary)}`);
+  if (!abxSummary || !/MRSA\/Enterococcus bacteremia/i.test(abxSummary.title) || !/Teicoplanin 400 mg IV qd 5\/13- \(D3\)/i.test(abxSummary.line) || !/B\/C MRSA\/Enterococcus/i.test(abxSummary.line)) {
+    throw new Error(`Antibiotic A/P summary did not preserve drug/day/microbiology context: ${JSON.stringify(abxSummary)}`);
+  }
+  if (/define duration|de-escalation/i.test(abxSummary.line)) {
+    throw new Error(`Antibiotic A/P summary invented a generic stewardship plan: ${JSON.stringify(abxSummary)}`);
   }
   const draftWithoutAbx = parseSoapText([
     "S:",
@@ -2759,6 +2762,82 @@ try {
   const abxText = formatSoapDraft(abxDraft);
   if (!/# PNA \/ infection[\s\S]*Teicoplanin 400 mg IV qd 5\/13- \(D3\)/i.test(abxText)) {
     throw new Error(`Antibiotic line was not merged into infection A/P:\n${abxText}`);
+  }
+
+  const mildHbCandidate = [
+    "S:",
+    "- no active bleeding symptoms",
+    "O:",
+    "- Lab: CBC/DC: WBC 7.2, Hb 12.0, Plt 220",
+    "A/P:",
+    "# Mild anemia",
+    "- Hb 12.0; chronic disease anemia, trend CBC and consider workup.",
+  ].join("\n");
+  const mildHbReview = guardRoundSoapDelta({
+    workflowMode: "newSoap",
+    baselineText: "",
+    candidateText: mildHbCandidate,
+    sourceFields: { labs: "CBC WBC 7.2, Hb 12.0, Plt 220" },
+    selectedDate: "2026-07-17",
+  });
+  if (/# .*anemia|chronic disease anemia|consider workup/i.test(mildHbReview.acceptedText)) {
+    throw new Error(`Hb 12 was incorrectly promoted into a standalone anemia A/P:\n${mildHbReview.acceptedText}`);
+  }
+  if (!/Hb 12\.0/i.test(mildHbReview.acceptedText)) {
+    throw new Error(`Hb 12 was lost instead of remaining in O/Lab:\n${mildHbReview.acceptedText}`);
+  }
+
+  const omittedAbxCandidate = [
+    "S:",
+    "- cough improving",
+    "O:",
+    "- V/S: afebrile, SpO2 96% RA",
+    "- Lab: CBC/DC: WBC 11.2",
+    "A/P:",
+    "# CAP, improving",
+    "- Afebrile, oxygenation stable.",
+  ].join("\n");
+  const omittedAbxReview = guardRoundSoapDelta({
+    workflowMode: "newSoap",
+    baselineText: "",
+    candidateText: omittedAbxCandidate,
+    sourceFields: {
+      admission: "Admitted for CAP.",
+      orders: "Meropenem 1 g IV q8h started 7/17-.",
+      other: "B/C pending.",
+    },
+    selectedDate: "2026-07-17",
+  });
+  if (!/# CAP[\s\S]*Meropenem 1 g IV q8h/i.test(omittedAbxReview.acceptedText) || !/Order: Meropenem 1 g IV q8h/i.test(omittedAbxReview.acceptedText)) {
+    throw new Error(`Source-grounded active antibiotic omitted by AI was not restored:\n${omittedAbxReview.acceptedText}`);
+  }
+  if (/define duration|monitor closely/i.test(omittedAbxReview.acceptedText)) {
+    throw new Error(`Antibiotic fidelity guard added unsupported generic prose:\n${omittedAbxReview.acceptedText}`);
+  }
+
+  const switchedAbxBaseline = [
+    "S:",
+    "- fever",
+    "O:",
+    "- Lab: CBC/DC: WBC 15",
+    "A/P:",
+    "# CAP / infection",
+    "- Ceftriaxone 2 g IV qd 7/15-; Cx pending.",
+    "Tasks:",
+    "- Order: Ceftriaxone 2 g IV qd 7/15-",
+  ].join("\n");
+  const switchedAbxReview = guardRoundSoapDelta({
+    workflowMode: "dailyUpdate",
+    baselineText: switchedAbxBaseline,
+    candidateText: switchedAbxBaseline,
+    sourceFields: {
+      orders: "Abx changed from ceftriaxone to meropenem 1 g IV q8h 7/17-.",
+      other: "Persistent fever; B/C pending.",
+    },
+    selectedDate: "2026-07-17",
+  });
+  if (!/Meropenem 1 g IV q8h/i.test(switchedAbxReview.acceptedText) || /Order: Ceftriaxone/i.test(switchedAbxReview.acceptedText)) {
+    throw new Error(`Antibiotic switch did not replace the superseded current regimen:\n${switchedAbxReview.acceptedText}`);
   }
 
   const baselineProtected = [

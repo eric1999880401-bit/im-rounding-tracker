@@ -186,13 +186,14 @@ try {
     rawText: [
       "Admission: 60/M CKD3 DM, fever cough dyspnea x3d.",
       "V/S 2026/05/21 T 38.1 BP 94/58 HR 112 RR22 SpO2 92% NC3L.",
-      "Lab WBC 18.0, lactate 3.0, Cr 2.2 from 1.3, K 3.2.",
+      "Lab WBC 18.0, Hb 12.0, lactate 3.0, Cr 2.2 from 1.3, K 3.2.",
       "CXR 5/21 RLL PNA.",
-      "Started Ceftriaxone; B/C pending.",
+      "Order: Meropenem 1 g IV q8h started 5/21-; B/C pending.",
     ].join("\n"),
   });
   const newSoapText = assertSoap(newSoap.data, "New SOAP");
-  assert(/Ceftriaxone|B\/C|Cr 2\.2|CXR 5\/21/i.test(newSoapText), `New SOAP lost core evidence\n${newSoapText}`);
+  assert(/Meropenem 1 g IV q8h|B\/C|Cr 2\.2|CXR 5\/21/i.test(newSoapText), `New SOAP lost core evidence/current antibiotic\n${newSoapText}`);
+  assert(!/^# .*anemia/im.test(newSoapText), `New SOAP promoted isolated Hb 12 into an anemia A/P\n${newSoapText}`);
 
   const transfer = await generateRoundSoap({
     ...common,
