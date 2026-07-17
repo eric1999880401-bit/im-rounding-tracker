@@ -1,6 +1,7 @@
 import { createServer } from "vite";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { readFileSync } from "node:fs";
 
 const server = await createServer({
   appType: "custom",
@@ -362,6 +363,26 @@ const cases = [
 
 const failures = [];
 let supplementalPasses = 0;
+
+try {
+  const functionsPackage = JSON.parse(readFileSync(new URL("../functions/package.json", import.meta.url), "utf8"));
+  const firebaseConfig = JSON.parse(readFileSync(new URL("../firebase.json", import.meta.url), "utf8"));
+  if (functionsPackage.engines?.node !== "22" || firebaseConfig.functions?.runtime !== "nodejs22") {
+    throw new Error(`Firebase runtime drifted from Node.js 22: engines=${functionsPackage.engines?.node}, runtime=${firebaseConfig.functions?.runtime}`);
+  }
+  if (!/^\^14\./.test(String(functionsPackage.dependencies?.["firebase-admin"] ?? ""))) {
+    throw new Error(`firebase-admin is not on the Node.js 22 modular major: ${functionsPackage.dependencies?.["firebase-admin"]}`);
+  }
+  if (!/^\^7\./.test(String(functionsPackage.dependencies?.["firebase-functions"] ?? ""))) {
+    throw new Error(`firebase-functions is not on the current major: ${functionsPackage.dependencies?.["firebase-functions"]}`);
+  }
+  console.log("PASS Firebase Functions runtime and server SDK majors are Node.js 22 compatible");
+  supplementalPasses += 1;
+} catch (error) {
+  failures.push({ name: "Firebase Node.js runtime contract", error: error instanceof Error ? error.message : String(error) });
+  console.error(`FAIL Firebase Node.js runtime contract: ${failures[failures.length - 1].error}`);
+}
+
 for (const item of cases) {
   try {
     const plan = applyClinicalKnowledgeToText(item.text);

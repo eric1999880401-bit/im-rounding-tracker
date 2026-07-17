@@ -1,9 +1,11 @@
-import * as admin from "firebase-admin";
+import { initializeApp } from "firebase-admin/app";
+import { FieldValue, getFirestore } from "firebase-admin/firestore";
 import { logger } from "firebase-functions";
 
 import { HttpsError, onCall } from "firebase-functions/v2/https";
 
-admin.initializeApp();
+initializeApp();
+const db = getFirestore();
 
 const MAX_RAW_TEXT_CHARS = 18000;
 
@@ -124,7 +126,7 @@ export const analyzePatientBatchText = onCall(
     const drafts = sanitizePatientBatchOutput(parsedDraft, rawText, existingPatients, targetPatient);
 
     return {
-      draftId: admin.firestore().collection("_aiDraftIds").doc().id,
+      draftId: db.collection("_aiDraftIds").doc().id,
       drafts,
       model,
       rawTextPreview,
@@ -181,7 +183,7 @@ export const generateRoundSoap = onCall(
 
     const preparedSource = prepareRoundSoapSource(rawText, workflowMode as RoundSoapWorkflowMode);
 
-    const patientRef = admin.firestore().doc(`users/${uid}/patients/${patientId}`);
+    const patientRef = db.doc(`users/${uid}/patients/${patientId}`);
     const patientSnapshot = await patientRef.get();
     if (!patientSnapshot.exists) {
       throw new HttpsError("not-found", "Patient was not found for this signed-in user.");
@@ -307,7 +309,7 @@ export const generateRoundSoap = onCall(
     });
 
     return {
-      draftId: admin.firestore().collection("_aiDraftIds").doc().id,
+      draftId: db.collection("_aiDraftIds").doc().id,
       soapText,
       mode: workflowMode === "dailyUpdate" ? "patch" : "full",
       ...(workflowMode === "dailyUpdate" ? { patch: buildSoapPatch(currentSoapBaseline, soapText, rawText) } : {}),
@@ -363,7 +365,7 @@ export const analyzeClinicalText = onCall(
       throw new HttpsError("invalid-argument", `Text is too long. Limit input to ${MAX_RAW_TEXT_CHARS} characters.`);
     }
 
-    const patientRef = admin.firestore().doc(`users/${uid}/patients/${patientId}`);
+    const patientRef = db.doc(`users/${uid}/patients/${patientId}`);
     const patientSnapshot = await patientRef.get();
     if (!patientSnapshot.exists) {
       throw new HttpsError("not-found", "Patient was not found for this signed-in user.");
@@ -494,7 +496,7 @@ export const analyzeClinicalText = onCall(
       ...(storeRawText ? { rawText } : {}),
       draft,
       status: "draft",
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      createdAt: FieldValue.serverTimestamp(),
       model,
     });
 
@@ -547,8 +549,8 @@ export const generateClinicalDocument = onCall(
       throw new HttpsError("failed-precondition", "AI document generation is not configured. Set OPENAI_API_KEY for Firebase Functions.");
     }
 
-    const userRef = admin.firestore().doc(`users/${uid}`);
-    const patientRef = patientId ? admin.firestore().doc(`users/${uid}/patients/${patientId}`) : null;
+    const userRef = db.doc(`users/${uid}`);
+    const patientRef = patientId ? db.doc(`users/${uid}/patients/${patientId}`) : null;
     const patientSnapshot = patientRef ? await patientRef.get() : null;
     if (patientRef && !patientSnapshot?.exists) {
       throw new HttpsError("not-found", "Patient was not found for this signed-in user.");
@@ -658,7 +660,7 @@ export const generateClinicalDocument = onCall(
       dateTo,
       draft,
       status: "draft",
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      createdAt: FieldValue.serverTimestamp(),
       model,
       qualityMode,
     });
