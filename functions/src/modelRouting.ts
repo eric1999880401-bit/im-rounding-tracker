@@ -8,8 +8,8 @@ export const DEFAULT_BALANCED_MODEL = "gpt-5.6-terra";
 export const DEFAULT_HIGH_ACCURACY_MODEL = "gpt-5.6-sol";
 export const DEFAULT_MODEL = DEFAULT_BALANCED_MODEL;
 export const OPENAI_RESPONSE_TIMEOUT_MS = 105_000;
-export const ROUND_SOAP_OPENAI_RESPONSE_TIMEOUT_MS = 145_000;
-export const ROUND_SOAP_FUNCTION_TIMEOUT_SECONDS = 180;
+export const ROUND_SOAP_OPENAI_RESPONSE_TIMEOUT_MS = 270_000;
+export const ROUND_SOAP_FUNCTION_TIMEOUT_SECONDS = 300;
 
 export function isGpt56Model(model: string) {
   return /^gpt-5\.6(?:$|-(?:sol|terra|luna)(?:-\d{4}-\d{2}-\d{2})?$)/i.test(String(model ?? "").trim());
@@ -55,12 +55,10 @@ export function getModelCandidates(model: string, qualityMode: AiQualityMode) {
     candidates.push(DEFAULT_FAST_MODEL, DEFAULT_BALANCED_MODEL);
   }
   if (qualityMode === "balanced") {
-    candidates.push(DEFAULT_BALANCED_MODEL, DEFAULT_FAST_MODEL);
+    candidates.push(DEFAULT_BALANCED_MODEL, "gpt-5.6");
   }
   if (qualityMode === "highAccuracy") {
     candidates.push(DEFAULT_HIGH_ACCURACY_MODEL, "gpt-5.6");
-    const balanced = getModelForQuality("balanced");
-    candidates.push(balanced, modelAlias(balanced), DEFAULT_BALANCED_MODEL, DEFAULT_FAST_MODEL);
   }
   return [...new Set(candidates.filter((candidate) => candidate && isGpt56Model(candidate)))];
 }
@@ -98,4 +96,8 @@ export function roundSoapHistoryLimit(workflowMode: string) {
   if (workflowMode === "transferHandoff") return 5;
   if (workflowMode === "newSoap") return 1;
   return 2;
+}
+
+export function shouldUseBackgroundRoundSoap(qualityMode: AiQualityMode, workflowMode: string, promptSourceChars: number) {
+  return qualityMode === "highAccuracy" || workflowMode === "transferHandoff" || promptSourceChars > 18_000;
 }

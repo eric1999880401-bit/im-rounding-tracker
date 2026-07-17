@@ -42,6 +42,7 @@ export async function postOpenAiResponse(params: {
   qualityMode: AiQualityMode;
   payload: Record<string, unknown>;
   timeoutMs?: number;
+  background?: boolean;
 }) {
   const candidates = getModelCandidates(params.model, params.qualityMode);
   let lastResponse: Response | null = null;
@@ -80,7 +81,11 @@ export async function postOpenAiResponse(params: {
           Authorization: `Bearer ${params.apiKey}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ ...params.payload, model: candidate }),
+        body: JSON.stringify({
+          ...params.payload,
+          model: candidate,
+          ...(params.background ? { background: true, store: false } : {}),
+        }),
         signal: controller.signal,
       });
     } catch (error) {
@@ -105,7 +110,56 @@ export async function postOpenAiResponse(params: {
       clearTimeout(timeoutId);
     }
 
-    const body = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+    let body = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+    if (params.background && response.ok && ["queued", "in_progress"].includes(String(body.status ?? ""))) {
+      const responseId = typeof body.id === "string" ? body.id : "";
+      if (!responseId) throw new HttpsError("data-loss", "OpenAI started a background SOAP draft without a response ID. Retry generation.");
+      logger.info("OpenAI background response queued", { model: candidate, qualityMode: params.qualityMode, responseId });
+      while (["queued", "in_progress"].includes(String(body.status ?? ""))) {
+        const pollRemainingMs = requestDeadlineAt - Date.now();
+        if (pollRemainingMs < 3_000) {
+          const cancelController = new AbortController();
+          const cancelTimeout = setTimeout(() => cancelController.abort(), 2_000);
+          await fetch(`https://api.openai.com/v1/responses/${responseId}/cancel`, {
+            method: "POST",
+            headers: { Authorization: `Bearer ${params.apiKey}` },
+            signal: cancelController.signal,
+          }).catch(() => undefined);
+          clearTimeout(cancelTimeout);
+          throw new HttpsError(
+            "deadline-exceeded",
+            "The high-quality SOAP draft did not finish within five minutes. The current SOAP was preserved; retry without shortening the transfer record.",
+          );
+        }
+        await new Promise((resolve) => setTimeout(resolve, Math.min(2_000, Math.max(500, pollRemainingMs - 1_000))));
+        const pollController = new AbortController();
+        const pollTimeout = setTimeout(() => pollController.abort(), Math.min(15_000, Math.max(1_000, pollRemainingMs - 500)));
+        try {
+          response = await fetch(`https://api.openai.com/v1/responses/${responseId}`, {
+            headers: { Authorization: `Bearer ${params.apiKey}` },
+            signal: pollController.signal,
+          });
+          body = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+        } catch (error) {
+          if (pollController.signal.aborted || (error instanceof Error && error.name === "AbortError")) continue;
+          throw new HttpsError("unavailable", "OpenAI background SOAP status could not be checked. Retry generation; no patient data was saved.");
+        } finally {
+          clearTimeout(pollTimeout);
+        }
+        if (!response.ok) break;
+      }
+      logger.info("OpenAI background response finished", {
+        model: candidate,
+        qualityMode: params.qualityMode,
+        responseId,
+        responseStatus: String(body.status ?? "unknown"),
+        durationMs: Date.now() - candidateStartedAt,
+      });
+      if (response.ok && String(body.status ?? "completed") !== "completed") {
+        const terminalStatus = String(body.status ?? "failed");
+        throw new HttpsError("unavailable", `OpenAI background SOAP generation ended with status '${terminalStatus}'. Retry generation; no patient data was saved.`);
+      }
+    }
     logger.info("OpenAI response request completed", {
       model: candidate,
       qualityMode: params.qualityMode,

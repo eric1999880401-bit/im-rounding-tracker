@@ -592,6 +592,18 @@ export interface KeywordHighlightRule {
   priority: number;
 }
 
+export type SoapCorrectionRule =
+  | "mergeActionOnlyAp"
+  | "singleTreatmentOwner"
+  | "interpretObjectiveInAp"
+  | "separateTasksOrdersDc"
+  | "preserveReviewedApTitles"
+  | "addSourceBackedProblems"
+  | "preserveReviewedOrders"
+  | "preferSparseTasks"
+  | "preferConciseAp"
+  | "retainDecisiveEvidence";
+
 export interface UserAiStyleProfile {
   styleSummary: string[];
   apVoice: "terse" | "balanced" | "descriptive";
@@ -605,6 +617,8 @@ export interface UserAiStyleProfile {
   correctionFingerprint: string;
   reviewedAiSaveCount: number;
   acceptedAiDraftCount: number;
+  correctionConfidence: "none" | "early" | "established";
+  correctionRules: SoapCorrectionRule[];
   correctionTendencies: string[];
   updatedAt: string;
 }

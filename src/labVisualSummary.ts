@@ -292,11 +292,15 @@ function visualItemFromParsed(item: ParsedLabItem, sourceIndex = 0, chronicRenal
   if (!label || !value) return null;
 
   const previousValue = String(item.previousValue ?? "").trim();
+  const leadingCurrentValue = previousValue
+    ? value.match(/^\s*([<>]?\s*-?\d+(?:,\d{3})*(?:\.\d+)?)/)?.[1]?.replace(/\s+/g, "") ?? ""
+    : "";
+  const displayValue = displayLabValue(label, leadingCurrentValue || value);
   // Non-dictionary labs (custom entries, ACTH, ...) still display under Other;
   // they just never get reference-range arrows or numeric criticality.
   const direction = previousValue ? trendDirection(label, value, previousValue) : trusted ? noteDirection(item) || referenceDirection(label, value) : noteDirection(item);
   const previous = previousValue ? `(${displayLabValue(label, previousValue)})` : "";
-  const text = `${label} ${displayLabValue(label, value)}${direction}${previous}`;
+  const text = `${label} ${displayValue}${direction}${previous}`;
   const groupId = trusted ? groupIdForItem(item) : "other";
   const tone = trusted ? toneForText(label, value, item, chronicRenal) : item.important || item.isImportant ? "important" : "plain";
 

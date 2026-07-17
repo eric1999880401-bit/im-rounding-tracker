@@ -58,7 +58,7 @@ function shouldSkipGenericLabLabel(value: string) {
   if (findLabDictionaryItem(clean)) return true;
   const compact = clean.toLowerCase().replace(/[^a-z0-9]+/g, "");
   if (!compact || /^\d+$/.test(compact)) return true;
-  return /^(bp|hr|rr|bt|temp|spo2|sat|fio2|ef|pasp|day|date|age|bed|room|rm|pt|patient|code|dose|qd|bid|tid|qid|mg|kg|cm|min|hour|hr|afebrile|febrile|fever)$/i.test(compact);
+  return /^(bp|hr|rr|bt|temp|spo2|sat|fio2|ef|pasp|pco|hco|day|date|age|bed|room|rm|pt|patient|code|dose|qd|bid|tid|qid|mg|kg|cm|min|hour|hr|afebrile|febrile|fever)$/i.test(compact);
 }
 
 function parsedLabItem(
@@ -109,6 +109,10 @@ function parseLabItemsFromLine(line: string, important: boolean, groupHint = "")
   // dictionary labels, so the value vanished entirely.
   const directionalPattern = new RegExp(
     `(?:^|\\b)(${labAliasPattern()})\\.?\\s*(?:[:=]\\s*)?${labValuePattern}\\s*(?:->|→|to)\\s*${labValuePattern}${labFlagPattern}`,
+    "gi",
+  );
+  const compactVisualTrendPattern = new RegExp(
+    `(?:^|\\b)(${labAliasPattern()})\\.?\\s*(?:[:=]\\s*)?${labValuePattern}\\s*([↑↓↗↘])\\s*\\(\\s*${labValuePattern}\\s*\\)`,
     "gi",
   );
   const genericDirectionalPattern = new RegExp(
@@ -171,6 +175,12 @@ function parseLabItemsFromLine(line: string, important: boolean, groupHint = "")
     const label = normalizeLabDisplayName(match[1]);
     directionalKeys.add(canonicalLabKey(label));
     items.push(parsedLabItem(label, normalizeLabNote(match[2]) || match[2], "", important, groupHint || "Inflammation / Infection", normalizeLabNote(match[2])));
+  });
+
+  Array.from(line.matchAll(compactVisualTrendPattern)).forEach((match) => {
+    const label = normalizeLabDisplayName(match[1]);
+    directionalKeys.add(canonicalLabKey(label));
+    items.push(parsedLabItem(label, match[2], match[4], important, groupHint, normalizeLabNote(match[3]) || "trend", unitAfterMatch(line, match.index, match[2])));
   });
 
   Array.from(line.matchAll(directionalPattern)).forEach((match) => {

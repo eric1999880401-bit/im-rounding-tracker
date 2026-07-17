@@ -9,6 +9,7 @@ import {
   getCanonicalSoapText,
   localRoundSoapFromPaste,
   soapTextToPatientPatch,
+  splitGuidedSoapSource,
   type SoapEditorFormat,
 } from "../soapDraft";
 import type { SoapSourceFields } from "../soapEvidence";
@@ -71,6 +72,9 @@ interface RoundSoapComposerProps {
 
 type WorkflowMode = RoundSoapWorkflowMode;
 type RoundSoapQualityMode = "fast" | "balanced" | "highAccuracy";
+
+const MAX_ROUND_SOAP_RAW_CHARS = 120_000;
+const LONG_TRANSFER_SOURCE_CHARS = 18_000;
 
 const workflowModes: Array<{ value: WorkflowMode; label: string; helper: string; sourceType: AiClinicalSourceType }> = [
   {
@@ -477,9 +481,18 @@ function RoundSoapComposer({
 
   function currentSourceFields(mode: WorkflowMode = workflowMode): SoapSourceFields {
     if (mixedSourceText.trim()) {
+      if (mode === "dailyUpdate") {
+        const routed = splitGuidedSoapSource(mixedSourceText);
+        return {
+          vitals: routed.vitals,
+          labs: routed.labs,
+          images: routed.images,
+          orders: routed.orders,
+          other: [routed.admission, routed.other].filter(Boolean).join("\n"),
+        };
+      }
       if (mode === "newSoap") return { admission: mixedSourceText, other: mixedSourceText };
       if (mode === "transferHandoff") return { admission: mixedSourceText, lastSoap: mixedSourceText, other: mixedSourceText };
-      return { other: mixedSourceText };
     }
     if (mode === "newSoap") return { ...newSoapFields };
     if (mode === "transferHandoff") return { ...transferFields };
@@ -553,6 +566,11 @@ function RoundSoapComposer({
       return;
     }
 
+    if (rawText.length > MAX_ROUND_SOAP_RAW_CHARS) {
+      setError(`The pasted record exceeds ${MAX_ROUND_SOAP_RAW_CHARS.toLocaleString()} characters. Split only the raw export; do not manually summarize or remove clinical details.`);
+      return;
+    }
+
     setLoading(true);
     try {
       const result = isDemoMode
@@ -589,7 +607,7 @@ function RoundSoapComposer({
       const nextDraft = parseSoapTextToEditorDraft(guarded.acceptedText);
       editOriginRef.current = {
         source: "ai",
-        beforeText: editorDraftToSoapText(nextDraft),
+        beforeText: requestBaseline,
         workflowMode: requestWorkflowMode,
         aiDraftId: result.draftId,
         model: result.model,
@@ -710,7 +728,7 @@ function RoundSoapComposer({
 
   function acceptAllDeltaChanges() {
     if (!deltaReview) return;
-    loadDeltaSoapText(deltaReview.candidateText, "Accepted full AI draft into local SOAP. Review, then Save reviewed SOAP.");
+    loadDeltaSoapText(deltaReview.acceptedText, "Applied all source-supported AI changes while preserving clinician edits. Review, then Save reviewed SOAP.");
   }
 
   function rejectAllDeltaChanges() {
@@ -720,8 +738,8 @@ function RoundSoapComposer({
 
   function acceptDeltaSection(section: SoapDeltaSection) {
     if (!deltaReview) return;
-    const nextText = acceptSoapDeltaSection(editorDraftToSoapText(editorDraftRef.current), deltaReview.candidateText, section);
-    loadDeltaSoapText(nextText, `${deltaSectionLabels[section]} accepted from AI draft locally.`);
+    const nextText = acceptSoapDeltaSection(editorDraftToSoapText(editorDraftRef.current), deltaReview.acceptedText, section);
+    loadDeltaSoapText(nextText, `${deltaSectionLabels[section]} applied from the source-supported draft.`);
   }
 
   function restoreDeltaSection(section: SoapDeltaSection) {
@@ -752,11 +770,11 @@ function RoundSoapComposer({
         <div className="soap-delta-heading">
           <div>
             <strong>Changed sections</strong>
-            {!compactView && <p className="muted">Only source-supported changes are applied; held sections keep the reviewed baseline.</p>}
+            {!compactView && <p className="muted">Only source-supported changes are applied. Your current reviewed wording remains the baseline.</p>}
           </div>
           <div className="form-actions">
             <button type="button" className="secondary compact-button" onClick={rejectAllDeltaChanges}>Reject all</button>
-            <button type="button" className="secondary compact-button" onClick={acceptAllDeltaChanges}>Accept all</button>
+            <button type="button" className="secondary compact-button" onClick={acceptAllDeltaChanges}>Apply safe changes</button>
           </div>
         </div>
         <div className="soap-delta-section-list">
@@ -778,7 +796,10 @@ function RoundSoapComposer({
     );
   }
 
-  const estimatedTokens = Math.ceil((composeRawText().length + soapText.length) / 4);
+  const composedSourceChars = composeRawText().length;
+  const sourceTooLong = composedSourceChars > MAX_ROUND_SOAP_RAW_CHARS;
+  const longTransferSource = workflowMode === "transferHandoff" && composedSourceChars > LONG_TRANSFER_SOURCE_CHARS;
+  const estimatedTokens = Math.ceil((composedSourceChars + soapText.length) / 4);
   const currentRecoveryStaleState = recoveryDraft
     ? recoveryStaleState(recoveryDraft, recoveryFingerprint(recoveryBaseline), recoveryBaselineUpdatedAt)
     : null;
@@ -826,10 +847,18 @@ function RoundSoapComposer({
                 : "Paste admission, last SOAP/SBAR, current V/S, labs, imaging, orders, and transfer context together."}
             rows={6}
           />
+          <span className={sourceTooLong ? "error-message" : "muted"}>
+            {composedSourceChars.toLocaleString()} / {MAX_ROUND_SOAP_RAW_CHARS.toLocaleString()} characters
+          </span>
         </label>
+        {longTransferSource && (
+          <p className="status-message">
+            Keep the transfer record complete. Duplicate low-yield history will be condensed automatically while current status, V/S, labs, treatments, procedures, active problems, pending items, and disposition are preserved. Best quality may take up to five minutes.
+          </p>
+        )}
         <div className="round-soap-generate-row compact-generate-row">
           <span className="muted">Preview only. Save remains explicit.</span>
-          <button type="button" disabled={loading || mixedSourceText.trim().length < 10} onClick={() => void handleGenerate()}>
+          <button type="button" disabled={loading || mixedSourceText.trim().length < 10 || sourceTooLong} onClick={() => void handleGenerate()}>
             {loading ? "Working..." : `Generate ${workflow.label}`}
           </button>
         </div>
@@ -916,10 +945,18 @@ function RoundSoapComposer({
               : "Paste admission, last SOAP/SBAR, current V/S, labs, imaging, orders, and transfer context together."}
           rows={7}
         />
+        <span className={sourceTooLong ? "error-message" : "muted"}>
+          {composedSourceChars.toLocaleString()} / {MAX_ROUND_SOAP_RAW_CHARS.toLocaleString()} characters
+        </span>
       </label>
+      {longTransferSource && (
+        <p className="status-message">
+          Keep the transfer record complete. Duplicate low-yield history will be condensed automatically while current status, V/S, labs, treatments, procedures, active problems, pending items, and disposition are preserved. Best quality may take up to five minutes.
+        </p>
+      )}
       <div className="round-soap-generate-row primary-generate-row">
         <span className="muted">The selected workflow and model are used as shown. Nothing is saved until Save reviewed SOAP.</span>
-        <button type="button" disabled={loading || mixedSourceText.trim().length < 10} onClick={() => void handleGenerate()}>
+        <button type="button" disabled={loading || mixedSourceText.trim().length < 10 || sourceTooLong} onClick={() => void handleGenerate()}>
           {loading ? "Working..." : `Generate ${workflow.label}`}
         </button>
       </div>
@@ -1248,14 +1285,14 @@ function RoundSoapComposer({
 
       <DeidNotice />
       <div className="round-soap-generate-row">
-        <button type="button" disabled={loading || !composeRawText()} onClick={() => void handleGenerate()}>
+        <button type="button" disabled={loading || !composeRawText() || sourceTooLong} onClick={() => void handleGenerate()}>
           {loading ? "Working..." : "Generate SOAP"}
         </button>
         {qualityMode !== "highAccuracy" && (warnings.length > 0 || Boolean(deltaReview?.highRiskWarnings.length)) && (
           <button
             type="button"
             className="secondary"
-            disabled={loading || !composeRawText()}
+            disabled={loading || !composeRawText() || sourceTooLong}
             onClick={() => {
               setQualityMode("highAccuracy");
               void handleGenerate("highAccuracy");

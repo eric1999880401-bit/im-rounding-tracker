@@ -414,6 +414,7 @@ export function makeRoundSoapPrompt(params: {
     "- If user style profile is provided, match the user's writing style: wording density, shorthand habit, A/P organization, section order, and task phrasing.",
     "- Treat styleSummary and preferredTerms as strong voice guidance: imitate the reviewed SOAP style and abbreviations when clinically safe, instead of defaulting to generic textbook prose.",
     "- Treat correctionTendencies as explicit evidence of what this user routinely removes or relocates. Apply those abstract corrections without copying any patient-specific text.",
+    "- Treat correctionRules as output constraints learned from prior reviewed edits. They may change organization and brevity, but never create patient facts.",
     "- If currentSoapBaseline exists, preserve its A/P title style, term choices, terse wording, and task phrasing unless the pasted source clearly requires a change.",
     "- Treat typical A/P problem count and line limit only as weak density hints, not as targets. Clinical correctness and the user's reviewed baseline style matter more than exact numbers.",
     "",

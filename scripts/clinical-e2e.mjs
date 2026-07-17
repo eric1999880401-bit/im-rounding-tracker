@@ -339,7 +339,8 @@ function wardScenario() {
       other: "Cough less, no fever overnight. Pending off O2, Cx/Abx course, OPD/meds.",
     },
   });
-  assertIncludes(mixedDelta.acceptedText, /Lab: WBC 12\.8 from 18\.4, Cr 1\.7 from 2\.1, K 3\.4/i, "ward lab trend");
+  assertIncludes(mixedDelta.acceptedText, /Lab: CBC\/DC: WBC 12\.8↓\(18\.4\)/i, "ward CBC trend");
+  assertIncludes(mixedDelta.acceptedText, /Lab: Chem\/Renal: Cr 1\.7↓\(2\.1\), K 3\.4↑\(3\.1\)/i, "ward renal and electrolyte trend");
   assertIncludes(mixedDelta.acceptedText, /Image: CXR 5\/2 RLL opacity improving/i, "ward image study/date");
   assertIncludes(mixedDelta.acceptedText, /Abx: Ceftriaxone.*Azithromycin/i, "ward order summary in SOAP");
   assertIncludes(mixedDelta.acceptedText, /LFT\/coag abnormal/i, "ward LFT A/P preserved");
@@ -493,7 +494,10 @@ function icuTransferScenario() {
       other: "More alert, cough better, O2 down, swallow passed soft diet, rehab placement pending, barrier O2/renal/AC/rehab.",
     },
   });
-  assertIncludes(dailyReview.acceptedText, /Lab: WBC 10\.4 from 13\.2.*Cr 2\.1 from 2\.7.*pCO2 52 from 58/i, "ICU daily lab trend");
+  assertIncludes(dailyReview.acceptedText, /Lab: CBC\/DC: WBC 10\.4↓\(13\.2\).*Plt 82↑\(64\)/i, "ICU daily CBC trend");
+  assertIncludes(dailyReview.acceptedText, /Lab: Chem\/Renal: Cr 2\.1↓\(2\.7\).*K 4\.7↓\(5\.3\)/i, "ICU daily renal trend");
+  assertIncludes(dailyReview.acceptedText, /Lab: ABG\/VBG: pCO2 52↓\(58\)/i, "ICU daily gas trend");
+  assertNotIncludes(dailyReview.acceptedText, /Lab: Other: PCO 2/i, "ICU pCO2 should not create a partial generic lab");
   assertIncludes(dailyReview.acceptedText, /Image: CXR 5\/18 aspiration opacity improved/i, "ICU daily image study/date");
   assertIncludes(dailyReview.acceptedText, /Cholangitis sepsis s\/p ERCP, shock resolved/i, "ICU daily kept resolved shock in course");
   assertNotIncludes(dailyReview.acceptedText, /# .*active shock|septic shock active|pressor restart/i, "ICU daily should not create active shock");

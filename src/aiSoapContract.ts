@@ -65,6 +65,16 @@ function apBucket(value: string) {
   return "";
 }
 
+function apSignals(value: string) {
+  const text = normalizedKey(value);
+  const signals: string[] = [];
+  if (/\b(hypernatremia|hyponatremia|sodium disorder|na disorder)\b/.test(text)) signals.push("sodium");
+  if (/\b(aki|acute kidney injury|cr elevation|renal dysfunction|hyperkalemia|hypokalemia|k disorder)\b/.test(text)) signals.push("renal");
+  if (/\b(liver injury|transaminitis|elevated lft|coagulopathy|inr elevation)\b/.test(text)) signals.push("liver");
+  if (/\b(anemia|hb drop|bleeding|cytopenia)\b/.test(text)) signals.push("heme");
+  return signals;
+}
+
 function repeatedTreatmentBucket(value: string) {
   const text = normalizedKey(value);
   if (/\b(teicoplanin|vancomycin|vanco|ceftriaxone|cefepime|cefazolin|zosyn|pip\/tazo|meropenem|ertapenem|levofloxacin|metronidazole|abx|antibiotic|culture|b\/c|bcx|source control|de-?escalation)\b/.test(text)) return "infection";
@@ -115,23 +125,23 @@ function numericValue(value: unknown) {
 function criticalLabProblem(label: string, value: number) {
   const key = label.toLowerCase().replace(/[^a-z0-9]+/g, "");
   if (key === "na" || key === "sodium") {
-    if (value > 150) return { bucket: "renal", title: "Hypernatremia", line: `Na ${value}.` };
-    if (value < 130) return { bucket: "renal", title: "Hyponatremia", line: `Na ${value}.` };
+    if (value > 150) return { bucket: "renal", signal: "sodium", title: "Hypernatremia", line: `Na ${value}.` };
+    if (value < 130) return { bucket: "renal", signal: "sodium", title: "Hyponatremia", line: `Na ${value}.` };
   }
   if (key === "k" || key === "potassium") {
-    if (value > 5.5) return { bucket: "renal", title: "Hyperkalemia / renal-lyte", line: `K ${value}.` };
-    if (value < 3) return { bucket: "renal", title: "Hypokalemia / renal-lyte", line: `K ${value}.` };
+    if (value > 5.5) return { bucket: "renal", signal: "renal", title: "Hyperkalemia / renal-lyte", line: `K ${value}.` };
+    if (value < 3) return { bucket: "renal", signal: "renal", title: "Hypokalemia / renal-lyte", line: `K ${value}.` };
   }
-  if ((key === "cr" || key === "creatinine") && value >= 2) return { bucket: "renal", title: "Cr elevation / renal dysfunction", line: `Cr ${value}.` };
-  if ((key === "ast" || key === "alt") && value >= 200) return { bucket: "liver", title: "Liver injury / transaminitis", line: `${label.toUpperCase()} ${value}.` };
-  if (key === "inr" && value >= 3) return { bucket: "liver", title: "Coagulopathy / INR elevation", line: `INR ${value}.` };
-  if ((key === "hb" || key === "hgb" || key === "hemoglobin") && value < 8) return { bucket: "heme", title: "Anemia", line: `Hb ${value}.` };
+  if ((key === "cr" || key === "creatinine") && value >= 2) return { bucket: "renal", signal: "renal", title: "Cr elevation / renal dysfunction", line: `Cr ${value}.` };
+  if ((key === "ast" || key === "alt") && value >= 200) return { bucket: "liver", signal: "liver", title: "Liver injury / transaminitis", line: `${label.toUpperCase()} ${value}.` };
+  if (key === "inr" && value >= 3) return { bucket: "liver", signal: "liver", title: "Coagulopathy / INR elevation", line: `INR ${value}.` };
+  if ((key === "hb" || key === "hgb" || key === "hemoglobin") && value < 8) return { bucket: "heme", signal: "heme", title: "Anemia", line: `Hb ${value}.` };
   return null;
 }
 
 function objectiveCriticalLabProblems(oLines: string[]) {
   const labs = parseLabReports(oLines.filter((line) => /\blab\s*:/i.test(line) || /\b(?:na|k|cr|ast|alt|inr|hb|hgb)\b/i.test(line)).join("\n"));
-  const suggestions: Array<{ bucket: string; title: string; line: string }> = [];
+  const suggestions: Array<{ bucket: string; signal: string; title: string; line: string }> = [];
   labs.forEach((report) => {
     report.items.forEach((item) => {
       const label = String(item.name || item.label || "").trim();
@@ -153,14 +163,14 @@ function objectiveCriticalLabProblems(oLines: string[]) {
 function normalizeObjectiveSupportedApProblems(problems: SoapDraft["apProblems"], oLines: string[]) {
   const next = problems.map((problem) => ({ ...problem, lines: [...problem.lines] }));
   objectiveCriticalLabProblems(oLines).forEach((suggestion) => {
-    const matchingProblem = next.find((problem) => apBucket(`${problem.title} ${problem.lines.join(" ")}`) === suggestion.bucket);
+    const matchingProblem = next.find((problem) => apSignals(problem.title).includes(suggestion.signal));
     if (matchingProblem) {
       if (!matchingProblem.lines.some((line) => normalizedKey(line).includes(normalizedKey(suggestion.line)))) {
         matchingProblem.lines = normalizeLines([suggestion.line, ...matchingProblem.lines], 2, 160);
       }
       return;
     }
-    if (!next.some((problem) => apBucket(`${problem.title} ${problem.lines.join(" ")}`) === suggestion.bucket || normalizedKey(problem.title).includes(normalizedKey(suggestion.title)))) {
+    if (!next.some((problem) => apSignals(problem.title).includes(suggestion.signal) || normalizedKey(problem.title).includes(normalizedKey(suggestion.title)))) {
       next.push({ title: suggestion.title, lines: [suggestion.line] });
     }
   });

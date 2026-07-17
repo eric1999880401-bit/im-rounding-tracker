@@ -365,7 +365,7 @@ function routeUnguidedSoapSourceFragment(
   buckets.other.push(trimmed);
 }
 
-function splitGuidedSoapSource(rawText: string): Record<GuidedSoapSourceSection, string> {
+export function splitGuidedSoapSource(rawText: string): Record<GuidedSoapSourceSection, string> {
   const buckets: Record<GuidedSoapSourceSection, string[]> = {
     admission: [],
     vitals: [],
@@ -555,8 +555,11 @@ export function localRoundSoapFromPaste(
       ], 2, 140);
     });
   }
-  if (/\b(cholangitis|sepsis|biliary|ercp|bile|culture|cx|meropenem|vanco|vancomycin|piperacillin|tazobactam|pip\/?tazo|zosyn)\b/i.test(sourceAll)) {
-    addProblem(nextProblems, "Cholangitis / sepsis", [
+  const hasBiliaryInfection = /\b(?:cholangitis|biliary|bile duct|CBD|choledoch\w*|ERCP)\b/i.test(sourceAll);
+  const hasExplicitSystemicInfection = /\b(?:sepsis|septic shock|bacteremia|bloodstream infection)\b/i.test(sourceAll);
+  const hasSepsisPhysiology = /\bBP\s*(?:8\d|9[0-2])\s*\//i.test(sourceAll) || /\blactate\s*(?:[3-9]|\d{2,})(?:\.\d+)?\b/i.test(sourceAll);
+  if (hasBiliaryInfection || hasExplicitSystemicInfection) {
+    addProblem(nextProblems, hasBiliaryInfection && (hasExplicitSystemicInfection || hasSepsisPhysiology) ? "Cholangitis / sepsis" : hasBiliaryInfection ? "Cholangitis / infection" : "Sepsis / bacteremia", [
       compactProblemLine([
         firstMatch(source.labs, /\bWBC\s*[\d.]+/i),
         firstMatch(source.labs, /\blactate\s*[\d.]+(?:\s*[-=]>\s*[\d.]+)?/i),
@@ -566,11 +569,16 @@ export function localRoundSoapFromPaste(
       ]),
     ]);
   }
-  if (/\b(aki|acute kidney injury|hyperk|hyperkal(?:emia)?|renal failure|lokelma|renal-dose)\b/i.test(sourceAll)) {
-    addProblem(nextProblems, "AKI / hyperK", [
+  const hasAki = /\b(?:aki|acute kidney injury|renal failure|renal dysfunction|renal-dose)\b/i.test(sourceAll);
+  const potassiumText = firstMatch([source.labs, source.other].join("\n"), /\bK\s*[:=]?\s*-?\d+(?:\.\d+)?/i);
+  const potassiumValue = Number(potassiumText.match(/-?\d+(?:\.\d+)?/)?.[0] ?? Number.NaN);
+  const hasHyperK = /\b(?:hyperk|hyperkalemia)\b/i.test(sourceAll) || (Number.isFinite(potassiumValue) && potassiumValue >= 5.5);
+  if (hasAki || hasHyperK) {
+    const renalTitle = hasAki && hasHyperK ? "AKI / hyperK" : hasAki ? "AKI" : "Hyperkalemia";
+    addProblem(nextProblems, renalTitle, [
       compactProblemLine([
         firstMatch(source.labs, /\bCr\s*[\d.]+(?:\s*from\s*[\d.]+)?/i),
-        firstMatch(source.labs, /\bK\s*[\d.]+/i),
+        hasHyperK ? potassiumText : "",
         matchingSnippets(source.orders, /\b(?:Lokelma|renal-dose|repeat.*K|CMP|BMP)\b/i, 2),
         matchingSnippets(source.other, /\b(?:repeat.*(?:CMP|BMP|K)|renal-dose)\b/i, 2),
       ]),

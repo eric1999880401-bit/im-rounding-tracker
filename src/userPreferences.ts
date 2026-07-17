@@ -13,6 +13,7 @@ import type {
   RoundingLayoutPreferences,
   RoundingLayoutPreset,
   RoundingLayoutSection,
+  SoapCorrectionRule,
   UserAiStyleProfile,
   UserPreferences,
 } from "./types";
@@ -261,6 +262,19 @@ const abbreviationWhitelist = [
   "PRN",
 ];
 
+const soapCorrectionRuleWhitelist = new Set<SoapCorrectionRule>([
+  "mergeActionOnlyAp",
+  "singleTreatmentOwner",
+  "interpretObjectiveInAp",
+  "separateTasksOrdersDc",
+  "preserveReviewedApTitles",
+  "addSourceBackedProblems",
+  "preserveReviewedOrders",
+  "preferSparseTasks",
+  "preferConciseAp",
+  "retainDecisiveEvidence",
+]);
+
 function median(values: number[], fallback: number) {
   const clean = values.filter((value) => Number.isFinite(value) && value > 0).sort((a, b) => a - b);
   if (clean.length === 0) return fallback;
@@ -301,7 +315,7 @@ export function normalizeUserAiStyleProfile(value: unknown): UserAiStyleProfile 
     `${taskStyle} tasks`,
   ];
   return {
-    styleSummary: Array.isArray(source.styleSummary) ? source.styleSummary.map(String).filter(Boolean).slice(0, 6) : fallbackSummary,
+    styleSummary: Array.isArray(source.styleSummary) ? source.styleSummary.map(String).filter(Boolean).slice(0, 10) : fallbackSummary,
     apVoice,
     apOrganization,
     abbreviationStyle,
@@ -313,8 +327,12 @@ export function normalizeUserAiStyleProfile(value: unknown): UserAiStyleProfile 
     correctionFingerprint: String(source.correctionFingerprint ?? ""),
     reviewedAiSaveCount: Math.max(0, Number(source.reviewedAiSaveCount) || 0),
     acceptedAiDraftCount: Math.max(0, Number(source.acceptedAiDraftCount) || 0),
+    correctionConfidence: source.correctionConfidence === "established" || source.correctionConfidence === "early" ? source.correctionConfidence : "none",
+    correctionRules: Array.isArray(source.correctionRules)
+      ? source.correctionRules.map(String).filter((rule): rule is SoapCorrectionRule => soapCorrectionRuleWhitelist.has(rule as SoapCorrectionRule)).slice(0, 10)
+      : [],
     correctionTendencies: Array.isArray(source.correctionTendencies)
-      ? source.correctionTendencies.map(String).filter(Boolean).slice(0, 6)
+      ? source.correctionTendencies.map(String).filter(Boolean).slice(0, 10)
       : [],
     updatedAt: String(source.updatedAt ?? ""),
   };
@@ -416,6 +434,8 @@ export function buildUserAiStyleProfile(
     correctionFingerprint: correctionLearning.fingerprint,
     reviewedAiSaveCount: correctionLearning.reviewedAiSaveCount,
     acceptedAiDraftCount: correctionLearning.acceptedAiDraftCount,
+    correctionConfidence: correctionLearning.confidence,
+    correctionRules: correctionLearning.rules,
     correctionTendencies: correctionLearning.tendencies,
     updatedAt: new Date().toISOString(),
   };

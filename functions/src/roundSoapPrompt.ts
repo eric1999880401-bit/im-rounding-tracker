@@ -9,6 +9,7 @@ interface RoundSoapPromptParams {
   patientContext: Record<string, unknown>;
   userStyleProfile?: Record<string, unknown>;
   dailyNotes: Array<Record<string, unknown>>;
+  sourcePreparationNote?: string;
 }
 
 function shortPromptValue(value: unknown, maxLength: number) {
@@ -45,6 +46,38 @@ export function compactRoundSoapPromptHistory(dailyNotes: Array<Record<string, u
   });
 }
 
+const correctionRuleInstructions: Record<string, string> = {
+  mergeActionOnlyAp: "Never create an action as an A/P title; merge it into the matching diagnosis.",
+  singleTreatmentOwner: "Assign each antibiotic, oxygen/device, culture, procedure, and treatment to one best-matching problem only.",
+  interpretObjectiveInAp: "Do not copy raw V/S, Lab, or Image into A/P; keep only interpreted evidence that changes status or plan.",
+  separateTasksOrdersDc: "Medication orders stay in Orders, pending one-time actions in Tasks, and disposition barriers in DC.",
+  preserveReviewedApTitles: "Keep clinician-reviewed A/P title wording; update its status/evidence/plan below it unless the source explicitly changes the diagnosis.",
+  addSourceBackedProblems: "Do not leave a source-supported new active organ problem only in O; add one concise A/P problem when warranted.",
+  preserveReviewedOrders: "Reviewed Orders are authoritative. Replace only a source-supported medication change and never restore a superseded order.",
+  preferSparseTasks: "Use a sparse task list containing only unresolved one-time work; omit routine monitoring and plans already owned by A/P.",
+  preferConciseAp: "Synthesize shorter A/P lines and remove copied course, repeated objective values, and duplicated plans.",
+  retainDecisiveEvidence: "Retain one decisive value, date, study, culture, or treatment detail when it changes assessment or plan.",
+};
+
+export function buildCorrectionContract(userStyleProfile?: Record<string, unknown>) {
+  const rawRules = Array.isArray(userStyleProfile?.correctionRules)
+    ? userStyleProfile.correctionRules.map(String)
+    : [];
+  const rules = rawRules
+    .map((rule) => correctionRuleInstructions[rule])
+    .filter(Boolean)
+    .slice(0, 10);
+  if (rules.length === 0) return "LEARNED CLINICIAN CORRECTIONS\n- No correction rule is established yet; follow the reviewed baseline and general contract.";
+  const confidence = ["early", "established"].includes(String(userStyleProfile?.correctionConfidence))
+    ? String(userStyleProfile?.correctionConfidence)
+    : "early";
+  return [
+    `LEARNED CLINICIAN CORRECTIONS (${confidence})`,
+    "- These are abstract patterns from this user's prior reviewed AI edits. Apply them as output constraints, never as patient facts.",
+    ...rules.map((rule) => `- ${rule}`),
+  ].join("\n");
+}
+
 function workflowContract(workflowMode: string) {
   if (workflowMode === "dailyUpdate") {
     return [
@@ -54,8 +87,10 @@ function workflowContract(workflowMode: string) {
       "- V/S-only input may change O/V/S only, unless the new values create a clearly supported safety issue.",
       "- Lab-only input replaces the current O/Lab summary and may update only the matching existing A/P problem. Include a prior value in parentheses or a trend arrow only when the source or baseline provides it.",
       "- Image-only input replaces the same study's current O/Image line and may update only the matching existing A/P problem. Keep study name, date, and key finding.",
-      "- Orders-only input changes Order lines only. It cannot create a diagnosis by itself.",
+      "- Orders-only input replaces the matching current medication/order and may update that treatment under an existing A/P problem. It cannot create a diagnosis by itself.",
+      "- A changed antibiotic must replace the prior antibiotic in both Orders and its existing infection A/P; never keep the discontinued regimen as current therapy.",
       "- Add a new A/P problem only for a new active diagnosis or organ dysfunction directly supported by today's source.",
+      "- Explicit new AKI/electrolyte disorder, liver injury/coagulopathy, bleeding/anemia, respiratory failure, infection, thrombosis, cardiac or neurologic event must appear as a new or correctly matched A/P problem; do not leave it only in O.",
       "- Delete an old line only when today's source explicitly says resolved, completed, stopped, discontinued, removed, or final negative. Otherwise preserve it.",
       "- If the source is narrow or unclear, make a near-identical draft and add a warning instead of broadly rewriting the SOAP.",
     ].join("\n");
@@ -100,6 +135,8 @@ export function makeRoundSoapPrompt(params: RoundSoapPromptParams) {
     "",
     workflowContract(params.workflowMode),
     "",
+    buildCorrectionContract(params.userStyleProfile),
+    "",
     "CLINICAL PRIORITIZATION",
     "- Preserve supported infection/sepsis, respiratory failure/effusion, AKI/electrolyte disorder, liver injury/coagulopathy, bleeding/anemia, thrombosis, neurologic/cardiac instability, and active cancer complications.",
     "- A dangerous Na/K change, Cr/UO change, marked AST/ALT/T-bil/INR change, Hb drop/bleeding, unstable V/S/O2, or positive culture must be interpreted under the matching A/P problem, not left only in O.",
@@ -139,6 +176,7 @@ export function makeRoundSoapPrompt(params: RoundSoapPromptParams) {
     JSON.stringify(compactRoundSoapPromptHistory(params.dailyNotes)),
     "Current reviewed SOAP baseline:",
     params.currentSoapBaseline || "(none)",
+    params.sourcePreparationNote ? `Source preparation note: ${params.sourcePreparationNote}` : "",
     "Today's pasted de-identified clinical data:",
     params.rawText,
   ].join("\n");

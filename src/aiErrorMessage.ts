@@ -6,12 +6,12 @@ export function aiCallableMessage(error: unknown, feature: string) {
   const text = message && message.toLowerCase() !== "internal" ? message : details;
 
   if (code.includes("deadline-exceeded")) {
-    return `${feature} exceeded the generation time limit. The current SOAP was preserved; retry once or use Recommended rather than Best quality for a very long admission.`;
+    return `${feature} exceeded the extended generation time limit. The current SOAP was preserved. Retry with the same model; you do not need to shorten the transfer record or choose a lower-quality model.`;
   }
   if (code.includes("unauthenticated")) return "Sign in again, then retry.";
   if (code.includes("not-found")) return `${feature} is not available. Check the Functions deployment and configured OpenAI model route.`;
   if (code.includes("failed-precondition")) return `${feature} is not configured. Check OPENAI_API_KEY in Firebase Functions.`;
-  if (code.includes("invalid-argument")) return `${feature} could not run because the request was incomplete or unsafe. Check de-identification and pasted text length.`;
+  if (code.includes("invalid-argument")) return `${feature} could not run because the request was incomplete or unsafe. Check de-identification; only split the raw export when it exceeds the displayed maximum.`;
   if (code.includes("permission-denied")) return `${feature} is blocked by OpenAI or Firebase permissions. Check the API key, model access, and function logs.`;
   if (code.includes("resource-exhausted")) return "AI quota or rate limit reached. Retry later or check OpenAI billing/limits.";
   if (code.includes("unavailable")) return "AI service is temporarily unavailable. Retry later.";

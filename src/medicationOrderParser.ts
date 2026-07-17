@@ -122,7 +122,7 @@ function inferAction(text: string): MedicationOrderAction {
   if (/\b(hold|withhold|suspend)\b/i.test(text)) return "hold";
   if (/\b(resume|restart|re-start)\b/i.test(text)) return "resume";
   if (/\b(stop|dc|discontinue|d\/c)\b/i.test(text)) return "stop";
-  if (/\b(complete|finish|x\s*\d+\s*d)\b/i.test(text)) return "complete";
+  if (/\b(complet(?:e|ed)|finish(?:ed)?|x\s*\d+\s*d)\b/i.test(text)) return "complete";
   if (/\b(start|add|new)\b/i.test(text)) return "start";
   if (/\b(replace|supplement|correct|鋆kcl|mgso4|phosphate|bicarbonate)\b/i.test(text)) return "replace";
   if (/\b(vs|v\/s|vital|monitor|check|i\/o|io|input\/output|spo2|sugar check|glucose check)\b/i.test(text)) return "monitor";
@@ -132,7 +132,7 @@ function inferAction(text: string): MedicationOrderAction {
 }
 
 function inferCategory(text: string): MedicationOrderCategory {
-  if (/\b(teicoplanin|vancomycin|vanco|ceftriaxone|cefepime|cefazolin|ceftazidime|ampicillin|sulbactam|unasyn|piperacillin|tazobactam|pip\/tazo|zosyn|meropenem|imipenem|ertapenem|azithromycin|azithro|clarithromycin|erythromycin|levofloxacin|ciprofloxacin|moxifloxacin|metronidazole|flagyl|clindamycin|linezolid|daptomycin|colistin|fluconazole|micafungin|acyclovir|ganciclovir|abx|antibiotic)\b/i.test(text)) return "antiInfective";
+  if (/\b(teicoplanin|vancomycin|vanco|ceftriaxone|cefepime|cefazolin|ceftazidime|ampicillin|sulbactam|unasyn|piperacillin|tazobactam|pip\/?tazo|piptazo|zosyn|meropenem|imipenem|ertapenem|azithromycin|azithro|clarithromycin|erythromycin|levofloxacin|ciprofloxacin|moxifloxacin|metronidazole|flagyl|clindamycin|linezolid|daptomycin|colistin|fluconazole|micafungin|acyclovir|ganciclovir|abx|antibiotics?)\b/i.test(text)) return "antiInfective";
   if (/\b(heparin|enoxaparin|clexane|apixaban|rivaroxaban|dabigatran|warfarin|aspirin|clopidogrel|ticagrelor|cilostazol|anticoag|antiplatelet)\b/i.test(text)) return "anticoagAntiplatelet";
   if (/\b(prednisolone|prednisone|methylpred\w*|solu-medrol|hydrocortisone|dexamethasone|steroid|tacrolimus|cyclosporine|mycophenolate|azathioprine|sirolimus)\b/i.test(text)) return "steroidImmunosuppression";
   if (/\b(norepi|norepinephrine|dopamine|dobutamine|vasopressin|epinephrine|nitroglycerin|amiodarone|digoxin|furosemide|lasix|bumetanide|spironolactone|diuretic|pressor|vasoactive)\b/i.test(text)) return "cardioRenalVasoactive";

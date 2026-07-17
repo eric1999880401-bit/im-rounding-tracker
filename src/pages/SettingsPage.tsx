@@ -418,6 +418,8 @@ function SettingsPage({ preferences, userName, onChange, onRefreshAiStyleProfile
                       correctionFingerprint: `reset-${resetAt}`,
                       reviewedAiSaveCount: 0,
                       acceptedAiDraftCount: 0,
+                      correctionConfidence: "none",
+                      correctionRules: [],
                       correctionTendencies: [],
                       updatedAt: resetAt,
                     },
@@ -436,6 +438,7 @@ function SettingsPage({ preferences, userName, onChange, onRefreshAiStyleProfile
             <span>Shorthand: {preferences.aiStyleProfile.abbreviationStyle}</span>
             <span>Tasks: {preferences.aiStyleProfile.taskStyle}</span>
             <span>Terms: {preferences.aiStyleProfile.preferredTerms.join(", ") || "-"}</span>
+            <span>Correction learning: {preferences.aiStyleProfile.correctionConfidence}</span>
             <span className="muted">
               Learned from {preferences.aiStyleProfile.reviewedAiSaveCount} reviewed AI save{preferences.aiStyleProfile.reviewedAiSaveCount === 1 ? "" : "s"}; {preferences.aiStyleProfile.acceptedAiDraftCount} accepted unchanged.
             </span>

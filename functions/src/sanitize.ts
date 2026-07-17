@@ -67,6 +67,19 @@ export function sanitizeUserStyleProfile(input: unknown) {
   const apVoice = String(source.apVoice ?? "terse");
   const apOrganization = String(source.apOrganization ?? "problemStatusPlan");
   const abbreviationStyle = String(source.abbreviationStyle ?? "moderate");
+  const allowedCorrectionRules = new Set([
+    "mergeActionOnlyAp",
+    "singleTreatmentOwner",
+    "interpretObjectiveInAp",
+    "separateTasksOrdersDc",
+    "preserveReviewedApTitles",
+    "addSourceBackedProblems",
+    "preserveReviewedOrders",
+    "preferSparseTasks",
+    "preferConciseAp",
+    "retainDecisiveEvidence",
+  ]);
+  const correctionConfidence = String(source.correctionConfidence ?? "none");
   return {
     styleSummary: asStringArray(source.styleSummary).slice(0, 10),
     apVoice: ["terse", "balanced", "descriptive"].includes(apVoice) ? apVoice : "terse",
@@ -77,7 +90,9 @@ export function sanitizeUserStyleProfile(input: unknown) {
     sectionOrder: asStringArray(source.sectionOrder).filter((item) => ["Header", "S", "O", "A/P", "Orders", "Tasks", "DC"].includes(item)).slice(0, 7),
     typicalApProblemCount: Math.max(1, Math.min(8, Number(source.typicalApProblemCount ?? source.apProblemCount) || 4)),
     typicalApLineLimit: Math.max(1, Math.min(4, Number(source.typicalApLineLimit ?? source.apLineLimit) || 2)),
-    correctionTendencies: asStringArray(source.correctionTendencies).slice(0, 6),
+    correctionConfidence: ["none", "early", "established"].includes(correctionConfidence) ? correctionConfidence : "none",
+    correctionRules: asStringArray(source.correctionRules).filter((rule) => allowedCorrectionRules.has(rule)).slice(0, 10),
+    correctionTendencies: asStringArray(source.correctionTendencies).slice(0, 10),
     reviewedAiSaveCount: Math.max(0, Number(source.reviewedAiSaveCount) || 0),
   };
 }

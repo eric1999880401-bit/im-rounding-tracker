@@ -115,7 +115,7 @@ function App() {
   useEffect(() => {
     if (dataLoading) return;
     const learnedProfile = buildUserAiStyleProfile(patients, dailyNotesByPatient, { after: preferences.aiStyleLearningResetAt });
-    if (learnedProfile.reviewedAiSaveCount < 5) return;
+    if (learnedProfile.reviewedAiSaveCount < 1) return;
     if (learnedProfile.correctionFingerprint === preferences.aiStyleProfile?.correctionFingerprint) return;
     handlePreferencesChange({ ...preferences, aiStyleProfile: learnedProfile });
   }, [dailyNotesByPatient, dataLoading, patients, preferences.aiStyleLearningResetAt, preferences.aiStyleProfile?.correctionFingerprint]);

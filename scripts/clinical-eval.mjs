@@ -52,6 +52,7 @@ const {
   soapDraftToPatientPatch,
   soapTextToPatientPatch,
   soapTextWithDerivedHighlights,
+  splitGuidedSoapSource,
 } = await server.ssrLoadModule("/src/soapDraft.ts");
 const { deriveSoapEvidence } = await server.ssrLoadModule("/src/soapEvidence.ts");
 const { buildConcisePatientClinicalUpdate } = await server.ssrLoadModule("/src/clinicalPatientPolish.ts");
@@ -104,7 +105,7 @@ const {
 } = await server.ssrLoadModule("/src/draftRecovery.ts");
 const { appendSoapEditTrace, buildSoapEditTrace, nextSoapVersion, SOAP_EDIT_HISTORY_LIMIT } = await server.ssrLoadModule("/src/soapEditTrace.ts");
 const { SoapVisualPreview } = await server.ssrLoadModule("/src/components/SoapVisualPreview.tsx");
-const { compactRoundSoapPromptHistory, makeRoundSoapPrompt } = await server.ssrLoadModule("/functions/src/roundSoapPrompt.ts");
+const { buildCorrectionContract, compactRoundSoapPromptHistory, makeRoundSoapPrompt } = await server.ssrLoadModule("/functions/src/roundSoapPrompt.ts");
 const {
   DEFAULT_BALANCED_MODEL,
   DEFAULT_FAST_MODEL,
@@ -119,7 +120,9 @@ const {
   ROUND_SOAP_OPENAI_RESPONSE_TIMEOUT_MS,
   roundSoapHistoryLimit,
   sanitizeQualityMode,
+  shouldUseBackgroundRoundSoap,
 } = await server.ssrLoadModule("/functions/src/modelRouting.ts");
+const { MAX_ROUND_SOAP_RAW_CHARS, prepareRoundSoapSource } = await server.ssrLoadModule("/functions/src/sourceCompaction.ts");
 const { DEFAULT_AI_CALLABLE_TIMEOUT_MS, ROUND_SOAP_CALLABLE_TIMEOUT_MS } = await server.ssrLoadModule("/src/aiTimeouts.ts");
 const { aiCallableMessage } = await server.ssrLoadModule("/src/aiErrorMessage.ts");
 const {
@@ -1665,6 +1668,135 @@ try {
   if (!/B\/C pending|Teicoplanin|CT neck\/chest/i.test(mergedLocalSoap)) {
     throw new Error(`Local demo SOAP merge lost treatment/pending/image facts:\n${mergedLocalSoap}`);
   }
+  const pnaAkiLocalSoap = localRoundSoapFromPaste(
+    {
+      ...emptyPatient(),
+      bed: "T-PNA",
+      patientCode: "FAKE-PNA",
+      age: 67,
+      sex: "F",
+      primaryDiagnosis: "CAP",
+    },
+    [{
+      ...emptyDailyNote("2026-07-16"),
+      soapText: [
+        "S:",
+        "- Dyspnea improving.",
+        "O:",
+        "- Lab: Cr 0.8, K 4.1",
+        "A/P:",
+        "# CAP - clinician wording",
+        "- Ceftriaxone, f/u B/C.",
+        "Tasks:",
+        "- Order: Nutrition: J-tube feed 1500 kcal",
+      ].join("\n"),
+      soapStatus: "reviewed",
+      soapVersion: 1,
+    }],
+    "2026-07-17",
+    "Today: new AKI. Cr 2.1 from 0.8, K 4.1. Antibiotic switched from ceftriaxone to pip/tazo 4.5 g IV q8h after fever; repeat blood culture pending. No recurrent dyspnea.",
+    "dailyUpdate",
+  );
+  if (/Cholangitis|hyperK/i.test(pnaAkiLocalSoap) || !/# AKI\b[\s\S]*Cr 2\.1/i.test(pnaAkiLocalSoap)) {
+    throw new Error(`Local demo inferred unsupported infection/lyte labels from a CAP + AKI update:\n${pnaAkiLocalSoap}`);
+  }
+  if (!/# CAP - clinician wording[\s\S]*pip\/tazo 4\.5 g IV q8h/i.test(pnaAkiLocalSoap)) {
+    throw new Error(`Local demo did not keep the clinician infection title while applying the changed antibiotic:\n${pnaAkiLocalSoap}`);
+  }
+  const pnaAkiGuarded = guardRoundSoapDelta({
+    workflowMode: "dailyUpdate",
+    baselineText: [
+      "S:",
+      "- Dyspnea improving.",
+      "O:",
+      "- Lab: Cr 0.8, K 4.1",
+      "A/P:",
+      "# CAP - clinician wording",
+      "- Ceftriaxone, f/u B/C.",
+      "Tasks:",
+      "- Order: Nutrition: J-tube feed 1500 kcal",
+    ].join("\n"),
+    candidateText: pnaAkiLocalSoap,
+    sourceFields: {
+      other: "Today: new AKI. Cr 2.1 from 0.8, K 4.1. Antibiotic switched from ceftriaxone to pip/tazo 4.5 g IV q8h after fever; repeat blood culture pending. No recurrent dyspnea.",
+    },
+  });
+  const parsedPnaAkiGuarded = parseSoapText(pnaAkiGuarded.acceptedText);
+  const parsedPnaAkiCap = parsedPnaAkiGuarded.apProblems.find((problem) => /CAP - clinician wording/i.test(problem.title));
+  if (!parsedPnaAkiCap?.lines.some((line) => /pip\/tazo 4\.5 g IV q8h/i.test(line)) || parsedPnaAkiGuarded.apProblems.some((problem) => /^(?:Today|Abx)$/i.test(problem.title))) {
+    throw new Error(`Guarded mixed paste lost the changed antibiotic or parsed a source label as a problem:\n${pnaAkiGuarded.acceptedText}`);
+  }
+  const routedMixedDaily = splitGuidedSoapSource("BP 110/70, HR 88. Today: new AKI. Cr 2.1 from 0.8, K 4.1. Antibiotic switched from ceftriaxone to pip/tazo 4.5 g IV q8h. No recurrent dyspnea.");
+  if (!/BP 110\/70/i.test(routedMixedDaily.vitals) || !/Cr 2\.1 from 0\.8/i.test(routedMixedDaily.labs) || !/pip\/tazo 4\.5 g IV q8h/i.test(routedMixedDaily.orders) || !/new AKI/i.test(routedMixedDaily.other)) {
+    throw new Error(`Mixed Daily paste was not routed into V/S, Lab, Orders, and course before guardrails: ${JSON.stringify(routedMixedDaily)}`);
+  }
+  const omittedApMedicationGuarded = guardRoundSoapDelta({
+    workflowMode: "dailyUpdate",
+    baselineText: [
+      "S:",
+      "- Dyspnea improving.",
+      "O:",
+      "- Lab: Cr 0.8, K 4.1",
+      "A/P:",
+      "# CAP improving on antibiotics.",
+      "- Continue IV antibiotics",
+      "- wean oxygen; ambulation trial.",
+      "Tasks:",
+      "- Order: Monitoring: VS q4h",
+    ].join("\n"),
+    candidateText: [
+      "S:",
+      "- No recurrent dyspnea.",
+      "O:",
+      "- Lab: Cr 2.1 from 0.8, K 4.1",
+      "A/P:",
+      "# CAP improving on antibiotics.",
+      "- Continue IV antibiotics",
+      "# AKI",
+      "- Cr 2.1 from 0.8",
+      "Tasks:",
+      "- Order: Abx: Antibiotic switched from ceftriaxone to pip/tazo 4.5 g IV q8h",
+      "- Order: Monitoring: VS q4h",
+    ].join("\n"),
+    sourceFields: {
+      other: "Today: new AKI. Cr 2.1 from 0.8, K 4.1. Antibiotic switched from ceftriaxone to pip/tazo 4.5 g IV q8h after fever; repeat blood culture pending. No recurrent dyspnea.",
+    },
+  });
+  const parsedOmittedMedication = parseSoapText(omittedApMedicationGuarded.acceptedText);
+  const parsedOmittedCap = parsedOmittedMedication.apProblems.find((problem) => /CAP improving on antibiotics/i.test(problem.title));
+  if (!parsedOmittedCap?.lines.some((line) => /pip\/tazo 4\.5 g IV q8h/i.test(line)) || parsedOmittedMedication.apProblems.some((problem) => /^Abx$/i.test(problem.title))) {
+    throw new Error(`Changed antibiotic did not reach the existing infection A/P when AI omitted it there:\n${omittedApMedicationGuarded.acceptedText}`);
+  }
+  const renalAndSodiumCandidate = normalizeAiSoapText([
+    "S:",
+    "- stable",
+    "O:",
+    "- Lab: Cr 2.1 from 0.8, Na 154 from 140",
+    "A/P:",
+    "# Hypernatremia",
+    "- Na 154 from 140",
+  ].join("\n")).soapText;
+  const renalAndSodiumGuarded = guardRoundSoapDelta({
+    workflowMode: "dailyUpdate",
+    baselineText: [
+      "S:",
+      "- stable",
+      "O:",
+      "- Lab: Cr 0.8, Na 132",
+      "A/P:",
+      "# CAP - clinician title",
+      "- cont current treatment.",
+    ].join("\n"),
+    candidateText: renalAndSodiumCandidate,
+    sourceFields: { labs: "Lab: Cr 2.1 from 0.8, Na 154 from 140. New AKI and hypernatremia." },
+  });
+  const renalAndSodiumDraft = parseSoapText(renalAndSodiumGuarded.acceptedText);
+  if (!renalAndSodiumDraft.apProblems.some((problem) => /^(?:AKI|Cr rise|Cr elevation)/i.test(problem.title)) || !renalAndSodiumDraft.apProblems.some((problem) => /^Hypernatremia/i.test(problem.title))) {
+    throw new Error(`AKI and hypernatremia were collapsed into one broad renal problem:\n${renalAndSodiumGuarded.acceptedText}`);
+  }
+  if (/Na 154[^\n]*132/i.test(renalAndSodiumGuarded.acceptedText) || !/Na 154[^\n]*(?:140|↑)/i.test(renalAndSodiumGuarded.acceptedText)) {
+    throw new Error(`Current source lab trend was mixed with a stale baseline value:\n${renalAndSodiumGuarded.acceptedText}`);
+  }
   const cholangitisLocalSoap = localRoundSoapFromPaste(
     {
       ...emptyPatient(),
@@ -2130,11 +2262,7 @@ try {
     savedAt: "2026-06-03T08:00:00.000Z",
   });
   if (!baseTrace) throw new Error("Could not create correction trace fixture");
-  const history = Array.from({ length: 5 }, (_, index) => ({
-    ...baseTrace,
-    id: `fake-learning-${index}`,
-    savedAt: `2026-06-0${index + 3}T08:00:00.000Z`,
-  }));
+  const history = [baseTrace];
   const note = {
     ...emptyDailyNote("2026-06-07"),
     soapText: after,
@@ -2144,20 +2272,91 @@ try {
   };
   const patient = { ...emptyPatient(), id: "learning-patient", status: "active" };
   const profile = buildUserAiStyleProfile([patient], { [patient.id]: [note] });
-  if (profile.reviewedAiSaveCount !== 5 || !profile.correctionFingerprint) {
-    throw new Error(`Correction learning did not activate after five reviewed AI saves: ${JSON.stringify(profile)}`);
+  if (profile.reviewedAiSaveCount !== 1 || profile.correctionConfidence !== "early" || !profile.correctionFingerprint) {
+    throw new Error(`Correction learning did not activate after the first reviewed AI save: ${JSON.stringify(profile)}`);
   }
-  if (!profile.correctionTendencies.some((line) => /action-only A\/P/i.test(line))) {
-    throw new Error(`Correction profile did not learn action-only A/P merging: ${JSON.stringify(profile.correctionTendencies)}`);
+  if (!profile.correctionRules.includes("mergeActionOnlyAp") || !profile.correctionRules.includes("singleTreatmentOwner")) {
+    throw new Error(`Correction profile did not learn A/P ownership rules: ${JSON.stringify(profile)}`);
   }
   if (/FAKE-CAP|learning-patient/i.test(JSON.stringify(profile))) {
     throw new Error("Correction profile leaked patient-specific fixture identifiers");
   }
-  console.log("PASS Abstract correction learning activates after five reviewed AI saves");
+  console.log("PASS Abstract correction learning activates after the first reviewed AI save");
   supplementalPasses += 1;
 } catch (error) {
   failures.push({ name: "Abstract correction learning", error: error instanceof Error ? error.message : String(error) });
   console.error(`FAIL Abstract correction learning: ${failures[failures.length - 1].error}`);
+}
+
+try {
+  const before = [
+    "S:",
+    "- cough improving",
+    "O:",
+    "- Lab: Cr 0.8, Na 140",
+    "A/P:",
+    "# PNA",
+    "- Ceftriaxone; f/u B/C.",
+    "Tasks:",
+    "- Order: Abx: Ceftriaxone",
+    "- repeat routine labs",
+  ].join("\n");
+  const after = [
+    "S:",
+    "- cough improving",
+    "O:",
+    "- Lab: Cr 2.1 (0.8), Na 140",
+    "A/P:",
+    "# PNA, improving",
+    "- Pip/tazo; f/u B/C.",
+    "# AKI",
+    "- Cr 2.1 (0.8); review volume/meds.",
+    "Tasks:",
+    "- Order: Abx: Pip/tazo",
+  ].join("\n");
+  const trace = buildSoapEditTrace({
+    source: "ai",
+    beforeText: before,
+    afterText: after,
+    workflowMode: "dailyUpdate",
+    aiDraftId: "fake-correction-contract",
+    model: "fake-model",
+    qualityMode: "balanced",
+    baseSoapVersion: 1,
+    savedSoapVersion: 2,
+    savedAt: "2026-06-08T08:00:00.000Z",
+  });
+  if (!trace) throw new Error("Could not create structured correction trace fixture");
+  const history = Array.from({ length: 3 }, (_, index) => ({
+    ...trace,
+    id: `fake-correction-contract-${index}`,
+    savedAt: `2026-06-${String(index + 8).padStart(2, "0")}T08:00:00.000Z`,
+  }));
+  const patient = { ...emptyPatient(), id: "correction-contract-patient", status: "active" };
+  const note = {
+    ...emptyDailyNote("2026-06-10"),
+    soapText: after,
+    soapStatus: "reviewed",
+    soapEditHistory: history,
+    soapUpdatedAt: "2026-06-10T08:00:00.000Z",
+  };
+  const profile = buildUserAiStyleProfile([patient], { [patient.id]: [note] });
+  const expectedRules = ["preserveReviewedApTitles", "addSourceBackedProblems", "preserveReviewedOrders", "preferSparseTasks", "retainDecisiveEvidence"];
+  if (profile.correctionConfidence !== "established" || expectedRules.some((rule) => !profile.correctionRules.includes(rule))) {
+    throw new Error(`Correction profile did not learn the clinician's recurring structural edits: ${JSON.stringify(profile)}`);
+  }
+  const contract = buildCorrectionContract(profile);
+  if (!/clinician-reviewed A\/P title wording/i.test(contract) || !/new active organ problem/i.test(contract) || !/never restore a superseded order/i.test(contract)) {
+    throw new Error(`Round SOAP prompt did not receive actionable learned corrections:\n${contract}`);
+  }
+  if (/correction-contract-patient|Cr 2\.1|Pip\/tazo/i.test(contract)) {
+    throw new Error(`Correction contract leaked patient-specific text:\n${contract}`);
+  }
+  console.log("PASS Structured correction profile learns A/P, evidence, task, and order preferences without raw patient text");
+  supplementalPasses += 1;
+} catch (error) {
+  failures.push({ name: "Structured correction profile", error: error instanceof Error ? error.message : String(error) });
+  console.error(`FAIL Structured correction profile: ${failures[failures.length - 1].error}`);
 }
 
 try {
@@ -2272,7 +2471,7 @@ try {
     candidateText: labCandidate,
     sourceFields: { labs: "WBC 10.2 from 13.0, Hb 9.4 stable, Cr 2.0 from 1.6" },
   });
-  if (!/Lab: WBC 10\.2 from 13\.0, Hb 9\.4 stable, Cr 2\.0 from 1\.6/i.test(labOnly.acceptedText)) {
+  if (!/Lab: CBC\/DC: WBC 10\.2[^\n]*13\.0[^\n]*Hb 9\.4[\s\S]*Lab: Chem\/Renal: Cr 2\.0[^\n]*1\.6/i.test(labOnly.acceptedText)) {
     throw new Error(`Lab-only update did not apply lab trend:\n${labOnly.acceptedText}`);
   }
   if (/Lab: WBC 13\.0, Hb 9\.4, Cr 1\.6/i.test(labOnly.acceptedText)) {
@@ -2282,7 +2481,7 @@ try {
   if (!/WBC 10\.2.*\(13\)|Cr 2\.0.*\(1\.6\)/i.test(labOnlyVisual)) {
     throw new Error(`Lab visual summary did not display current(previous) trend:\n${labOnlyVisual}`);
   }
-  if (!/# PNA \/ bacteremia[\s\S]*WBC improving[\s\S]*Ceftriaxone 5\/19-[\s\S]*# AKI on CKD[\s\S]*Cr 2\.0 from 1\.6/i.test(labOnly.acceptedText)) {
+  if (!/# PNA \/ bacteremia[\s\S]*WBC improving[\s\S]*Ceftriaxone 5\/19-[\s\S]*# AKI on CKD[\s\S]*Cr 2\.0(?: from |\()1\.6\)?/i.test(labOnly.acceptedText)) {
     throw new Error(`Lab-only update did not merge facts under existing A/P titles:\n${labOnly.acceptedText}`);
   }
   if (/New CHF|Start diuresis/i.test(labOnly.acceptedText)) {
@@ -2462,7 +2661,10 @@ try {
     candidateText: sparseCandidate,
     sourceFields: { labs: "WBC 12.1, Cr 2.1, K 4.8" },
   });
-  if (!/WBC 12\.1 \(18\.2\), Cr 2\.1 \(2\.7\), K 4\.8 \(5\.6\)/i.test(highYieldDaily.acceptedText)) {
+  if (
+    !/Lab: CBC\/DC: WBC 12\.1↓\(18\.2\)/i.test(highYieldDaily.acceptedText)
+    || !/Lab: Chem\/Renal: Cr 2\.1↓\(2\.7\), K 4\.8↓\(5\.6\)/i.test(highYieldDaily.acceptedText)
+  ) {
     throw new Error(`Sparse lab update did not apply new lab:\n${highYieldDaily.acceptedText}`);
   }
   for (const required of [/Meropenem 5\/20-/i, /AST\/ALT 175\/419, INR 1\.8/i, /CT A\/P 5\/20/i, /f\/u B\/C and bile Cx final/i, /Pending: afebrile, Cx plan/i]) {
@@ -3258,6 +3460,88 @@ try {
   }
   if (!/Ceftriaxone 6\/1-/i.test(sodiumGuarded.acceptedText) || !/S:\n- no new dyspnea/i.test(sodiumGuarded.acceptedText)) {
     throw new Error(`Daily lab update should preserve unrelated reviewed SOAP:\n${sodiumGuarded.acceptedText}`);
+  }
+
+  const clinicianOwnedBaseline = [
+    "S:",
+    "- breathing stable; tolerating J-tube feed.",
+    "O:",
+    "- Lab: Cr 0.8, K 4.1",
+    "A/P:",
+    "# CAP - keep my wording",
+    "- [[yellow:De-escalate only after final B/C.]]",
+    "# Pleural effusion",
+    "- L drain removed; repeat tap only if recurrent SOB.",
+    "Tasks:",
+    "- Order: Abx: Ceftriaxone 7/10-",
+    "- Order: Nutrition: J-tube feed 1500 kcal",
+  ].join("\n");
+  const staleAiCandidate = [
+    "S:",
+    "- breathing stable; tolerating J-tube feed.",
+    "O:",
+    "- Lab: Cr 2.1, K 4.1",
+    "A/P:",
+    "# CAP",
+    "- Pip/tazo 4.5 g IV q8h, f/u Cx.",
+    "# Pleural effusion",
+    "- No recurrent SOB; repeat tap PRN.",
+    "Tasks:",
+    "- Order: Abx: Ceftriaxone 7/10-",
+  ].join("\n");
+  const clinicianOwnedGuarded = guardRoundSoapDelta({
+    workflowMode: "dailyUpdate",
+    baselineText: clinicianOwnedBaseline,
+    candidateText: staleAiCandidate,
+    sourceFields: {
+      labs: "Cr 2.1 from 0.8, K 4.1. New AKI today.",
+      orders: "Antibiotic switched from Ceftriaxone to pip/tazo 4.5 g IV q8h.",
+      other: "No recurrent SOB.",
+    },
+  });
+  const clinicianAccepted = parseSoapText(clinicianOwnedGuarded.acceptedText);
+  if (!/# CAP - keep my wording/i.test(clinicianOwnedGuarded.acceptedText) || !/\[\[yellow:De-escalate only after final B\/C\.\]\]/i.test(clinicianOwnedGuarded.acceptedText)) {
+    throw new Error(`Daily update reverted clinician-owned A/P wording or highlight:\n${clinicianOwnedGuarded.acceptedText}`);
+  }
+  if (!/# AKI[\s\S]*Cr 2\.1/i.test(clinicianOwnedGuarded.acceptedText)) {
+    throw new Error(`Source-supported new AKI was not added when AI omitted it:\n${clinicianOwnedGuarded.acceptedText}`);
+  }
+  if (!/Order: Abx:.*pip\/tazo 4\.5 g IV q8h/i.test(clinicianOwnedGuarded.acceptedText)) {
+    throw new Error(`Changed antibiotic was not deterministically added to Orders:\n${clinicianOwnedGuarded.acceptedText}`);
+  }
+  if (/Order: Abx: Ceftriaxone 7\/10-/i.test(clinicianOwnedGuarded.acceptedText) || !/Order: Nutrition: J-tube feed 1500 kcal/i.test(clinicianOwnedGuarded.acceptedText)) {
+    throw new Error(`Medication supersede removed a clinician order or kept the stale regimen:\n${clinicianOwnedGuarded.acceptedText}`);
+  }
+  const capProblem = clinicianAccepted.apProblems.find((problem) => /CAP/i.test(problem.title));
+  const effusionProblem = clinicianAccepted.apProblems.find((problem) => /effusion/i.test(problem.title));
+  if (!capProblem || !effusionProblem || capProblem.lines.some((line) => /repeat tap/i.test(line)) || effusionProblem.lines.some((line) => /pip\/tazo/i.test(line))) {
+    throw new Error(`A/P one-to-one matching cross-contaminated respiratory problems:\n${clinicianOwnedGuarded.acceptedText}`);
+  }
+
+  const labOnlyMissedProblem = guardRoundSoapDelta({
+    workflowMode: "dailyUpdate",
+    baselineText: [
+      "S:",
+      "- stable",
+      "O:",
+      "- Lab: Cr 0.8, Na 138",
+      "A/P:",
+      "# PNA",
+      "- Cont current plan.",
+    ].join("\n"),
+    candidateText: [
+      "S:",
+      "- stable",
+      "O:",
+      "- Lab: Cr 2.1, Na 138",
+      "A/P:",
+      "# PNA",
+      "- Cont current plan.",
+    ].join("\n"),
+    sourceFields: { labs: "Cr 2.1 from 0.8, Na 138" },
+  });
+  if (!/# Cr rise \/ renal dysfunction[\s\S]*Cr 2\.1\(0\.8\)/i.test(labOnlyMissedProblem.acceptedText)) {
+    throw new Error(`A clinically significant Cr rise stayed only in O when AI missed A/P:\n${labOnlyMissedProblem.acceptedText}`);
   }
 
   const colorMarkSoap = [
@@ -4122,8 +4406,8 @@ try {
     );
   }
   const highCandidates = getModelCandidates(DEFAULT_HIGH_ACCURACY_MODEL, "highAccuracy");
-  if (!highCandidates.includes("gpt-5.6-sol") || !highCandidates.includes("gpt-5.6-terra") || !highCandidates.includes("gpt-5.6-luna")) {
-    throw new Error(`high-accuracy fallback chain is incomplete: ${highCandidates.join(", ")}`);
+  if (!highCandidates.includes("gpt-5.6-sol") || highCandidates.includes("gpt-5.6-terra") || highCandidates.includes("gpt-5.6-luna")) {
+    throw new Error(`high-accuracy route silently degrades to a lower tier: ${highCandidates.join(", ")}`);
   }
   const sanitizedLegacyCandidates = getModelCandidates("gpt-5.4-2026-03-05", "balanced");
   if (sanitizedLegacyCandidates[0] !== "gpt-5.6-terra") {
@@ -4138,11 +4422,23 @@ try {
   if (allCandidates.some((model) => !isGpt56Model(model))) {
     throw new Error(`non-GPT-5.6 fallback remains active: ${allCandidates.join(", ")}`);
   }
+  if (!shouldUseBackgroundRoundSoap("balanced", "transferHandoff", 12_000)) {
+    throw new Error("transfer SOAP no longer uses background generation");
+  }
+  if (!shouldUseBackgroundRoundSoap("highAccuracy", "dailyUpdate", 1_000)) {
+    throw new Error("high-accuracy SOAP no longer uses background generation");
+  }
+  if (shouldUseBackgroundRoundSoap("balanced", "dailyUpdate", 4_000)) {
+    throw new Error("short routine daily SOAP unexpectedly uses background generation");
+  }
+  if (!shouldUseBackgroundRoundSoap("balanced", "newSoap", 20_000)) {
+    throw new Error("long first SOAP no longer uses background generation");
+  }
   const deadlineMessage = aiCallableMessage(
     { code: "functions/deadline-exceeded", message: "deadline-exceeded" },
     "SOAP generation",
   );
-  if (!/time limit.*current SOAP was preserved/i.test(deadlineMessage)) {
+  if (!/time limit.*current SOAP was preserved.*same model/i.test(deadlineMessage)) {
     throw new Error(`deadline error is not actionable or baseline-safe: ${deadlineMessage}`);
   }
   console.log("PASS AI model routing uses deadline-safe budgets and GPT-5.6-only fallbacks");
@@ -4150,6 +4446,48 @@ try {
 } catch (error) {
   failures.push({ name: "AI model routing", error: error instanceof Error ? error.message : String(error) });
   console.error(`FAIL AI model routing: ${failures[failures.length - 1].error}`);
+}
+
+try {
+  const repetitiveRoutineHistory = Array.from(
+    { length: 900 },
+    (_, index) => `ICU day ${index + 1}: routine nursing care, resting comfortably, continue current care as ordered.`,
+  ).join("\n");
+  const longTransferSource = [
+    "Admission: cholangitis septic shock; ERCP 6/01 with CBD stent and source control.",
+    "ICU course: intubated for acute hypoxemic respiratory failure, norepinephrine stopped 6/03, extubated 6/05.",
+    "Micro/Abx: B/C E. coli; meropenem 6/01-, repeat B/C pending.",
+    "Renal: AKI required CRRT 6/02-6/04; latest Cr 2.1 from 2.7, K 4.7 from 5.3, UO adequate.",
+    "Cardiac: AF/HFrEF; apixaban held for thrombocytopenia, reassess restart after Hb/Plt trend.",
+    repetitiveRoutineHistory,
+    "Current transfer status: afebrile, BP 116/72, HR 88, SpO2 96% on NC 1 L; off pressor and CRRT.",
+    "Latest lab 6/06: WBC 10.4 from 13.2, Hb 9.1, Plt 82 from 64, Cr 2.1, K 4.7.",
+    "CXR 6/06: aspiration opacity improved; continue O2 wean and pulmonary rehab.",
+    "Pending/DC: repeat B/C, Abx duration, apixaban restart, rehab placement; barrier O2 wean and rehab bed.",
+  ].join("\n");
+  const prepared = prepareRoundSoapSource(longTransferSource, "transferHandoff");
+  if (longTransferSource.length <= 34_000 || longTransferSource.length >= MAX_ROUND_SOAP_RAW_CHARS) {
+    throw new Error(`synthetic transfer source did not exercise the intended long-input range: ${longTransferSource.length}`);
+  }
+  if (!prepared.compacted || prepared.promptChars > 34_000 || prepared.omittedBlocks < 1) {
+    throw new Error(`long transfer source was not compacted safely: prompt=${prepared.promptChars}, omitted=${prepared.omittedBlocks}`);
+  }
+  const requiredAnchors = [
+    /ERCP 6\/01.*CBD stent/i,
+    /B\/C E\. coli.*meropenem 6\/01-/i,
+    /AKI required CRRT.*Cr 2\.1.*K 4\.7.*UO adequate/i,
+    /AF\/HFrEF.*apixaban held/i,
+    /SpO2 96% on NC 1 L.*off pressor and CRRT/i,
+    /CXR 6\/06.*aspiration opacity improved/i,
+    /repeat B\/C.*Abx duration.*rehab placement/i,
+  ];
+  const missingAnchor = requiredAnchors.find((pattern) => !pattern.test(prepared.text));
+  if (missingAnchor) throw new Error(`long transfer compaction dropped a clinical anchor: ${missingAnchor}`);
+  console.log("PASS Long transfer source is accepted, deterministically compacted, and keeps clinical anchors");
+  supplementalPasses += 1;
+} catch (error) {
+  failures.push({ name: "Long transfer source compaction", error: error instanceof Error ? error.message : String(error) });
+  console.error(`FAIL Long transfer source compaction: ${failures[failures.length - 1].error}`);
 }
 
 try {

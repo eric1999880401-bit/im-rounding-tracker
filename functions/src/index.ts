@@ -12,8 +12,9 @@ import { documentTypes, sourceTypes } from "./types";
 import type { CallableInput, DocumentCallableInput, DocumentType, PatientBatchCallableInput, RoundSoapCallableInput, SourceType } from "./types";
 import { OPENAI_API_KEY, extractOutputText, extractRefusal, getModel, getModelForQuality, getOpenAiApiKey, getOpenAiErrorMessage, getResponseTuning, openAiHttpsError, postOpenAiResponse, sanitizeQualityMode } from "./openai";
 import type { AiQualityMode } from "./openai";
-import { resolveDocumentQuality, resolveRoundSoapQuality, ROUND_SOAP_FUNCTION_TIMEOUT_SECONDS, ROUND_SOAP_OPENAI_RESPONSE_TIMEOUT_MS, roundSoapHistoryLimit } from "./modelRouting";
+import { resolveDocumentQuality, resolveRoundSoapQuality, ROUND_SOAP_FUNCTION_TIMEOUT_SECONDS, ROUND_SOAP_OPENAI_RESPONSE_TIMEOUT_MS, roundSoapHistoryLimit, shouldUseBackgroundRoundSoap } from "./modelRouting";
 import { asPlainObject, compactDailyNote, compactPatientContext, concretizeVagueFollowUps, findTargetPatientForBatch, leanSoapCleanup, sanitizeExistingPatientsForBatch, sanitizePatientBatchImportMode, sanitizePatientBatchOutput, sanitizePatientContext, sanitizeUserStyleProfile, truncateString } from "./sanitize";
+import { MAX_ROUND_SOAP_RAW_CHARS, prepareRoundSoapSource, type RoundSoapWorkflowMode } from "./sourceCompaction";
 import { buildSoapPatch } from "./soapPatch";
 import { admissionSummaryStyleBullets, documentInstructions, makeBatchImportPrompt, makeDocumentPrompt, makePrompt } from "./prompts";
 import { makeRoundSoapPrompt } from "./roundSoapPrompt";
@@ -174,9 +175,11 @@ export const generateRoundSoap = onCall(
       throw new HttpsError("invalid-argument", "Paste more de-identified clinical text before SOAP generation.");
     }
 
-    if (rawText.length > MAX_RAW_TEXT_CHARS) {
-      throw new HttpsError("invalid-argument", `Text is too long. Limit input to ${MAX_RAW_TEXT_CHARS} characters.`);
+    if (rawText.length > MAX_ROUND_SOAP_RAW_CHARS) {
+      throw new HttpsError("invalid-argument", `The pasted record exceeds ${MAX_ROUND_SOAP_RAW_CHARS.toLocaleString()} characters. Split only the raw export; do not manually summarize or remove clinical details.`);
     }
+
+    const preparedSource = prepareRoundSoapSource(rawText, workflowMode as RoundSoapWorkflowMode);
 
     const patientRef = admin.firestore().doc(`users/${uid}/patients/${patientId}`);
     const patientSnapshot = await patientRef.get();
@@ -201,21 +204,27 @@ export const generateRoundSoap = onCall(
     const userStyleProfile = sanitizeUserStyleProfile(data.userStyleProfile);
     const requestedModel = getModelForQuality(qualityMode);
     const tuning = getResponseTuning(qualityMode, workflowMode === "dailyUpdate" ? "roundSoapDaily" : "roundSoapFull");
+    const background = shouldUseBackgroundRoundSoap(qualityMode, workflowMode, preparedSource.promptChars);
     logger.info("generateRoundSoap request prepared", {
       workflowMode,
       sourceType,
       qualityMode,
       requestedModel,
       rawTextChars: rawText.length,
+      promptSourceChars: preparedSource.promptChars,
+      sourceCompacted: preparedSource.compacted,
+      sourceBlocksOmitted: preparedSource.omittedBlocks,
       baselineChars: currentSoapBaseline.length,
       historyNotes: dailyNotes.length,
       maxOutputTokens: tuning.max_output_tokens,
+      background,
     });
     const { response: openAiResponse, body: responseBody, model } = await postOpenAiResponse({
       apiKey,
       model: requestedModel,
       qualityMode,
       timeoutMs: ROUND_SOAP_OPENAI_RESPONSE_TIMEOUT_MS,
+      background,
       payload: {
         reasoning: tuning.reasoning,
         max_output_tokens: tuning.max_output_tokens,
@@ -237,11 +246,14 @@ export const generateRoundSoap = onCall(
               sourceType,
               workflowMode,
               selectedDate,
-              rawText,
+              rawText: preparedSource.text,
               currentSoapBaseline,
               patientContext,
               userStyleProfile,
               dailyNotes,
+              sourcePreparationNote: preparedSource.compacted
+                ? `Long ${workflowMode === "transferHandoff" ? "transfer" : "clinical"} source was deterministically deduplicated and reduced from ${preparedSource.originalChars.toLocaleString()} to ${preparedSource.promptChars.toLocaleString()} characters. Clinical anchors and the latest status were prioritized; do not infer omitted facts.`
+                : "",
             }),
           },
         ],
@@ -299,7 +311,12 @@ export const generateRoundSoap = onCall(
       soapText,
       mode: workflowMode === "dailyUpdate" ? "patch" : "full",
       ...(workflowMode === "dailyUpdate" ? { patch: buildSoapPatch(currentSoapBaseline, soapText, rawText) } : {}),
-      warnings: Array.isArray(parsed.warnings) ? parsed.warnings.map((item) => truncateString(item, 240)).slice(0, 8) : [],
+      warnings: [
+        ...(preparedSource.compacted
+          ? [`Long ${workflowMode === "transferHandoff" ? "transfer" : "clinical"} source condensed automatically (${preparedSource.originalChars.toLocaleString()} -> ${preparedSource.promptChars.toLocaleString()} characters); no manual shortening was required.`]
+          : []),
+        ...(Array.isArray(parsed.warnings) ? parsed.warnings.map((item) => truncateString(item, 240)) : []),
+      ].slice(0, 8),
       highlightHints: Array.isArray(parsed.highlightHints) ? parsed.highlightHints.map((item) => truncateString(item, 180)).slice(0, 12) : [],
       model,
       qualityMode,
