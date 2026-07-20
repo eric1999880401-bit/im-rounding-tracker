@@ -117,7 +117,7 @@ function inferredKind(text: string, fallbackKind: ClinicalLineKind) {
   if (prefixed.kind !== fallbackKind || prefixed.body !== stripClinicalMarkup(text)) return prefixed;
   const body = prefixed.body;
   if (/\bBP\b|\bSpO2\b|\bHR\b|\bRR\b|\bT\s*\d/i.test(body)) return { kind: "vs" as const, body };
-  if (/\b(wbc|hb|hgb|plt|cr|bun|na|k\b|ca|mg|phos|lactate|crp|pct|inr|pt|aptt|culture|b\/c|bcx)\b/i.test(body)) {
+  if (/\b(wbc|hb|hgb|plt|cr|bun|na|k\b|ca|mg|phos|lactate|crp|pct|inr|pt|aptt|culture|b\/c|bcx|fobt|occult blood|o\s*&\s*p|o\/p|c\.?\s*diff)\b/i.test(body)) {
     return { kind: "lab" as const, body };
   }
   if (/\b(ct|mri|cxr|xray|x-ray|echo|sono|ultrasound|egd|scope|image|impression)\b/i.test(body)) {

@@ -8,6 +8,7 @@ initializeApp();
 const db = getFirestore();
 
 const MAX_RAW_TEXT_CHARS = 18000;
+const MAX_REVIEWED_SOAP_CHARS = 24000;
 
 import { aiDocumentDraftSchema, aiSoapDraftSchema, patientBatchImportSchema, roundSoapDraftSchema } from "./schemas";
 import { documentTypes, sourceTypes } from "./types";
@@ -140,6 +141,7 @@ interface RoundSoapJobData {
   responseId: string;
   model: string;
   qualityMode: AiQualityMode;
+  requestedQualityMode?: AiQualityMode;
   workflowMode: RoundSoapWorkflowMode;
   baselineHash: string;
   sourceCompacted: boolean;
@@ -177,7 +179,7 @@ function parseRoundSoapResponse(responseBody: Record<string, unknown>, workflowM
   }
 
   const parsed = asPlainObject(parsedDraft);
-  const soapText = leanSoapCleanup(concretizeVagueFollowUps(truncateString(parsed.soapText, 14000).trim()));
+  const soapText = leanSoapCleanup(concretizeVagueFollowUps(truncateString(parsed.soapText, MAX_REVIEWED_SOAP_CHARS).trim()));
   if (!soapText) {
     throw new HttpsError("data-loss", "OpenAI returned an empty SOAP draft. Retry generation; no patient data was saved.");
   }
@@ -198,6 +200,7 @@ function roundSoapResult(params: {
   sourceCompacted: boolean;
   originalChars: number;
   promptChars: number;
+  routingWarning?: string;
   patch?: ReturnType<typeof buildSoapPatch>;
   parsed?: ReturnType<typeof parseRoundSoapResponse>;
 }) {
@@ -210,7 +213,7 @@ function roundSoapResult(params: {
     ...(params.workflowMode === "dailyUpdate"
       ? { patch: params.patch ?? { baselineHash: params.baselineHash, changedSections: [] } }
       : {}),
-    warnings: [compactionWarning, ...parsed.warnings].filter(Boolean).slice(0, 8),
+    warnings: [params.routingWarning, compactionWarning, ...parsed.warnings].filter(Boolean).slice(0, 8),
     highlightHints: parsed.highlightHints,
     model: params.model,
     qualityMode: params.qualityMode,
@@ -246,10 +249,13 @@ export const generateRoundSoap = onCall(
       ? workflowModeValue
       : "dailyUpdate";
     const rawText = String(data.rawText ?? "").trim();
-    const currentSoapBaseline = truncateString(data.currentSoapBaseline, 12000);
+    const currentSoapBaseline = truncateString(data.currentSoapBaseline, MAX_REVIEWED_SOAP_CHARS);
     const deidentifiedConfirmed = data.deidentifiedConfirmed === true;
     const requestedQualityMode = sanitizeQualityMode(data.qualityMode);
-    const qualityMode = resolveRoundSoapQuality(requestedQualityMode, workflowMode, rawText);
+    const qualityMode = resolveRoundSoapQuality(requestedQualityMode, workflowMode, rawText, currentSoapBaseline);
+    const routingWarning = qualityMode !== requestedQualityMode
+      ? "Efficient mode was automatically raised to Recommended for this complex existing SOAP to protect clinical fidelity."
+      : "";
     const supportsBackgroundPolling = data.supportsBackgroundPolling === true;
     const requestStartedAt = Date.now();
 
@@ -298,8 +304,8 @@ export const generateRoundSoap = onCall(
     const userStyleProfile = sanitizeUserStyleProfile(data.userStyleProfile);
     const requestedModel = getModelForQuality(qualityMode);
     const tuning = getResponseTuning(qualityMode, workflowMode === "dailyUpdate" ? "roundSoapDaily" : "roundSoapFull");
-    const background = shouldUseBackgroundRoundSoap(qualityMode, workflowMode, preparedSource.promptChars);
-    const maxOutputTokens = getRoundSoapMaxOutputTokens(qualityMode, workflowMode, preparedSource.promptChars);
+    const background = shouldUseBackgroundRoundSoap(qualityMode, workflowMode, preparedSource.promptChars, currentSoapBaseline.length);
+    const maxOutputTokens = getRoundSoapMaxOutputTokens(qualityMode, workflowMode, preparedSource.promptChars, currentSoapBaseline.length);
     logger.info("generateRoundSoap request prepared", {
       workflowMode,
       sourceType,
@@ -380,6 +386,7 @@ export const generateRoundSoap = onCall(
         responseId: pendingResponseId,
         model,
         qualityMode,
+        requestedQualityMode,
         workflowMode: workflowMode as RoundSoapWorkflowMode,
         baselineHash,
         sourceCompacted: preparedSource.compacted,
@@ -416,6 +423,7 @@ export const generateRoundSoap = onCall(
       sourceCompacted: preparedSource.compacted,
       originalChars: preparedSource.originalChars,
       promptChars: preparedSource.promptChars,
+      routingWarning,
       patch: workflowMode === "dailyUpdate" ? buildSoapPatch(currentSoapBaseline, parsedResponse.soapText, rawText) : undefined,
       parsed: parsedResponse,
     });
@@ -495,6 +503,7 @@ export const pollRoundSoapGeneration = onCall(
       ? stored.workflowMode as RoundSoapWorkflowMode
       : "dailyUpdate";
     const qualityMode = sanitizeQualityMode(stored.qualityMode);
+    const requestedQualityMode = stored.requestedQualityMode ? sanitizeQualityMode(stored.requestedQualityMode) : qualityMode;
     const model = truncateString(stored.model, 80) || getModelForQuality(qualityMode);
 
     if (state === "completed") {
@@ -508,6 +517,9 @@ export const pollRoundSoapGeneration = onCall(
           sourceCompacted: stored.sourceCompacted === true,
           originalChars: Number(stored.originalChars ?? 0),
           promptChars: Number(stored.promptChars ?? 0),
+          routingWarning: requestedQualityMode !== qualityMode
+            ? "Efficient mode was automatically raised to Recommended for this complex existing SOAP to protect clinical fidelity."
+            : "",
         });
         logger.info("generateRoundSoap background job completed", {
           jobId,

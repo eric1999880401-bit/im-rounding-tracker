@@ -33,6 +33,7 @@ import { ClinicalInlineText, ClinicalText } from "../components/ClinicalText";
 import { useT } from "../i18n";
 import { getPatientHeadline, getRoundingDigest } from "../roundingDigest";
 import { patientToSoapDraft } from "../soapDraft";
+import { soapHeaderLinesForDisplay } from "../soapDisplay";
 import { formatMedicationOrderLinesForDisplay } from "../medicationOrderParser";
 import { buildPatientLabVisualSummary, formatLabVisualSummaryLinesFromText } from "../labVisualSummary";
 import {
@@ -734,13 +735,19 @@ function PrintRoundingListPage({
   }
 
   function patientContextText(patient: Patient) {
-    const soap = patientToSoapDraft(patient, dailyNotesByPatient[patient.id] ?? [], todayKey());
-    return removePrintEllipsis([
-      ...soap.header
-        .filter((line) => isSoapHeaderLineVisible(line, roundingLayout) && !/^Red flags:|^Date:/i.test(line))
-        .slice(1, 5)
-        .map(displayPrintLine),
-    ].filter(Boolean).join(" | "));
+    const notes = dailyNotesByPatient[patient.id] ?? [];
+    const soap = patientToSoapDraft(patient, notes, todayKey());
+    const digest = getRoundingDigest(patient, notes, { mode: "rounds", hideCompletedTasks });
+    const headerLines = soapHeaderLinesForDisplay(
+      soap.header.filter((line) => isSoapHeaderLineVisible(line, roundingLayout) && !/^Red flags:|^Date:|^Attending:/i.test(line)),
+      {
+        dx: digest.diagnosis || patient.primaryDiagnosis || patient.oneLiner,
+        issues: digest.issues,
+        pmh: digest.risks,
+      },
+      { maxLines: 5, maxChars: 150 },
+    ).filter((line) => !patient.patientCode || !line.includes(patient.patientCode));
+    return removePrintEllipsis(headerLines.slice(0, 4).map(displayPrintLine).filter(Boolean).join(" | "));
   }
 
   function subjectiveSoapText(patient: Patient) {

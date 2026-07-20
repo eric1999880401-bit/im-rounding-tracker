@@ -7,6 +7,7 @@ import {
   type PrintVisualKind,
 } from "../printPriority";
 import { parseSoapText } from "../soapDraft";
+import { soapHeaderLinesForDisplay } from "../soapDisplay";
 import type { KeywordHighlightRule, RoundingLayoutPreferences } from "../types";
 import { hasColorMarkup } from "../utils";
 import {
@@ -80,6 +81,11 @@ function PrintSection({
 
 export function SoapPrintPreview({ value, layoutPreferences, keywordRules = [] }: SoapPrintPreviewProps) {
   const draft = parseSoapText(value);
+  const headerLines = soapHeaderLinesForDisplay(
+    draft.header,
+    { dx: draft.apProblems.slice(0, 2).map((problem) => problem.title).filter(Boolean).join(" / ") },
+    { maxLines: 5, maxChars: 150 },
+  );
   const visibleObjective = draft.oLines.filter((line) => isObjectiveSoapLineVisible(line, layoutPreferences));
   // Clinician-colored lab lines render verbatim (the lab visual summarizer cannot keep [[color:...]] marks).
   const labLines = visibleObjective.filter((line) => /^!{0,2}\s*Labs?\s*[:：]/i.test(line) && !hasColorMarkup(line));
@@ -106,7 +112,7 @@ export function SoapPrintPreview({ value, layoutPreferences, keywordRules = [] }
         <strong>Same priority selector as Print List</strong>
       </div>
       <div className="soap-print-preview-header">
-        {draft.header.slice(0, 5).map((line, index) => (
+        {headerLines.map((line, index) => (
           <span key={`${line}-${index}`}>
             <ClinicalInlineText value={line} keywordRules={keywordRules} />
           </span>

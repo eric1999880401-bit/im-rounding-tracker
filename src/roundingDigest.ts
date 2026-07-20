@@ -1,6 +1,7 @@
 import type { DailyNote, Patient } from "./types";
 import type { LabFocusSignal } from "./utils";
 import { specificAntibioticPlan } from "./clinicalFieldRouter";
+import { cleanInlineClinicalMarkers } from "./soapDisplay";
 import {
   formatDateLabel,
   getActiveProblemItems,
@@ -1203,33 +1204,34 @@ export function getPatientHeadline(
   options: DigestOptions = {},
 ): PatientHeadline | null {
   const digest = getRoundingDigest(patient, notes, options);
+  const headlineText = (value: string, maxChars: number) => shortDigestText(cleanInlineClinicalMarkers(value), maxChars);
 
   const redFlag = clinicalItems(digest.redFlags)[0];
-  if (redFlag) return { text: shortDigestText(redFlag, 78), tone: "critical" };
+  if (redFlag) return { text: headlineText(redFlag, 78), tone: "critical" };
 
   const urgentTask = patient.tasks.find(
     (task) => !task.done && (task.priority === "urgent" || task.text.trim().startsWith("!")),
   );
-  if (urgentTask) return { text: shortDigestText(urgentTask.text.replace(/^!+/, "").trim(), 78), tone: "critical" };
+  if (urgentTask) return { text: headlineText(urgentTask.text.replace(/^!+/, "").trim(), 78), tone: "critical" };
 
   const criticalLab = digest.snapshot.objective.labSignals.find((signal) => signal.severity === "critical");
-  if (criticalLab) return { text: `Lab: ${shortDigestText(criticalLab.display, 68)}`, tone: "critical" };
+  if (criticalLab) return { text: `Lab: ${headlineText(criticalLab.display, 68)}`, tone: "critical" };
 
   const dischargeDays = daysUntil(patient.dischargeTargetDate);
   if (dischargeDays <= 1) {
     const barrier = clinicalItems(digest.discharge)[0];
     const when = dischargeDays <= 0 ? "today" : "tomorrow";
-    return { text: barrier ? `DC ${when}: ${shortDigestText(barrier, 60)}` : `DC ${when}`, tone: "discharge" };
+    return { text: barrier ? `DC ${when}: ${headlineText(barrier, 60)}` : `DC ${when}`, tone: "discharge" };
   }
 
   const abnormalLab = digest.snapshot.objective.labSignals.find((signal) => signal.important);
-  if (abnormalLab) return { text: `Lab: ${shortDigestText(abnormalLab.display, 68)}`, tone: "warning" };
+  if (abnormalLab) return { text: `Lab: ${headlineText(abnormalLab.display, 68)}`, tone: "warning" };
 
   const topProblem = digest.snapshot.apProblems[0];
-  if (topProblem) return { text: shortDigestText(topProblem, 78), tone: "normal" };
+  if (topProblem) return { text: headlineText(topProblem, 78), tone: "normal" };
 
   const pendingTask = patient.tasks.find((task) => !task.done);
-  if (pendingTask) return { text: shortDigestText(pendingTask.text.replace(/^!+/, "").trim(), 78), tone: "normal" };
+  if (pendingTask) return { text: headlineText(pendingTask.text.replace(/^!+/, "").trim(), 78), tone: "normal" };
 
   return null;
 }

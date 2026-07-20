@@ -7,6 +7,7 @@ import {
   type MedicationOrderCategory,
 } from "./medicationOrderParser";
 import { formatLabVisualSummaryFromLines } from "./labVisualSummary";
+import { objectiveKindFromLine, prefixedObjectiveLine, sanitizeObjectiveLines } from "./objectiveLineSanitizer";
 import { formatSoapDraft, parseSoapText, type SoapApProblem, type SoapDraft } from "./soapDraft";
 import { parseLabReports, safeClinicalLine, safeClinicalLinePreservingMarks, stripColorMarkup } from "./utils";
 import type { SoapPatch } from "./types";
@@ -198,6 +199,8 @@ function filterUnsupportedDailyAp(problems: SoapApProblem[], fields: RoundSoapSo
 
 function lineKind(line: string): keyof ObjectiveGroups {
   const text = String(line ?? "").replace(/^!+\s*/, "");
+  const sanitizedKind = objectiveKindFromLine(text);
+  if (sanitizedKind === "vs" || sanitizedKind === "pe" || sanitizedKind === "lab" || sanitizedKind === "image") return sanitizedKind;
   if (/^(?:image|img)\s*:/i.test(text) || /\b(?:CT|MRI|CXR|sono|ultrasound|US\b|echo|ERCP|EGD|colonoscopy|impression)\b/i.test(text)) return "image";
   if (/^(?:v\/s|vs|vitals?)\s*:/i.test(text) || /\b(?:BP|HR|RR|SpO2|T\s*\d|afebrile|pressor|norepi|oxygen|O2|NC\s*\d*L?|RA)\b/i.test(text)) return "vs";
   if (/^pe\s*:.*\b(?:shock|pressor|norepi|hemodynamic|BP|SpO2|oxygen|O2|NC\s*\d*L?|RA)\b/i.test(text)) return "vs";
@@ -212,7 +215,10 @@ function lineKind(line: string): keyof ObjectiveGroups {
 
 function splitObjective(lines: string[]): ObjectiveGroups {
   const groups: ObjectiveGroups = { vs: [], pe: [], lab: [], image: [] };
-  lines.forEach((line) => groups[lineKind(line)].push(line));
+  sanitizeObjectiveLines(lines).accepted.forEach((line) => {
+    const kind = line.kind === "other" ? lineKind(line.text) : line.kind;
+    groups[kind].push(line.text);
+  });
   return groups;
 }
 
@@ -229,7 +235,8 @@ function mergeObjective(groups: ObjectiveGroups, maxItems = 18) {
 }
 
 function ensureObjectivePrefix(line: string, prefix: "V/S" | "PE" | "Lab" | "Image") {
-  const clean = String(line ?? "").trim();
+  const sanitized = sanitizeObjectiveLines([line]).accepted[0];
+  const clean = sanitized?.text ?? "";
   if (!clean) return "";
   const tone = clean.match(/^!+\s*/)?.[0] ?? "";
   const withoutTone = clean.replace(/^!+\s*/, "").trim();
@@ -257,6 +264,17 @@ function isOrderLine(line: string) {
     /^\s*(?:Abx|Anticoag\/AP|Steroid\/Immuno|Cardio\/Renal|Resp|Insulin\/Glucose|IVF\/Lyte|Nutrition|Monitoring|PRN|Routine(?: hidden)?)\s*:/i.test(text) ||
     /\b(?:teicoplanin|vancomycin|ceftriaxone|cefepime|zosyn|pip\/tazo|meropenem|levofloxacin|heparin|apixaban|warfarin|insulin|lasix|furosemide|steroid|methylpred|oxygen|morphine|fentanyl)\b/i.test(text)
   );
+}
+
+function sanitizeDraftObjective(draft: SoapDraft) {
+  const sanitized = sanitizeObjectiveLines(draft.oLines);
+  return {
+    draft: {
+      ...draft,
+      oLines: sanitized.accepted.map(prefixedObjectiveLine),
+    },
+    rejected: sanitized.rejected,
+  };
 }
 
 const highYieldNonAntibioticMedicationPattern = /\b(?:apixaban|heparin|warfarin|insulin|norepi(?:nephrine)?|vasopressin)\b/gi;
@@ -744,8 +762,9 @@ function mergeApProblemsForDaily(
     const text = `${problem.title} ${problem.lines.join(" ")}`;
     if (/\b(clinical improvement|improving after|improvement after|post[- ]?procedure improvement)\b/i.test(problem.title)) return false;
     if (titleHasAnemia(problem.title) && !sourceHasMeaningfulAnemiaEvidence(sourceText)) return false;
-    const diagnosisSupported = lineHasSourceSupport(problem.title, sourceText, "") || trustedNewProblemTitles.has(apKey(problem.title));
-    return diagnosisSupported && Boolean(problemBucket(problem) || /\b(new|acute|positive|worsening|thrombus|bleed|respiratory failure|effusion|aki|lft|coag)\b/i.test(text));
+    const explicitlyTrusted = trustedNewProblemTitles.has(apKey(problem.title));
+    const diagnosisSupported = lineHasSourceSupport(problem.title, sourceText, "") || explicitlyTrusted;
+    return diagnosisSupported && Boolean(explicitlyTrusted || problemBucket(problem) || /\b(new|acute|positive|worsening|thrombus|bleed|respiratory failure|effusion|aki|lft|coag)\b/i.test(text));
   });
   if (unmatched.length > realNewProblems.length) {
     warnings.push("Unsupported new A/P label(s) were held; treatment and objective data were routed to supported problems only.");
@@ -880,6 +899,48 @@ function sourceEvidenceLine(sourceText: string, pattern: RegExp) {
   return safeClinicalLine(line ?? "", 140);
 }
 
+function explicitSourceApBlocks(sourceText: string): SoapApProblem[] {
+  if (!/(?:^|\n)\s*(?:A\/P|AP)\s*:|(?:^|\n)\s*#+\s*\S/im.test(sourceText)) return [];
+  const parsedProblems = parseSoapText(sourceText).apProblems
+    .map((problem) => ({
+      title: safeClinicalLine(problem.title.replace(/^!{1,2}\s*/, ""), 90),
+      lines: uniqueLines(problem.lines.map((line) => line.replace(/^!{1,2}\s*/, "")), 2),
+    }))
+    .filter((problem) => problem.title && !/^problem$/i.test(problem.title));
+  if (parsedProblems.length > 0) return parsedProblems.slice(0, 7);
+
+  // Accept an explicitly pasted clinician A/P even when the surrounding text
+  // is not a complete SOAP document. This is source evidence, not an inferred
+  // diagnosis, so the delta guard must not silently discard it.
+  const problems: SoapApProblem[] = [];
+  let current: SoapApProblem | null = null;
+  let inAp = false;
+  String(sourceText ?? "").split(/\r?\n/).forEach((rawLine) => {
+    const line = rawLine.trim();
+    if (!line) return;
+    if (/^(?:A\/P|AP)\s*:/i.test(line)) {
+      inAp = true;
+      return;
+    }
+    if (/^(?:S|O|Tasks?|DC|Discharge)\s*:/i.test(line)) {
+      inAp = false;
+      current = null;
+      return;
+    }
+    const titleMatch = line.match(/^#+\s*(.+)$/);
+    if (titleMatch) {
+      inAp = true;
+      current = { title: safeClinicalLine(titleMatch[1], 90), lines: [] };
+      if (current.title) problems.push(current);
+      return;
+    }
+    if (!inAp || !current) return;
+    const detail = safeClinicalLine(line.replace(/^(?:[-*\u2022]|\d+[.)])\s*/, ""), 170);
+    if (detail && current.lines.length < 2) current.lines.push(detail);
+  });
+  return problems.slice(0, 7);
+}
+
 function explicitSourceProblems(sourceText: string): SoapApProblem[] {
   const rules: Array<{ title: string; pattern: RegExp }> = [
     { title: "AKI", pattern: /\b(?:AKI|acute kidney injury)\b/i },
@@ -896,11 +957,21 @@ function explicitSourceProblems(sourceText: string): SoapApProblem[] {
     { title: "Delirium / encephalopathy", pattern: /\b(?:new delirium|acute encephalopathy|new AMS|altered mental status)\b/i },
     { title: "Acute thrombosis", pattern: /\b(?:new DVT|new PE|acute thrombus|acute thrombosis)\b/i },
   ];
-  return rules.flatMap((rule) => {
+  const ruleProblems = rules.flatMap((rule) => {
     if (!rule.pattern.test(sourceText)) return [];
     const evidence = sourceEvidenceLine(sourceText, rule.pattern);
     return evidence ? [{ title: rule.title, lines: [evidence] }] : [];
   });
+  const combined: SoapApProblem[] = [];
+  [...explicitSourceApBlocks(sourceText), ...ruleProblems].forEach((problem) => {
+    const existing = findStrictSourceProblemMatch(problem, combined);
+    if (!existing) {
+      combined.push(problem);
+      return;
+    }
+    existing.lines = uniqueLines([...existing.lines, ...problem.lines], 2);
+  });
+  return combined;
 }
 
 function labDerivedSourceProblems(fields: RoundSoapSourceFields, baseline: SoapDraft): SoapApProblem[] {
@@ -1314,8 +1385,10 @@ export function guardRoundSoapDelta({
   candidateWarnings?: string[];
   selectedDate?: string;
 }): SoapDeltaReview {
-  const baseline = parseSoapText(baselineText);
-  const parsedCandidate = parseSoapText(candidateText || baselineText);
+  const baselineSanitized = sanitizeDraftObjective(parseSoapText(baselineText));
+  const candidateSanitized = sanitizeDraftObjective(parseSoapText(candidateText || baselineText));
+  const baseline = baselineSanitized.draft;
+  const parsedCandidate = candidateSanitized.draft;
   const sourceText = sourceFieldsText(sourceFields);
   const significanceFiltered = filterUnsupportedAnemiaProblem(parsedCandidate, baseline, sourceText, workflowMode);
   const activeAntibiotics = extractActiveAntibioticNames(sourceText);
@@ -1325,6 +1398,12 @@ export function guardRoundSoapDelta({
   const afterAntibioticText = formatSoapDraft(sourceGroundedCandidate).toLowerCase();
   const restoredAntibiotics = missingAntibiotics.filter((name) => afterAntibioticText.includes(name));
   const fidelityWarnings = [
+    ...(baselineSanitized.rejected.length > 0
+      ? ["Legacy lab export header(s) without result values were hidden from this preview; Save reviewed SOAP to persist the cleanup."]
+      : []),
+    ...(candidateSanitized.rejected.length > 0
+      ? ["AI lab export header(s) without result values were rejected before reaching the editor."]
+      : []),
     ...significanceFiltered.warnings,
     ...(restoredAntibiotics.length > 0
       ? [`Restored source-grounded active antimicrobial(s) omitted by AI: ${restoredAntibiotics.join(", ")}.`]

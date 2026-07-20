@@ -859,7 +859,6 @@ function PatientDetailPage({
           selectedDate={selectedDate}
           isDemoMode={isDemoMode}
           onSavePatient={async (nextPatient) => {
-            markPendingSavedDailyNote(nextPatient.id, dailyNoteFromPatient(nextPatient, selectedDate));
             draftRef.current = nextPatient;
             setDraftPatient(nextPatient);
             await onSavePatient(nextPatient);

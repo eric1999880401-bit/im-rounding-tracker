@@ -1,5 +1,6 @@
 import { useMemo, type ReactNode } from "react";
 import { parseSoapText, soapTextWithDerivedHighlights } from "../soapDraft";
+import { soapHeaderLinesForDisplay } from "../soapDisplay";
 import { deriveSoapEvidence, type SoapSourceFields } from "../soapEvidence";
 import { ClinicalInlineText, ClinicalText, type LabReferenceDisplayMode } from "./ClinicalText";
 import { classifyClinicalLine, normalizeClinicalDisplayTextPreservingMarks, type ClinicalLineKind, type ClinicalLineTone } from "../clinicalLineClassifier";
@@ -90,7 +91,11 @@ function EmptyLine({ text = "No entry" }: { text?: string }) {
 export function SoapVisualPreview({ value, compact = false, sourceFields = {}, layoutPreferences, keywordRules = [], labReferenceDisplay = "none" }: SoapVisualPreviewProps) {
   const draft = parseSoapText(value);
   const evidence = useMemo(() => deriveSoapEvidence(value, sourceFields), [sourceFields, value]);
-  const headerLines = draft.header.filter((line) => isSoapHeaderLineVisible(line, layoutPreferences));
+  const headerLines = soapHeaderLinesForDisplay(
+    draft.header.filter((line) => isSoapHeaderLineVisible(line, layoutPreferences)),
+    { dx: draft.apProblems.slice(0, 2).map((problem) => problem.title).filter(Boolean).join(" / ") },
+    { maxLines: 4, maxChars: compact ? 110 : 140 },
+  );
   const sLines = isLayoutSectionVisible(layoutPreferences, "subjective") ? draft.sLines : [];
   const oLines = draft.oLines.filter((line) => isObjectiveSoapLineVisible(line, layoutPreferences));
   const objectiveLabLinePattern = /^!{0,2}\s*Labs?\s*[:：]/i;

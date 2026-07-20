@@ -272,6 +272,7 @@ function RoundSoapComposer({
   const [recoveryDraft, setRecoveryDraft] = useState<RecoveryDraft<{ soapText: string }> | null>(null);
   const [recoverySavedAt, setRecoverySavedAt] = useState("");
   const editorDraftRef = useRef(editorDraft);
+  const dirtyRef = useRef(false);
   const editorHistoryRef = useRef(editorHistory);
   const isComposingRef = useRef(false);
   const externalSoapRevisionRef = useRef(externalSoapRevision);
@@ -344,7 +345,7 @@ function RoundSoapComposer({
   }, [canonical.text, dirty, editorDraft, patient.id, recoveryBaseline, recoveryBaselineUpdatedAt, recoveryStorage, selectedDate]);
 
   useEffect(() => {
-    if (dirty || isComposingRef.current) return;
+    if (dirtyRef.current || isComposingRef.current) return;
     const pendingSavedSoap = pendingSavedSoapRef.current;
     if (pendingSavedSoap) {
       if (pendingSavedSoap.date === selectedDate && canonical.text !== pendingSavedSoap.text) return;
@@ -383,7 +384,12 @@ function RoundSoapComposer({
     setEditorHistory(nextHistory);
     setEditorDraftState(nextDraft, { replaceHistory: false });
     setRawSoapText(editorDraftToSoapText(nextDraft));
-    setDirty(true);
+    setComposerDirty(true);
+  }
+
+  function setComposerDirty(nextDirty: boolean) {
+    dirtyRef.current = nextDirty;
+    setDirty(nextDirty);
   }
 
   function setEditorDraftState(nextDraft: typeof editorDraft, options: { replaceHistory?: boolean } = {}) {
@@ -400,7 +406,7 @@ function RoundSoapComposer({
     editorDraftRef.current = nextDraft;
     setEditorDraft(nextDraft);
     setRawSoapText(editorDraftToSoapText(nextDraft));
-    setDirty(editorDraftToSoapText(nextDraft) !== canonical.text);
+    setComposerDirty(editorDraftToSoapText(nextDraft) !== canonical.text);
     setDeltaReview(null);
   }
 
@@ -688,20 +694,31 @@ function RoundSoapComposer({
         savedSoapVersion,
       });
       const nextNote = buildSavedNote(reviewedText, nextPatient, dailyNotes, selectedDate, patch, savedSoapVersion, editTrace);
-      await onSavePatient(nextPatient);
+      // dailyNote.soapText is the canonical Board/Details/Print source. Commit it
+      // before the compatibility patient-field mirror so an unrelated patient
+      // document failure cannot make a reviewed A/P disappear from the list.
       await onSaveDailyNote(nextPatient.id, nextNote);
       const nextDraft = parseSoapTextToEditorDraft(reviewedText);
       pendingSavedSoapRef.current = { date: selectedDate, text: reviewedText, note: nextNote };
+      let compatibilityWarning = "";
+      try {
+        await onSavePatient(nextPatient);
+      } catch {
+        compatibilityWarning = "Reviewed SOAP was saved, but legacy patient fields could not be synchronized. Board and Print still use the saved SOAP.";
+      }
       setEditorDraftState(nextDraft);
       setRawSoapText(editorDraftToSoapText(nextDraft));
       manualBaselineRef.current = reviewedText;
       clearSourceText();
-      setDirty(false);
+      setComposerDirty(false);
       setDeltaReview(null);
       editOriginRef.current = null;
       removeRecoveryDraft(recoveryStorage, recoveryScope);
       setRecoveryDraft(null);
       setRecoverySavedAt("");
+      if (compatibilityWarning) {
+        setWarnings((current) => [...new Set([...current, compatibilityWarning])].slice(0, 8));
+      }
       setStatus(`Reviewed SOAP saved. Board, Details, and Print now read this note.${editTrace ? " Correction history recorded." : ""}`);
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : "Saving SOAP failed.");
@@ -754,7 +771,7 @@ function RoundSoapComposer({
     setEditorDraftState(nextDraft);
     setRawSoapText(editorDraftToSoapText(nextDraft));
     setMixedSourceText("");
-    setDirty(false);
+    setComposerDirty(false);
     setStatus("");
     setError("");
     setDeltaReview(null);
@@ -1346,7 +1363,7 @@ function RoundSoapComposer({
               value={rawSoapText}
               onChange={(event) => {
                 setRawSoapText(event.target.value);
-                setDirty(true);
+                setComposerDirty(true);
               }}
               onCompositionStart={() => {
                 isComposingRef.current = true;
@@ -1357,6 +1374,11 @@ function RoundSoapComposer({
               spellCheck={false}
               rows={compact ? 8 : 12}
             />
+            <div className="form-actions raw-soap-actions">
+              <button type="button" className="secondary" disabled={!rawSoapText.trim() || loading} onClick={handleFormatSoap}>
+                Normalize into editable blocks
+              </button>
+            </div>
           </details>
         </section>
         <section className="round-soap-preview" aria-label="Highlighted SOAP preview">

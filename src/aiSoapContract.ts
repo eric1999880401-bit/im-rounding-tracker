@@ -1,8 +1,8 @@
 import { formatSoapDraft, normalizeSoapTextForEditor, parseSoapText, type SoapDraft } from "./soapDraft";
-import { classifyClinicalLine } from "./clinicalLineClassifier";
 import { normalizeApProblems } from "./apProblemNormalizer";
 import { leanSoapCleanup } from "./aiPostprocess/soapLeanCleanup";
 import { formatObjectiveLabVisualSummaryLines } from "./labVisualSummary";
+import { prefixedObjectiveLine, sanitizeObjectiveLines } from "./objectiveLineSanitizer";
 import { parseLabReports, safeClinicalLinePreservingMarks } from "./utils";
 
 export const AI_SOAP_OUTPUT_CONTRACT_VERSION = "ai-soap-v2";
@@ -177,18 +177,6 @@ function normalizeObjectiveSupportedApProblems(problems: SoapDraft["apProblems"]
   return next;
 }
 
-function normalizeObjectiveLine(line: string) {
-  const clean = safeClinicalLinePreservingMarks(line, 180);
-  if (!clean) return "";
-  if (/^(?:V\/S|VS|Vitals?|PE|Physical exam|Lab|Image|Img)\s*:/i.test(clean)) return clean;
-  const classified = classifyClinicalLine(clean, { fallbackKind: "other" });
-  if (classified.kind === "vs") return `V/S: ${clean}`;
-  if (classified.kind === "pe") return `PE: ${clean}`;
-  if (classified.kind === "lab") return `Lab: ${clean}`;
-  if (classified.kind === "image") return `Image: ${clean}`;
-  return clean;
-}
-
 function isGenericTaskLine(line: string) {
   const text = normalizedKey(line);
   if (!text) return true;
@@ -222,8 +210,9 @@ function normalizeTaskAndDcOwnership(taskLines: string[], dcLines: string[], apP
 }
 
 export function normalizeAiSoapDraft(draft: SoapDraft): SoapDraft {
+  const sanitizedObjective = sanitizeObjectiveLines(draft.oLines);
   const oLines = normalizeLines(
-    formatObjectiveLabVisualSummaryLines(draft.oLines.map(normalizeObjectiveLine), {
+    formatObjectiveLabVisualSummaryLines(sanitizedObjective.accepted.map(prefixedObjectiveLine), {
       maxGroups: 7,
       maxItemsPerGroup: 12,
       maxCharsPerGroup: 240,
@@ -240,14 +229,17 @@ export function normalizeAiSoapDraft(draft: SoapDraft): SoapDraft {
     apProblems,
     taskLines: owned.taskLines,
     dcLines: owned.dcLines,
-    warnings: normalizeLines(draft.warnings, 8, 160),
+    warnings: normalizeLines([
+      ...draft.warnings,
+      ...(sanitizedObjective.rejected.length > 0 ? ["Ignored lab export header(s) without result values."] : []),
+    ], 8, 160),
   };
 }
 
 export function normalizeAiSoapText(soapText: string, candidateWarnings: string[] = []): NormalizedAiSoapOutput {
   const parsed = parseSoapText(normalizeSoapTextForEditor(leanSoapCleanup(soapText)));
   const normalized = normalizeAiSoapDraft(parsed);
-  const warnings = [...candidateWarnings];
+  const warnings = [...candidateWarnings, ...normalized.warnings];
 
   if (normalized.sLines.length === 0) {
     normalized.sLines.push("No documented interval event.");

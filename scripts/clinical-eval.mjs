@@ -83,6 +83,7 @@ const {
   restoreSoapDeltaSection,
 } = await server.ssrLoadModule("/src/soapDeltaGuardrails.ts");
 const { displayPrintLine, selectPriorityPrintItems } = await server.ssrLoadModule("/src/printPriority.ts");
+const { cleanInlineClinicalMarkers, soapHeaderLinesForDisplay } = await server.ssrLoadModule("/src/soapDisplay.ts");
 const { applyClinicalColorMarkup, applyUserKeywordHighlights, clearClinicalColorMarkupAtSelection } = await server.ssrLoadModule("/src/clinicalColorMarkup.ts");
 const { labReferenceText, parseClinicalLabTokens } = await server.ssrLoadModule("/src/labReference.ts");
 const { boardDischargeTasks, hasBoardDischargeSoonSignal, isBoardNewAdmission } = await server.ssrLoadModule("/src/boardCockpit.ts");
@@ -1680,6 +1681,19 @@ try {
   if (!/Teicoplanin 5\/13-/.test(boardSoap.apProblems.flatMap((problem) => problem.lines).join("\n"))) {
     throw new Error("Board/Print SOAP draft did not read reviewed soapText first");
   }
+  const staleLegacyOrderPatient = { ...patient, vsOrder: "VS q4h" };
+  const canonicalWithoutOrders = patientToSoapDraft(staleLegacyOrderPatient, [reviewedNote], "2026-05-15");
+  if (canonicalWithoutOrders.taskLines.some((line) => /VS q4h/i.test(line))) {
+    throw new Error("Board/Print re-injected a stale legacy order into reviewed SOAP");
+  }
+  const reviewedOrderNote = {
+    ...reviewedNote,
+    soapText: reviewedSoapText.replace("Tasks:\n", "Tasks:\n- Order: VS q6h\n"),
+  };
+  const canonicalWithOrders = patientToSoapDraft(staleLegacyOrderPatient, [reviewedOrderNote], "2026-05-15");
+  if (!canonicalWithOrders.taskLines.some((line) => /Order: VS q6h/i.test(line)) || canonicalWithOrders.taskLines.some((line) => /VS q4h/i.test(line))) {
+    throw new Error("Board/Print did not preserve only the reviewed SOAP order");
+  }
   if (!boardSoap.header.some((line) => /^Red flags: pending B\/C clearance/i.test(line))) {
     throw new Error("Reviewed SOAP red flags were not preserved from explicit soapText");
   }
@@ -1958,8 +1972,8 @@ try {
     throw new Error(`unified classifier inconsistent across surfaces: ${previewTone}/${boardTone}/${printTone}`);
   }
   const peImageDraft = parseSoapTextToEditorDraft("O:\n- PE: CT chest: pleural effusion\nA/P:\n# Effusion\n- PRN tap");
-  if (!lintSoapEditorDraft(peImageDraft).some((issue) => /marked as PE/i.test(issue.text))) {
-    throw new Error("structured editor did not warn when image/report text is marked PE");
+  if (peImageDraft.oLines[0]?.kind !== "image") {
+    throw new Error(`structured editor did not automatically route image/report text out of PE: ${JSON.stringify(peImageDraft.oLines)}`);
   }
   const orderEditorDraft = parseSoapTextToEditorDraft("Tasks:\n- Order: VS q4h\n- Complete Levofloxacin PO x5 days\n- f/u Cx");
   if (orderEditorDraft.taskLines.filter((line) => line.subtype === "order").length !== 2) {
@@ -4488,11 +4502,14 @@ try {
   if (balancedDailyTuning.reasoning.effort !== "medium") {
     throw new Error("routine daily SOAP should use medium reasoning on GPT-5.6 Terra");
   }
-  if (balancedDailyTuning.max_output_tokens !== 3200 || balancedFullTuning.max_output_tokens !== 4500) {
-    throw new Error(`balanced SOAP output budgets are too large or unstable: daily=${balancedDailyTuning.max_output_tokens}, full=${balancedFullTuning.max_output_tokens}`);
+  if (balancedDailyTuning.max_output_tokens !== 4500 || balancedFullTuning.max_output_tokens !== 4500) {
+    throw new Error(`balanced SOAP output budgets no longer reserve enough visible daily JSON: daily=${balancedDailyTuning.max_output_tokens}, full=${balancedFullTuning.max_output_tokens}`);
   }
   if (getResponseTuning("highAccuracy", "roundSoapFull").reasoning.effort !== "high") {
     throw new Error("high-accuracy SOAP should use high reasoning");
+  }
+  if (getResponseTuning("highAccuracy", "roundSoapDaily").reasoning.effort !== "medium") {
+    throw new Error("daily high-quality SOAP should reserve output headroom instead of spending the budget on high hidden reasoning");
   }
   if (getRoundSoapMaxOutputTokens("highAccuracy", "transferHandoff", 34_000) < 12_000) {
     throw new Error("long high-accuracy transfer SOAP lacks reasoning/output headroom");
@@ -4502,6 +4519,19 @@ try {
   }
   if (getRoundSoapMaxOutputTokens("balanced", "dailyUpdate", 2_000) !== balancedDailyTuning.max_output_tokens) {
     throw new Error("short daily SOAP unexpectedly received the expensive long-transfer token budget");
+  }
+  if (getRoundSoapMaxOutputTokens("highAccuracy", "dailyUpdate", 2_210, 7_000) < 12_000) {
+    throw new Error("complex reviewed daily SOAP can still exhaust max_output_tokens before emitting complete JSON");
+  }
+  if (getRoundSoapMaxOutputTokens("balanced", "dailyUpdate", 2_210, 20_000) < 14_000) {
+    throw new Error("long reviewed SOAP can still be truncated by the balanced output budget");
+  }
+  const complexReviewedBaseline = `S:\n- stable\nO:\n- V/S: stable\nA/P:\n${Array.from({ length: 5 }, (_, index) => `# Problem ${index + 1}\n- active plan`).join("\n")}`;
+  if (resolveRoundSoapQuality("fast", "dailyUpdate", "new V/S and labs", complexReviewedBaseline) !== "balanced") {
+    throw new Error("complex existing SOAP was allowed to use the low-fidelity fast model");
+  }
+  if (resolveRoundSoapQuality("fast", "dailyUpdate", "BP 110/70", "S:\n- stable\nO:\n- V/S: old") !== "fast") {
+    throw new Error("simple narrow daily update was unnecessarily upgraded");
   }
   if (roundSoapHistoryLimit("dailyUpdate") !== 2 || roundSoapHistoryLimit("newSoap") !== 1 || roundSoapHistoryLimit("transferHandoff") !== 5) {
     throw new Error("SOAP history limits no longer match the deadline-safe daily/new/transfer context budget");
@@ -4542,8 +4572,15 @@ try {
   if (shouldUseBackgroundRoundSoap("balanced", "dailyUpdate", 4_000)) {
     throw new Error("short routine daily SOAP unexpectedly uses background generation");
   }
+  if (!shouldUseBackgroundRoundSoap("balanced", "dailyUpdate", 2_000, 7_000)) {
+    throw new Error("complex reviewed baseline does not use background generation");
+  }
   if (!shouldUseBackgroundRoundSoap("balanced", "newSoap", 20_000)) {
     throw new Error("long first SOAP no longer uses background generation");
+  }
+  const roundSoapFunctionSource = readFileSync("functions/src/index.ts", "utf8");
+  if (!/MAX_REVIEWED_SOAP_CHARS\s*=\s*24000/.test(roundSoapFunctionSource) || /currentSoapBaseline,\s*12000|parsed\.soapText,\s*14000/.test(roundSoapFunctionSource)) {
+    throw new Error("reviewed SOAP baseline/output still has mismatched legacy truncation limits");
   }
   const deadlineMessage = aiCallableMessage(
     { code: "functions/deadline-exceeded", message: "deadline-exceeded" },
@@ -4709,6 +4746,110 @@ try {
 } catch (error) {
   failures.push({ name: "SOAP prompt contract", error: error instanceof Error ? error.message : String(error) });
   console.error(`FAIL SOAP prompt contract: ${failures[failures.length - 1].error}`);
+}
+
+try {
+  const displayHeader = soapHeaderLinesForDisplay(
+    [
+      "SYN-BED SYN-HEADER 83/F",
+      "Dx: 83F PHx: remote ICH s/p VP shunt CC: fever and vomiting ED Lab: WBC 36 Image: CXR RLL opacity Imp: sepsis",
+      "Attending: Dr. Test",
+    ],
+    {
+      dx: "PNA/sepsis",
+      pmh: "remote ICH s/p VP shunt",
+    },
+    { maxLines: 5, maxChars: 120 },
+  );
+  if (!displayHeader.includes("Dx: PNA/sepsis")) {
+    throw new Error(`polluted Dx did not use concise fallback: ${displayHeader.join(" | ")}`);
+  }
+  if (/\b(?:PHx|CC|ED Lab|Image|Imp)\s*:/i.test(displayHeader.join(" "))) {
+    throw new Error(`admission-note sections leaked into compact SOAP header: ${displayHeader.join(" | ")}`);
+  }
+  if (cleanInlineClinicalMarkers("PNA / infection: ! ertapenem (7/7)") !== "PNA / infection: ertapenem (7/7)") {
+    throw new Error("inline clinical severity marker leaked into headline text");
+  }
+  console.log("PASS Board/Print header display blocks admission-note spillover and inline marker leakage");
+  supplementalPasses += 1;
+} catch (error) {
+  failures.push({ name: "SOAP compact header display", error: error instanceof Error ? error.message : String(error) });
+  console.error(`FAIL SOAP compact header display: ${failures[failures.length - 1].error}`);
+}
+
+try {
+  const explicitApSource = [
+    "A/P:",
+    "# New pressure injury",
+    "- Sacral skin breakdown documented today; wound care consult.",
+  ].join("\n");
+  const baseline = [
+    "S:",
+    "- cough improving",
+    "O:",
+    "V/S: stable on RA",
+    "A/P:",
+    "# CAP, improving",
+    "- ceftriaxone; f/u culture",
+  ].join("\n");
+  const candidate = [
+    baseline,
+    "# New pressure injury",
+    "- Sacral skin breakdown documented today; wound care consult.",
+  ].join("\n");
+  const review = guardRoundSoapDelta({
+    workflowMode: "dailyUpdate",
+    baselineText: baseline,
+    candidateText: candidate,
+    sourceFields: { other: explicitApSource },
+    selectedDate: "2026-07-20",
+  });
+  if (!/# New pressure injury/i.test(review.acceptedText) || !/wound care consult/i.test(review.acceptedText)) {
+    throw new Error(`explicit clinician A/P block was discarded: ${review.acceptedText}`);
+  }
+  if (!/# CAP, improving/i.test(review.acceptedText)) {
+    throw new Error("existing reviewed A/P was lost while accepting an explicit new problem");
+  }
+  console.log("PASS Explicit clinician A/P blocks survive Daily update guardrails");
+  supplementalPasses += 1;
+} catch (error) {
+  failures.push({ name: "Explicit daily A/P acceptance", error: error instanceof Error ? error.message : String(error) });
+  console.error(`FAIL Explicit daily A/P acceptance: ${failures[failures.length - 1].error}`);
+}
+
+try {
+  const pollutedAiSoap = [
+    "S:",
+    "- awake, no new complaint",
+    "O:",
+    "- PE: stool O&P/occult blood neg.",
+    "- Lab: Other: \u5831\u544a\u6642\u9593 WBC Neu Lym Mono Eos Baso NRBC MCHC MCH MCV PLT RDW Hct Hb BUN CRE GFR Ca P Na K T-Bil hsCRP ALT Mg Osm",
+    "- Image: Image: Colonoscopy 07-14: synthetic rectal lesion s/p biopsy",
+    "- Image: Blood Cx 07-08: synthetic organism, final susceptible",
+    "A/P:",
+    "# Infection, improving",
+    "- current treatment per reviewed plan",
+  ].join("\n");
+  const normalized = normalizeAiSoapText(pollutedAiSoap);
+  const editor = parseSoapTextToEditorDraft(normalized.soapText);
+  const roundTrip = editorDraftToSoapText(editor);
+  if (/\u5831\u544a\u6642\u9593|Other:\s*Other:/i.test(roundTrip)) {
+    throw new Error(`lab export header leaked into reviewed SOAP blocks:\n${roundTrip}`);
+  }
+  if (!/Lab:[^\n]*stool O&P\/occult blood neg\.[^\n]*Blood Cx 07-08/i.test(roundTrip)) {
+    throw new Error(`micro/stool results were not routed to Lab:\n${roundTrip}`);
+  }
+  if (!/Image: Colonoscopy 07-14/i.test(roundTrip) || /Image:\s*Image:/i.test(roundTrip)) {
+    throw new Error(`duplicate Image prefix survived normalization:\n${roundTrip}`);
+  }
+  if (!normalized.warnings.some((warning) => /lab export header/i.test(warning))) {
+    throw new Error(`rejected LIS header was not surfaced for review: ${JSON.stringify(normalized.warnings)}`);
+  }
+  console.log("PASS Old-patient objective cleanup rejects LIS headers and fixes Micro/Image/PE routing");
+  supplementalPasses += 1;
+} catch (error) {
+  failures.push({ name: "Old-patient objective cleanup", error: error instanceof Error ? error.message : String(error) });
+  console.error(`FAIL Old-patient objective cleanup: ${failures[failures.length - 1].error}`);
 }
 
 await server.close();

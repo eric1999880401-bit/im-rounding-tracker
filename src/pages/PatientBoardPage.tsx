@@ -37,10 +37,10 @@ import {
 import { useT } from "../i18n";
 import { getPatientHeadline, getRoundingDigest } from "../roundingDigest";
 import { fallbackSoapTextFromPatient, patientToSoapDraft } from "../soapDraft";
+import { soapHeaderLinesForDisplay } from "../soapDisplay";
 import { buildCarriedForwardKeys, isCarriedForwardLine } from "../soapLineDelta";
 import {
   classifyClinicalLine,
-  normalizeClinicalDisplayText,
   normalizeClinicalDisplayTextPreservingMarks,
   type ClinicalLineKind,
 } from "../clinicalLineClassifier";
@@ -1430,16 +1430,22 @@ function PatientBoardPage({
           {activePatients.map((patient) => {
             const patientNotes = dailyNotesByPatient[patient.id] ?? [];
             const soap = patientToSoapDraft(patient, patientNotes, todayKey());
+            const digest = getRoundingDigest(patient, patientNotes, { mode: "board", hideCompletedTasks: true });
             const headline = getPatientHeadline(patient, patientNotes);
             const carriedKeys = buildCarriedForwardKeys(patientNotes, todayKey());
             const chronicRenal = hasChronicRenalContext(patient);
             const redFlagLine = isLayoutSectionVisible(roundingLayout, "redFlags")
               ? soap.header.find((line) => /^Red flags:/i.test(line))?.replace(/^Red flags:\s*/i, "") ?? ""
               : "";
-            const contextLines = soap.header
-              .filter((line) => isSoapHeaderLineVisible(line, roundingLayout) && !/^Red flags:|^Date:|^Attending:/i.test(line) && !line.includes(patient.patientCode))
-              .map(normalizeClinicalDisplayText)
-              .filter(Boolean);
+            const contextLines = soapHeaderLinesForDisplay(
+              soap.header.filter((line) => isSoapHeaderLineVisible(line, roundingLayout) && !/^Red flags:|^Date:|^Attending:/i.test(line)),
+              {
+                dx: digest.diagnosis || patient.primaryDiagnosis || patient.oneLiner,
+                issues: digest.issues,
+                pmh: digest.risks,
+              },
+              { maxLines: 6, maxChars: 120 },
+            ).filter((line) => !patient.patientCode || !line.includes(patient.patientCode));
             const visibleSubjectiveLines = isLayoutSectionVisible(roundingLayout, "subjective") ? soap.sLines : [];
             const visibleObjectiveLines = soap.oLines.filter((line) => isObjectiveSoapLineVisible(line, roundingLayout));
             const objectiveLabLinePattern = /^!{0,2}\s*Labs?\s*[:：]/i;

@@ -18,8 +18,12 @@ function shortPromptValue(value: unknown, maxLength: number) {
   return `${text.slice(0, Math.max(0, maxLength - 14)).trimEnd()} [truncated]`;
 }
 
-export function compactRoundSoapPromptHistory(dailyNotes: Array<Record<string, unknown>>) {
-  return dailyNotes.map((note) => {
+export function compactRoundSoapPromptHistory(dailyNotes: Array<Record<string, unknown>>, currentSoapBaseline = "") {
+  const baselineKey = String(currentSoapBaseline ?? "").replace(/\s+/g, " ").trim().toLowerCase();
+  return dailyNotes.filter((note) => {
+    const noteSoapKey = String(note.soapText ?? "").replace(/\s+/g, " ").trim().toLowerCase();
+    return !baselineKey || !noteSoapKey || noteSoapKey !== baselineKey;
+  }).map((note) => {
     const date = shortPromptValue(note.date, 20);
     const soapText = shortPromptValue(note.soapText, 6_000);
     if (soapText) {
@@ -86,6 +90,8 @@ function workflowContract(workflowMode: string) {
       "- Replace stale facts in the same domain; do not append a second current V/S, Lab, Image, medication, culture, or status line beside the old one.",
       "- V/S-only input may change O/V/S only, unless the new values create a clearly supported safety issue.",
       "- Lab-only input replaces the current O/Lab summary and may update only the matching existing A/P problem. Include a prior value in parentheses or a trend arrow only when the source or baseline provides it.",
+      "- A raw LIS header (for example report-time plus WBC/Neu/Hb/Cr column names without values) is not a result. Omit it and add a warning; never copy it into O/Lab.",
+      "- Stool O&P/FOBT/C. difficile and blood/urine/sputum/CSF cultures belong to O/Lab or Micro, never PE or Image.",
       "- Image-only input replaces the same study's current O/Image line and may update only the matching existing A/P problem. Keep study name, date, and key finding.",
       "- Orders-only input replaces the matching current medication/order and may update that treatment under an existing A/P problem. It cannot create a diagnosis by itself.",
       "- A changed antibiotic must replace the prior antibiotic in both Orders and its existing infection A/P; never keep the discontinued regimen as current therapy.",
@@ -125,6 +131,7 @@ export function makeRoundSoapPrompt(params: RoundSoapPromptParams) {
     "- Return only the required JSON object: soapText, warnings, highlightHints.",
     "- soapText section order: optional compact header, S:, O:, A/P:, Tasks:, DC:.",
     "- O order: V/S, PE, Lab, Image. Imaging never belongs in PE.",
+    "- Emit each section label once. Never write 'Image: Image:', 'Lab: Other: Other:', or copy a table header without analyte values.",
     "- Lab must be compact panel lines, never one line per analyte: 'Lab: CBC/DC: WBC, Neu, Hb, Plt' and 'Lab: Chem/Renal: BUN/Cr, eGFR, Na/K/Cl, Ca/Mg/P, CRP/PCT/lactate'. Add Liver/Coag, ABG/VBG, Cardiac, or Micro only when supplied. Do not invent a missing value, group, unit, or reference range.",
     "- Put all values from the same panel on one line. Preserve a supplied previous value compactly in parentheses, e.g. 'Cr 2.1(2.7)↓'; do not repeat the same current value on another Lab line.",
     "- Medication/order lines belong under Tasks and start with 'Order:'. The UI renders them as the medication-order section.",
@@ -183,7 +190,7 @@ export function makeRoundSoapPrompt(params: RoundSoapPromptParams) {
     "Abstract user style profile; use for voice only, never as patient facts:",
     JSON.stringify(params.userStyleProfile ?? {}),
     "Recent saved daily notes, oldest to newest:",
-    JSON.stringify(compactRoundSoapPromptHistory(params.dailyNotes)),
+    JSON.stringify(compactRoundSoapPromptHistory(params.dailyNotes, params.currentSoapBaseline)),
     "Current reviewed SOAP baseline:",
     params.currentSoapBaseline || "(none)",
     params.sourcePreparationNote ? `Source preparation note: ${params.sourcePreparationNote}` : "",

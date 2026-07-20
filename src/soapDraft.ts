@@ -721,31 +721,16 @@ function patientToFallbackSoapDraft(patient: Patient, dailyNotes: DailyNote[] = 
   return ensureAntibioticApInDraft(draft, fallbackAntibioticSourceText(patient, dailyNotes, selectedDate), selectedDate);
 }
 
-function legacyOrderLinesForSoap(patient: Patient, note?: DailyNote) {
-  return uniqueSoapLines([note?.vsOrder, patient.vsOrder], 4, 130)
-    .flatMap((block) => block.split(/\r?\n|;\s+/))
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => (/^(?:order|orders?|meds?|藥囑)\s*:/i.test(line) ? line : `Order: ${line}`));
-}
-
-function addLegacyOrdersToDraft(draft: SoapDraft, patient: Patient, note?: DailyNote): SoapDraft {
-  const legacyOrders = legacyOrderLinesForSoap(patient, note);
-  if (legacyOrders.length === 0) return draft;
-  return {
-    ...draft,
-    taskLines: uniqueSoapLines([...draft.taskLines, ...legacyOrders], Math.max(8, draft.taskLines.length + legacyOrders.length), 130),
-  };
-}
-
 export function patientToSoapDraft(patient: Patient, dailyNotes: DailyNote[] = [], selectedDate = ""): SoapDraft {
   const selectedNote = dailyNotes.find((note) => note.date === selectedDate);
   const selectedSoap = noteSoapText(selectedNote);
-  if (selectedSoap) return addLegacyOrdersToDraft(parseSoapText(selectedSoap), patient, selectedNote);
+  // A reviewed SOAP is canonical. Re-injecting legacy patient/note orders here
+  // made deleted or corrected orders reappear on Board and Print after Save.
+  if (selectedSoap) return parseSoapText(selectedSoap);
 
   const latestSoapNote = sortedNotes(dailyNotes).find((note) => noteSoapText(note));
   const latestSoap = noteSoapText(latestSoapNote);
-  if (latestSoap) return addLegacyOrdersToDraft(parseSoapText(latestSoap), patient, latestSoapNote);
+  if (latestSoap) return parseSoapText(latestSoap);
 
   return patientToFallbackSoapDraft(patient, dailyNotes, selectedDate);
 }

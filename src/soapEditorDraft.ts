@@ -6,6 +6,7 @@ import {
   stripClinicalMarkup,
 } from "./clinicalLineClassifier";
 import { normalizeApProblems } from "./apProblemNormalizer";
+import { objectiveKindFromLine, sanitizeObjectiveLines, stripRepeatedObjectivePrefixes } from "./objectiveLineSanitizer";
 import { formatSoapDraft, normalizeSoapTextForEditor, parseSoapText, type SoapApProblem, type SoapDraft } from "./soapDraft";
 import { createId, hasColorMarkup, safeClinicalLine, safeClinicalLinePreservingMarks } from "./utils";
 
@@ -74,11 +75,18 @@ function editorLineText(value: string, classifiedText: string) {
 function makeLine(value: string, fallbackKind: ClinicalLineKind): SoapEditorLine {
   const classified = classifyClinicalLine(value, { fallbackKind, explicitTone: bangTone(value) });
   const lockedKind = fallbackKind === "task" || fallbackKind === "dc" || fallbackKind === "ap" || fallbackKind === "s" || fallbackKind === "header";
+  const objectiveFallback = classified.kind === "vs" || classified.kind === "pe" || classified.kind === "lab" || classified.kind === "image"
+    ? classified.kind
+    : "other";
+  const inferredKind = fallbackKind === "other"
+    ? objectiveKindFromLine(value, objectiveFallback)
+    : classified.kind;
+  const editorText = editorLineText(value, classified.text);
   return {
     id: createId("soap-line"),
-    text: editorLineText(value, classified.text),
+    text: fallbackKind === "other" && !hasColorMarkup(editorText) ? stripRepeatedObjectivePrefixes(editorText) : editorText,
     tone: classified.tone === "info" ? "plain" : classified.tone,
-    kind: lockedKind ? fallbackKind : classified.kind === "other" ? fallbackKind : classified.kind,
+    kind: lockedKind ? fallbackKind : inferredKind === "other" ? fallbackKind : inferredKind,
   };
 }
 
@@ -178,15 +186,16 @@ export function mergeOrderSourceIntoEditorDraft(draft: SoapEditorDraft, sourceTe
 export function parseSoapTextToEditorDraft(text: string): SoapEditorDraft {
   const normalized = normalizeSoapTextForEditor(text);
   const draft = parseSoapText(normalized);
+  const sanitizedObjective = sanitizeObjectiveLines(draft.oLines);
   const result: SoapEditorDraft = {
     headerLines: draft.header.map((line) => makeLine(line, "header")),
     sLines: draft.sLines.map((line) => makeLine(line, "s")),
-    oLines: draft.oLines.map((line) => makeLine(line, "other")),
+    oLines: sanitizedObjective.accepted.map((line) => makeLine(line.text, line.kind)),
     apProblems: normalizeApProblems(draft.apProblems).map(makeProblem),
     taskLines: draft.taskLines.map((line) => makeTaskLine(line)),
     dcLines: draft.dcLines.map((line) => makeLine(line, "dc")),
     warnings: draft.warnings.map((line) => makeLine(line, "other")),
-    unsortedLines: [],
+    unsortedLines: sanitizedObjective.rejected.map((line) => makeLine(`Ignored lab export header without result values: ${line}`, "other")),
   };
 
   const hasSections = /^\s*(?:S|O|A\/P|AP|Tasks?|DC)\s*:/im.test(String(text ?? ""));
@@ -203,9 +212,12 @@ export function parseSoapTextToEditorDraft(text: string): SoapEditorDraft {
 }
 
 function serializeLine(line: SoapEditorLine, fallbackKind: ClinicalLineKind) {
-  const clean = safeClinicalLinePreservingMarks(line.text, 170);
-  if (!clean) return "";
   const kind = line.kind || fallbackKind;
+  const raw = !hasColorMarkup(line.text) && (kind === "vs" || kind === "pe" || kind === "lab" || kind === "image")
+    ? stripRepeatedObjectivePrefixes(line.text)
+    : line.text;
+  const clean = safeClinicalLinePreservingMarks(raw, 170);
+  if (!clean) return "";
   const prefix =
     kind === "vs"
       ? "V/S: "
