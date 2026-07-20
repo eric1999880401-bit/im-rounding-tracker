@@ -1,6 +1,6 @@
 import type { DailyNote } from "./types";
 
-export type RoundSoapWorkflowMode = "dailyUpdate" | "newSoap" | "transferHandoff";
+export type RoundSoapWorkflowMode = "dailyUpdate" | "newSoap" | "transferHandoff" | "repairSoap";
 
 export interface CanonicalSoapSource {
   text: string;

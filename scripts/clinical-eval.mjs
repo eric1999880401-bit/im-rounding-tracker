@@ -2892,6 +2892,55 @@ try {
     throw new Error(`Transfer guard did not warn about carried protected data: ${JSON.stringify(transferWithoutProtected.highRiskWarnings)}`);
   }
 
+  const clutteredReviewedSoap = [
+    "S:",
+    "- fever improved",
+    "O:",
+    "- V/S: BP 112/68, HR 88, SpO2 96% RA",
+    "- Lab: CBC/DC: WBC 11.2, Hb 10.1, Plt 220",
+    "- Image: CXR 07-19 RLL PNA improving",
+    "A/P:",
+    "# PNA / infection",
+    "- Meropenem 1 g IV q8h 07-17-; B/C pending.",
+    "# Hypoxemia",
+    "- O2 improved; continue meropenem and monitor oxygen.",
+    "# CXR infiltrate",
+    "- RLL PNA improving; continue meropenem and monitor oxygen.",
+    "# AKI",
+    "- Cr 2.1 (2.7), UO adequate.",
+    "Tasks:",
+    "- f/u B/C",
+  ].join("\n");
+  const repairedReviewedSoap = [
+    "S:",
+    "- fever improved",
+    "O:",
+    "- V/S: BP 112/68, HR 88, SpO2 96% RA",
+    "- Lab: CBC/DC: WBC 11.2, Hb 10.1, Plt 220",
+    "- Image: CXR 07-19 RLL PNA improving",
+    "A/P:",
+    "# PNA / prior hypoxemia, improving",
+    "- CXR 07-19 RLL opacity improving, SpO2 96% RA; meropenem 1 g IV q8h 07-17-, B/C pending.",
+    "# AKI, improving",
+    "- Cr 2.1 (2.7), UO adequate.",
+    "Tasks:",
+    "- f/u B/C",
+  ].join("\n");
+  const repairReview = guardRoundSoapDelta({
+    workflowMode: "repairSoap",
+    baselineText: clutteredReviewedSoap,
+    candidateText: repairedReviewedSoap,
+    sourceFields: {},
+    selectedDate: "2026-07-20",
+  });
+  const repairedTitles = parseSoapText(repairReview.acceptedText).apProblems.map((problem) => problem.title);
+  if (repairedTitles.length !== 2 || repairedTitles.some((title) => /^CXR infiltrate$|^Hypoxemia$/i.test(title))) {
+    throw new Error(`Repair current SOAP reintroduced duplicate legacy A/P blocks:\n${repairReview.acceptedText}`);
+  }
+  if (!/Meropenem 1 g IV q8h 07-17-|B\/C pending|Cr 2\.1 \(2\.7\)/i.test(repairReview.acceptedText)) {
+    throw new Error(`Repair current SOAP lost high-yield treatment/evidence:\n${repairReview.acceptedText}`);
+  }
+
   console.log("PASS Structured task editor and antibiotic A/P preservation prevent disappearing clinical data");
   supplementalPasses += 1;
 } catch (error) {
@@ -4477,6 +4526,9 @@ try {
   if (roundSoapBaselineForWorkflow("dailyUpdate", fallbackCanonical) !== fallbackCanonical.text) {
     throw new Error("Daily update lost its available fallback baseline");
   }
+  if (roundSoapBaselineForWorkflow("repairSoap", fallbackCanonical) !== fallbackCanonical.text) {
+    throw new Error("Repair current SOAP lost the reviewed baseline it must consolidate");
+  }
   if (suggestedRoundSoapWorkflow("ICU transfer SBAR") !== "transferHandoff") {
     throw new Error("transfer source suggestion no longer detects ICU/SBAR context");
   }
@@ -4507,8 +4559,8 @@ try {
   }
   const balancedDailyTuning = getResponseTuning("balanced", "roundSoapDaily");
   const balancedFullTuning = getResponseTuning("balanced", "roundSoapFull");
-  if (balancedDailyTuning.reasoning.effort !== "medium") {
-    throw new Error("routine daily SOAP should use medium reasoning on GPT-5.6 Terra");
+  if (balancedDailyTuning.reasoning.effort !== "low") {
+    throw new Error("daily SOAP should reserve output headroom instead of spending it on hidden reasoning");
   }
   if (balancedDailyTuning.max_output_tokens !== 4500 || balancedFullTuning.max_output_tokens !== 4500) {
     throw new Error(`balanced SOAP output budgets no longer reserve enough visible daily JSON: daily=${balancedDailyTuning.max_output_tokens}, full=${balancedFullTuning.max_output_tokens}`);
@@ -4516,8 +4568,8 @@ try {
   if (getResponseTuning("highAccuracy", "roundSoapFull").reasoning.effort !== "high") {
     throw new Error("high-accuracy SOAP should use high reasoning");
   }
-  if (getResponseTuning("highAccuracy", "roundSoapDaily").reasoning.effort !== "medium") {
-    throw new Error("daily high-quality SOAP should reserve output headroom instead of spending the budget on high hidden reasoning");
+  if (getResponseTuning("highAccuracy", "roundSoapDaily").reasoning.effort !== "low") {
+    throw new Error("daily high-quality SOAP should use Sol with low hidden reasoning and preserve output headroom");
   }
   if (getRoundSoapMaxOutputTokens("highAccuracy", "transferHandoff", 34_000) < 12_000) {
     throw new Error("long high-accuracy transfer SOAP lacks reasoning/output headroom");
@@ -4528,11 +4580,17 @@ try {
   if (getRoundSoapMaxOutputTokens("balanced", "dailyUpdate", 2_000) !== balancedDailyTuning.max_output_tokens) {
     throw new Error("short daily SOAP unexpectedly received the expensive long-transfer token budget");
   }
-  if (getRoundSoapMaxOutputTokens("highAccuracy", "dailyUpdate", 2_210, 7_000) < 12_000) {
+  if (getRoundSoapMaxOutputTokens("highAccuracy", "dailyUpdate", 2_210, 7_000) < 24_000) {
     throw new Error("complex reviewed daily SOAP can still exhaust max_output_tokens before emitting complete JSON");
   }
-  if (getRoundSoapMaxOutputTokens("balanced", "dailyUpdate", 2_210, 20_000) < 14_000) {
+  if (getRoundSoapMaxOutputTokens("balanced", "dailyUpdate", 2_210, 20_000) < 18_000) {
     throw new Error("long reviewed SOAP can still be truncated by the balanced output budget");
+  }
+  if (getRoundSoapMaxOutputTokens("highAccuracy", "repairSoap", 100, 9_000) < 24_000) {
+    throw new Error("high-quality old SOAP repair lacks enough strict-JSON output headroom");
+  }
+  if (resolveRoundSoapQuality("fast", "repairSoap", "baseline repair", "S:\n- stable") !== "balanced") {
+    throw new Error("old SOAP repair was allowed to use the low-fidelity fast model");
   }
   const complexReviewedBaseline = `S:\n- stable\nO:\n- V/S: stable\nA/P:\n${Array.from({ length: 5 }, (_, index) => `# Problem ${index + 1}\n- active plan`).join("\n")}`;
   if (resolveRoundSoapQuality("fast", "dailyUpdate", "new V/S and labs", complexReviewedBaseline) !== "balanced") {
@@ -4541,8 +4599,8 @@ try {
   if (resolveRoundSoapQuality("fast", "dailyUpdate", "BP 110/70", "S:\n- stable\nO:\n- V/S: old") !== "fast") {
     throw new Error("simple narrow daily update was unnecessarily upgraded");
   }
-  if (roundSoapHistoryLimit("dailyUpdate") !== 2 || roundSoapHistoryLimit("newSoap") !== 1 || roundSoapHistoryLimit("transferHandoff") !== 5) {
-    throw new Error("SOAP history limits no longer match the deadline-safe daily/new/transfer context budget");
+  if (roundSoapHistoryLimit("dailyUpdate") !== 2 || roundSoapHistoryLimit("newSoap") !== 1 || roundSoapHistoryLimit("transferHandoff") !== 5 || roundSoapHistoryLimit("repairSoap") !== 1) {
+    throw new Error("SOAP history limits no longer match the deadline-safe daily/new/transfer/repair context budget");
   }
   if (
     DEFAULT_AI_CALLABLE_TIMEOUT_MS <= 120_000 ||
@@ -4742,6 +4800,18 @@ try {
   });
   if (!/do not inherit placeholder, empty-state, legacy-fallback/i.test(firstSoapPrompt)) {
     throw new Error("New SOAP prompt did not reject legacy fallback/default content");
+  }
+  const repairPrompt = makeRoundSoapPrompt({
+    sourceType: "mixed",
+    workflowMode: "repairSoap",
+    selectedDate: "2026-07-20",
+    rawText: "Baseline-only SOAP repair; no new clinical facts were supplied.",
+    currentSoapBaseline: "S:\n- stable\nO:\n- Lab: WBC 11\nA/P:\n# PNA\n- meropenem\n# CXR infiltrate\n- meropenem",
+    patientContext: {},
+    dailyNotes: [],
+  });
+  if (!/REPAIR CURRENT SOAP CONTRACT/i.test(repairPrompt) || !/merge overlapping A\/P blocks/i.test(repairPrompt) || !/do not add facts/i.test(repairPrompt)) {
+    throw new Error("Repair current SOAP prompt does not authorize safe deduplication while forbidding invention");
   }
   if (prompt.indexOf("SOURCE PACKAGE") < prompt.indexOf("CLINICAL PRIORITIZATION")) {
     throw new Error("dynamic source package appeared before stable clinical instructions");

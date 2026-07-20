@@ -12,7 +12,7 @@ import { formatSoapDraft, parseSoapText, type SoapApProblem, type SoapDraft } fr
 import { parseLabReports, safeClinicalLine, safeClinicalLinePreservingMarks, stripColorMarkup } from "./utils";
 import type { SoapPatch } from "./types";
 
-export type RoundSoapWorkflowMode = "dailyUpdate" | "newSoap" | "transferHandoff";
+export type RoundSoapWorkflowMode = "dailyUpdate" | "newSoap" | "transferHandoff" | "repairSoap";
 
 export type SoapDeltaSection =
   | "header"
@@ -418,7 +418,7 @@ function filterUnsupportedAnemiaProblem(
   sourceText: string,
   workflowMode: RoundSoapWorkflowMode,
 ) {
-  const reviewedBaselineHasAnemia = workflowMode === "dailyUpdate" && baseline.apProblems.some((problem) => titleHasAnemia(problem.title));
+  const reviewedBaselineHasAnemia = (workflowMode === "dailyUpdate" || workflowMode === "repairSoap") && baseline.apProblems.some((problem) => titleHasAnemia(problem.title));
   if (reviewedBaselineHasAnemia || sourceHasMeaningfulAnemiaEvidence(sourceText)) {
     return { draft: candidate, warnings: [] as string[] };
   }
@@ -1427,7 +1427,9 @@ export function guardRoundSoapDelta({
   ];
   const malformedDailyCandidate = workflowMode === "dailyUpdate" && candidateText.trim().length > 0 && !hasSoapBody(parsedCandidate);
   const protectedCandidate = carryForwardProtectedDraft(baseline, sourceGroundedCandidate);
-  const candidate = workflowMode === "dailyUpdate" ? sourceGroundedCandidate : protectedCandidate.draft;
+  const candidate = workflowMode === "dailyUpdate" || workflowMode === "repairSoap"
+    ? sourceGroundedCandidate
+    : protectedCandidate.draft;
   const normalizedBaselineText = formatSoapDraft(baseline);
   const normalizedCandidateText = formatSoapDraft(candidate);
   const coverageWarnings = sourceCoverageWarnings(sourceText, normalizedCandidateText);
@@ -1438,8 +1440,15 @@ export function guardRoundSoapDelta({
       candidateText: normalizedCandidateText,
       acceptedText: normalizedCandidateText,
       changedSections: analyzeChangedSections(baseline, candidate),
-      warnings: uniqueLines([...candidateWarnings, ...fidelityWarnings, ...protectedCandidate.warnings, ...coverageWarnings], 8),
-      highRiskWarnings: protectedCandidate.warnings.length > 0 ? protectedCandidate.warnings : [],
+      warnings: uniqueLines([
+        ...candidateWarnings,
+        ...fidelityWarnings,
+        ...(workflowMode === "repairSoap" ? [] : protectedCandidate.warnings),
+        ...coverageWarnings,
+      ], 8),
+      highRiskWarnings: workflowMode === "repairSoap" || protectedCandidate.warnings.length === 0
+        ? []
+        : protectedCandidate.warnings,
     };
   }
 

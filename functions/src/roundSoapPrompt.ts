@@ -83,6 +83,19 @@ export function buildCorrectionContract(userStyleProfile?: Record<string, unknow
 }
 
 function workflowContract(workflowMode: string) {
+  if (workflowMode === "repairSoap") {
+    return [
+      "REPAIR CURRENT SOAP CONTRACT",
+      "- The reviewed baseline is the clinical source of truth. Reorganize and condense it; do not add facts that are absent from the baseline or optional new source.",
+      "- Remove parser noise, raw table headers without values, duplicated current V/S/Lab/Image lines, unfinished fragments, and repeated history that does not affect today's decisions.",
+      "- Merge overlapping A/P blocks that describe the same disease. A symptom, oxygen/device status, procedure, image, culture, and medication for one disease belong in one problem block.",
+      "- You may rename or merge redundant A/P titles when their clinical meaning is preserved. Keep distinct active organ problems separate.",
+      "- Preserve exact current antimicrobial names, dates/day counts, culture status, procedures, high-yield lab trends, imaging study/date/finding, pending tasks, and DC barriers.",
+      "- Preserve clinician-authored uncertainty and manual emphasis. Never revive a stopped/replaced medication as current treatment.",
+      "- Return a complete replacement SOAP for review. Aim for a concise rounding note, not an admission-note transcript.",
+    ].join("\n");
+  }
+
   if (workflowMode === "dailyUpdate") {
     return [
       "DAILY UPDATE CONTRACT",

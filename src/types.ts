@@ -189,7 +189,7 @@ export interface GenerateRoundSoapInput {
   patientId: string;
   selectedDate: string;
   sourceType: AiClinicalSourceType;
-  workflowMode?: "dailyUpdate" | "newSoap" | "transferHandoff";
+  workflowMode?: "dailyUpdate" | "newSoap" | "transferHandoff" | "repairSoap";
   rawText: string;
   currentSoapBaseline: string;
   deidentifiedConfirmed: boolean;
@@ -519,7 +519,7 @@ export interface DailyNote {
   createdAt: string;
 }
 
-export type SoapEditWorkflowMode = "dailyUpdate" | "newSoap" | "transferHandoff";
+export type SoapEditWorkflowMode = "dailyUpdate" | "newSoap" | "transferHandoff" | "repairSoap";
 export type SoapEditSource = "ai" | "manual";
 export type SoapEditSection = "header" | "s" | "vs" | "pe" | "lab" | "image" | "objective" | "ap" | "orders" | "tasks" | "dc";
 export type SoapEditChangeKind = "added" | "removed" | "rewritten";

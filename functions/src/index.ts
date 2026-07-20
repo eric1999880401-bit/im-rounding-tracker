@@ -245,7 +245,7 @@ export const generateRoundSoap = onCall(
     const selectedDate = truncateString(data.selectedDate, 20);
     const sourceType = String(data.sourceType ?? "dailyUpdate") as SourceType;
     const workflowModeValue = String(data.workflowMode ?? "dailyUpdate");
-    const workflowMode = ["dailyUpdate", "newSoap", "transferHandoff"].includes(workflowModeValue)
+    const workflowMode = ["dailyUpdate", "newSoap", "transferHandoff", "repairSoap"].includes(workflowModeValue)
       ? workflowModeValue
       : "dailyUpdate";
     const rawText = String(data.rawText ?? "").trim();
@@ -329,7 +329,9 @@ export const generateRoundSoap = onCall(
       background,
       deferBackground: background && supportsBackgroundPolling,
       payload: {
-        reasoning: tuning.reasoning,
+        reasoning: workflowMode === "repairSoap" && qualityMode === "highAccuracy"
+          ? { effort: "medium" }
+          : tuning.reasoning,
         max_output_tokens: maxOutputTokens,
         prompt_cache_key: `${tuning.prompt_cache_key}:${workflowMode}`,
         input: [
@@ -394,7 +396,7 @@ export const generateRoundSoap = onCall(
         promptChars: preparedSource.promptChars,
         omittedBlocks: preparedSource.omittedBlocks,
         createdAt: FieldValue.serverTimestamp(),
-        expiresAt: new Date(Date.now() + 8 * 60_000),
+        expiresAt: new Date(Date.now() + 10 * 60_000),
       };
       await jobRef.set(job);
       logger.info("generateRoundSoap background job handed off", {
@@ -499,7 +501,7 @@ export const pollRoundSoapGeneration = onCall(
       return { status: "pending" as const, jobId, pollAfterMs: 2_000 };
     }
 
-    const workflowMode = ["dailyUpdate", "newSoap", "transferHandoff"].includes(String(stored.workflowMode))
+    const workflowMode = ["dailyUpdate", "newSoap", "transferHandoff", "repairSoap"].includes(String(stored.workflowMode))
       ? stored.workflowMode as RoundSoapWorkflowMode
       : "dailyUpdate";
     const qualityMode = sanitizeQualityMode(stored.qualityMode);

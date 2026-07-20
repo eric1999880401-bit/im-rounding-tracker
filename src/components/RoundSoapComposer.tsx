@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import type { AiClinicalSourceType, DailyNote, KeywordHighlightRule, Patient, RoundingLayoutPreferences, SoapEditTrace, UserAiStyleProfile } from "../types";
 import { generateRoundSoap } from "../firebase/aiService";
 import { readComposerPref, writeComposerPref } from "../composerPreferences";
@@ -30,9 +30,13 @@ import {
 import { normalizeAiSoapText } from "../aiSoapContract";
 import { appendSoapEditTrace, buildSoapEditTrace, nextSoapVersion, type SoapEditOrigin } from "../soapEditTrace";
 import {
+  canRedo,
+  canUndo,
   createUndoRedoHistory,
   pushUndoRedoEdit,
+  redoEdit,
   replaceUndoRedoPresent,
+  undoEdit,
   type UndoRedoHistory,
 } from "../editHistory";
 import {
@@ -93,6 +97,12 @@ const workflowModes: Array<{ value: WorkflowMode; label: string; helper: string;
     value: "transferHandoff",
     label: "Transfer / handoff SOAP",
     helper: "First SOAP after transfer: paste admission, last SOAP/SBAR, V/S, lab, image, and description/other.",
+    sourceType: "mixed",
+  },
+  {
+    value: "repairSoap",
+    label: "Repair current SOAP",
+    helper: "Use GPT-5.6 Sol to consolidate a cluttered reviewed SOAP without adding unsupported facts. Preview only until Save.",
     sourceType: "mixed",
   },
 ];
@@ -173,6 +183,7 @@ const emptyPendingOrderSources: Record<WorkflowMode, boolean> = {
   dailyUpdate: false,
   newSoap: false,
   transferHandoff: false,
+  repairSoap: false,
 };
 
 function patientContext(patient: Patient) {
@@ -358,7 +369,7 @@ function RoundSoapComposer({
     manualBaselineRef.current = normalizedBaseline;
     setRawSoapText(normalizedBaseline);
     setDeltaReview(null);
-  }, [canonical.text, dirty, selectedDate]);
+  }, [canonical.text, selectedDate]);
 
   useEffect(() => {
     if (externalSoapRevisionRef.current === externalSoapRevision || isComposingRef.current) return;
@@ -376,7 +387,7 @@ function RoundSoapComposer({
   }, [externalSoapRevision, externalSoapStatus, externalSoapText]);
 
   useEffect(() => {
-    setQualityMode(workflowMode === "transferHandoff" ? "highAccuracy" : "balanced");
+    setQualityMode(workflowMode === "transferHandoff" || workflowMode === "repairSoap" ? "highAccuracy" : "balanced");
   }, [workflowMode]);
 
   function updateEditorDraft(nextDraft: typeof editorDraft) {
@@ -409,6 +420,33 @@ function RoundSoapComposer({
     setRawSoapText(editorDraftToSoapText(nextDraft));
     setComposerDirty(editorDraftToSoapText(nextDraft) !== canonical.text);
     setDeltaReview(null);
+  }
+
+  function applyHistoryResult(result: { history: UndoRedoHistory<typeof editorDraft>; changed: boolean }) {
+    if (!result.changed) return;
+    editorHistoryRef.current = result.history;
+    setEditorHistory(result.history);
+    restoreEditorDraftFromHistory(result.history.present);
+  }
+
+  function undoEditorChange() {
+    if (loading || isComposingRef.current) return;
+    applyHistoryResult(undoEdit(editorHistoryRef.current));
+  }
+
+  function redoEditorChange() {
+    if (loading || isComposingRef.current) return;
+    applyHistoryResult(redoEdit(editorHistoryRef.current));
+  }
+
+  function handleEditorKeyDown(event: ReactKeyboardEvent<HTMLElement>) {
+    if (!(event.ctrlKey || event.metaKey) || event.altKey || isComposingRef.current) return;
+    const key = event.key.toLowerCase();
+    const redoRequested = key === "y" || (key === "z" && event.shiftKey);
+    if (key !== "z" && key !== "y") return;
+    event.preventDefault();
+    if (redoRequested) redoEditorChange();
+    else undoEditorChange();
   }
 
 
@@ -481,12 +519,14 @@ function RoundSoapComposer({
 
   function composeRawText() {
     if (mixedSourceText.trim()) return mixedSourceText.trim();
+    if (workflowMode === "repairSoap") return "Baseline-only SOAP repair; no new clinical facts were supplied.";
     if (workflowMode === "newSoap") return composeNewSoapText();
     if (workflowMode === "transferHandoff") return composeTransferText();
     return composeDailyUpdateText();
   }
 
   function currentSourceFields(mode: WorkflowMode = workflowMode): SoapSourceFields {
+    if (mode === "repairSoap") return { other: mixedSourceText.trim() };
     if (mixedSourceText.trim()) {
       if (mode === "dailyUpdate") {
         const routed = splitGuidedSoapSource(mixedSourceText);
@@ -507,6 +547,7 @@ function RoundSoapComposer({
   }
 
   function currentOrderSourceText() {
+    if (workflowMode === "repairSoap") return "";
     if (workflowMode === "newSoap") return newSoapFields.orders;
     if (workflowMode === "transferHandoff") return transferFields.orders;
     return dailyFields.orders;
@@ -775,7 +816,9 @@ function RoundSoapComposer({
     setComposerDirty(false);
     setStatus("");
     setError("");
+    setWarnings([]);
     setDeltaReview(null);
+    editOriginRef.current = null;
     removeRecoveryDraft(recoveryStorage, recoveryScope);
     setRecoveryDraft(null);
     setRecoverySavedAt("");
@@ -814,7 +857,7 @@ function RoundSoapComposer({
     );
   }
 
-  const composedSourceChars = composeRawText().length;
+  const composedSourceChars = workflowMode === "repairSoap" ? mixedSourceText.trim().length : composeRawText().length;
   const sourceTooLong = composedSourceChars > MAX_ROUND_SOAP_RAW_CHARS;
   const longTransferSource = workflowMode === "transferHandoff" && composedSourceChars > LONG_TRANSFER_SOURCE_CHARS;
   const estimatedTokens = Math.ceil((composedSourceChars + soapText.length) / 4);
@@ -852,13 +895,15 @@ function RoundSoapComposer({
           <p className="status-message compact-workflow-suggestion">Transfer/SBAR wording detected. Switch Workflow to Transfer only if this is the receiving team's first SOAP.</p>
         )}
         <label className="round-soap-paste">
-          Paste all source data for {workflow.label}
+          {workflowMode === "repairSoap" ? "Optional new facts for repair" : `Paste all source data for ${workflow.label}`}
           <textarea
             value={mixedSourceText}
             onChange={(event) => setMixedSourceText(event.target.value)}
             onCompositionStart={() => { isComposingRef.current = true; }}
             onCompositionEnd={() => { isComposingRef.current = false; }}
-            placeholder={workflowMode === "dailyUpdate"
+            placeholder={workflowMode === "repairSoap"
+              ? "Leave empty to consolidate the current reviewed SOAP only, or paste corrected/new facts that must be included."
+              : workflowMode === "dailyUpdate"
               ? "Paste today's V/S, labs, imaging, course, orders, consults, and pending tasks together."
               : workflowMode === "newSoap"
                 ? "Paste admission note, current V/S, labs, imaging, orders, and a short description together."
@@ -876,7 +921,7 @@ function RoundSoapComposer({
         )}
         <div className="round-soap-generate-row compact-generate-row">
           <span className="muted">Preview only. Save remains explicit.</span>
-          <button type="button" disabled={loading || mixedSourceText.trim().length < 10 || sourceTooLong} onClick={() => void handleGenerate()}>
+          <button type="button" disabled={loading || (workflowMode !== "repairSoap" && mixedSourceText.trim().length < 10) || sourceTooLong} onClick={() => void handleGenerate()}>
             {loading ? "Working..." : `Generate ${workflow.label}`}
           </button>
         </div>
@@ -950,13 +995,15 @@ function RoundSoapComposer({
         </div>
       </div>
       <label className="round-soap-paste round-soap-primary-paste">
-        Paste all source data for {workflow.label}
+        {workflowMode === "repairSoap" ? "Optional new facts for repair" : `Paste all source data for ${workflow.label}`}
         <textarea
           value={mixedSourceText}
           onChange={(event) => setMixedSourceText(event.target.value)}
           onCompositionStart={() => { isComposingRef.current = true; }}
           onCompositionEnd={() => { isComposingRef.current = false; }}
-          placeholder={workflowMode === "dailyUpdate"
+          placeholder={workflowMode === "repairSoap"
+            ? "Leave empty to consolidate the current reviewed SOAP only, or paste corrected/new facts that must be included."
+            : workflowMode === "dailyUpdate"
             ? "Paste today's V/S, labs, imaging, course, orders, consults, and tasks together. AI will update the reviewed baseline."
             : workflowMode === "newSoap"
               ? "Paste admission note, current V/S, labs, imaging, orders, and description together. AI will create the first SOAP."
@@ -974,7 +1021,7 @@ function RoundSoapComposer({
       )}
       <div className="round-soap-generate-row primary-generate-row">
         <span className="muted">The selected workflow and model are used as shown. Nothing is saved until Save reviewed SOAP.</span>
-        <button type="button" disabled={loading || mixedSourceText.trim().length < 10 || sourceTooLong} onClick={() => void handleGenerate()}>
+        <button type="button" disabled={loading || (workflowMode !== "repairSoap" && mixedSourceText.trim().length < 10) || sourceTooLong} onClick={() => void handleGenerate()}>
           {loading ? "Working..." : `Generate ${workflow.label}`}
         </button>
       </div>
@@ -1014,7 +1061,11 @@ function RoundSoapComposer({
             Approx. {estimatedTokens.toLocaleString()} input + baseline tokens. The backend falls back to the prior model generation only if the selected model is unavailable.
           </p>
 
-      {workflowMode === "dailyUpdate" ? (
+      {workflowMode === "repairSoap" ? (
+        <div className="status-message">
+          The current reviewed SOAP is the source. GPT-5.6 Sol may merge duplicate A/P blocks, remove parser noise, and normalize section placement, but cannot add unsupported facts. The result remains a local preview until Save reviewed SOAP.
+        </div>
+      ) : workflowMode === "dailyUpdate" ? (
         <div className="round-soap-daily-grid round-soap-guided-grid">
           <label>
             V/S
@@ -1295,11 +1346,13 @@ function RoundSoapComposer({
         </div>
       )}
 
-      <MedicationOrderReviewPanel
-        compact={compact}
-        sourceText={currentOrderSourceText()}
-        onApply={applyMedicationOrderSummaries}
-      />
+      {workflowMode !== "repairSoap" && (
+        <MedicationOrderReviewPanel
+          compact={compact}
+          sourceText={currentOrderSourceText()}
+          onApply={applyMedicationOrderSummaries}
+        />
+      )}
 
       <DeidNotice />
       <div className="round-soap-generate-row">
@@ -1335,11 +1388,15 @@ function RoundSoapComposer({
       {renderDeltaReviewPanel()}
 
       <div className="round-soap-editor-grid">
-        <section className="round-soap-structured-editor">
+        <section className="round-soap-structured-editor" onKeyDownCapture={handleEditorKeyDown}>
           <div className="structured-soap-main-heading">
             <div>
               <strong>Reviewed SOAP blocks</strong>
               <span className="soap-editor-hint">Use controls for section, importance, and A/P blocks. Save writes normalized SOAP text.</span>
+            </div>
+            <div className="form-actions" aria-label="SOAP edit history controls">
+              <button type="button" className="secondary compact-button" disabled={loading || !canUndo(editorHistory)} onClick={undoEditorChange} title="Undo (Ctrl+Z)">Undo</button>
+              <button type="button" className="secondary compact-button" disabled={loading || !canRedo(editorHistory)} onClick={redoEditorChange} title="Redo (Ctrl+Shift+Z or Ctrl+Y)">Redo</button>
             </div>
           </div>
           <StructuredSoapEditor

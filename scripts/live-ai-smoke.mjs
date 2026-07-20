@@ -115,7 +115,26 @@ const auth = getAuth(app);
 const db = getFirestore(app);
 const functions = getFunctions(app);
 const generateRoundSoap = httpsCallable(functions, "generateRoundSoap");
+const pollRoundSoapGeneration = httpsCallable(functions, "pollRoundSoapGeneration");
 const generateClinicalDocument = httpsCallable(functions, "generateClinicalDocument");
+
+function pendingRoundSoap(value) {
+  return value?.status === "pending" && typeof value?.jobId === "string";
+}
+
+async function runRoundSoap(input, timeoutMs = 570_000) {
+  const started = await generateRoundSoap({ ...input, supportsBackgroundPolling: true });
+  if (!pendingRoundSoap(started.data)) return started;
+  const deadline = Date.now() + timeoutMs;
+  let pending = started.data;
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, Math.max(800, Math.min(5_000, pending.pollAfterMs || 2_000))));
+    const polled = await pollRoundSoapGeneration({ jobId: pending.jobId });
+    if (!pendingRoundSoap(polled.data)) return { data: polled.data };
+    pending = polled.data;
+  }
+  throw new Error(`Background SOAP smoke timed out after ${timeoutMs} ms.`);
+}
 
 let patientRef;
 try {
@@ -169,17 +188,42 @@ try {
     },
   };
 
-  const daily = await generateRoundSoap({
+  const daily = await runRoundSoap({
     ...common,
     workflowMode: "dailyUpdate",
+    qualityMode: "highAccuracy",
     currentSoapBaseline: baseline,
     rawText: "V/S only: 2026/05/21 BP 118/72, HR 82, RR 18, SpO2 98% RA, afebrile.",
   });
   const dailySoap = assertSoap(daily.data, "Daily update");
   assert(/BP 118\/72|SpO2 98% RA/i.test(dailySoap), `Daily update did not include new V/S\n${dailySoap}`);
   assert(/Ceftriaxone|f\/u B\/C|AKI on CKD/i.test(dailySoap), `Daily update lost baseline user-style A/P\n${dailySoap}`);
+  assert(/^gpt-5\.6(?:-sol(?:-\d{4}-\d{2}-\d{2})?)?$/i.test(String(daily.data?.model ?? "")), `High-quality old-patient smoke did not use GPT-5.6 Sol: ${daily.data?.model}`);
 
-  const newSoap = await generateRoundSoap({
+  const clutteredBaseline = baseline.replace(
+    "Tasks:",
+    [
+      "# Hypoxemia",
+      "- oxygen improving; continue ceftriaxone and monitor.",
+      "# CXR infiltrate",
+      "- CXR PNA; continue ceftriaxone and monitor.",
+      "Tasks:",
+    ].join("\n"),
+  );
+  const repaired = await runRoundSoap({
+    ...common,
+    workflowMode: "repairSoap",
+    sourceType: "mixed",
+    qualityMode: "highAccuracy",
+    currentSoapBaseline: clutteredBaseline,
+    rawText: "Baseline-only SOAP repair; no new clinical facts were supplied.",
+  });
+  const repairedSoap = assertSoap(repaired.data, "Repair current SOAP");
+  const repairedApTitles = repairedSoap.match(/^#\s+.+$/gm) ?? [];
+  assert(repairedApTitles.length <= 4, `Repair current SOAP did not consolidate duplicate A/P blocks\n${repairedSoap}`);
+  assert(/Ceftriaxone 5\/1-|f\/u B\/C|AKI/i.test(repairedSoap), `Repair current SOAP lost treatment or active organ problem\n${repairedSoap}`);
+
+  const newSoap = await runRoundSoap({
     ...common,
     workflowMode: "newSoap",
     currentSoapBaseline: "",
@@ -195,7 +239,7 @@ try {
   assert(/Meropenem 1 g IV q8h|B\/C|Cr 2\.2|CXR 5\/21/i.test(newSoapText), `New SOAP lost core evidence/current antibiotic\n${newSoapText}`);
   assert(!/^# .*anemia/im.test(newSoapText), `New SOAP promoted isolated Hb 12 into an anemia A/P\n${newSoapText}`);
 
-  const transfer = await generateRoundSoap({
+  const transfer = await runRoundSoap({
     ...common,
     workflowMode: "transferHandoff",
     currentSoapBaseline: "",

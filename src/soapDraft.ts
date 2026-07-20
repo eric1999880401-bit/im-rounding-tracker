@@ -464,7 +464,7 @@ export function localRoundSoapFromPaste(
   dailyNotes: DailyNote[] = [],
   selectedDate = "",
   rawText = "",
-  workflowMode: "dailyUpdate" | "newSoap" | "transferHandoff" = "dailyUpdate",
+  workflowMode: "dailyUpdate" | "newSoap" | "transferHandoff" | "repairSoap" = "dailyUpdate",
 ) {
   const canonicalDraft = parseSoapText(getCanonicalSoapText(patient, dailyNotes, selectedDate).text);
   const baseline = workflowMode === "newSoap"

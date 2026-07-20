@@ -67,7 +67,7 @@ export function getResponseTuning(qualityMode: AiQualityMode, workload: AiWorklo
   // Daily delta updates need source fidelity and enough visible output budget,
   // not prolonged hidden reasoning. Reserve high effort for first/transfer SOAP.
   const reasoningEffort = workload === "roundSoapDaily"
-    ? qualityMode === "fast" ? "low" : "medium"
+    ? "low"
     : qualityMode === "fast"
       ? "low"
       : qualityMode === "highAccuracy"
@@ -101,21 +101,22 @@ export function getRoundSoapMaxOutputTokens(
     if (!complexBaseline) return base;
     // The API budget includes hidden reasoning plus strict JSON. A reviewed
     // baseline must fit in full so the model never stops halfway through it.
-    if (qualityMode === "highAccuracy") return Math.max(base, 14_000);
-    if (qualityMode === "balanced") return Math.max(base, baselineChars > 12_000 ? 14_000 : 9_000);
+    if (qualityMode === "highAccuracy") return Math.max(base, 24_000);
+    if (qualityMode === "balanced") return Math.max(base, baselineChars > 12_000 ? 18_000 : 12_000);
     return Math.max(base, 6_000);
   }
-  const longClinicalSource = workflowMode === "transferHandoff" || promptSourceChars > 18_000;
+  const longClinicalSource = workflowMode === "transferHandoff" || workflowMode === "repairSoap" || promptSourceChars > 18_000;
   if (!longClinicalSource) return base;
 
   // Responses API max_output_tokens includes hidden reasoning tokens. Long transfer
   // records need enough headroom to finish reasoning and still emit strict JSON.
-  if (qualityMode === "highAccuracy") return Math.max(base, 14_000);
+  if (qualityMode === "highAccuracy") return Math.max(base, workflowMode === "repairSoap" ? 24_000 : 18_000);
   if (qualityMode === "balanced") return Math.max(base, 9_000);
   return Math.max(base, 6_000);
 }
 
 export function resolveRoundSoapQuality(requested: AiQualityMode, workflowMode: string, rawText: string, baselineText = ""): AiQualityMode {
+  if (workflowMode === "repairSoap" && requested === "fast") return "balanced";
   if (requested !== "fast") return requested;
   const baselineProblemCount = (String(baselineText).match(/^\s*#\s+\S/gm) ?? []).length;
   const combined = `${rawText}\n${baselineText}`;
@@ -143,6 +144,7 @@ export function resolveDocumentQuality(requested: AiQualityMode, _documentType: 
 export function roundSoapHistoryLimit(workflowMode: string) {
   if (workflowMode === "transferHandoff") return 5;
   if (workflowMode === "newSoap") return 1;
+  if (workflowMode === "repairSoap") return 1;
   return 2;
 }
 

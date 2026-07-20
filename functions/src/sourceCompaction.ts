@@ -1,4 +1,4 @@
-export type RoundSoapWorkflowMode = "dailyUpdate" | "newSoap" | "transferHandoff";
+export type RoundSoapWorkflowMode = "dailyUpdate" | "newSoap" | "transferHandoff" | "repairSoap";
 
 export const MAX_ROUND_SOAP_RAW_CHARS = 120_000;
 
@@ -6,6 +6,7 @@ const sourceBudgets: Record<RoundSoapWorkflowMode, number> = {
   dailyUpdate: 18_000,
   newSoap: 26_000,
   transferHandoff: 34_000,
+  repairSoap: 18_000,
 };
 
 export interface PreparedRoundSoapSource {
