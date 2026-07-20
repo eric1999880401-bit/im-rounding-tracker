@@ -90,6 +90,7 @@ const { labReferenceText, parseClinicalLabTokens } = await server.ssrLoadModule(
 const { boardDischargeTasks, hasBoardDischargeSoonSignal, isBoardNewAdmission } = await server.ssrLoadModule("/src/boardCockpit.ts");
 const { buildLabVisualSummaryFromText, formatLabVisualSummaryFromLines, formatLabVisualSummaryLinesFromText } = await server.ssrLoadModule("/src/labVisualSummary.ts");
 const { normalizeLabTableSourceText } = await server.ssrLoadModule("/src/objectiveLineSanitizer.ts");
+const { acceptStructuredRoundSoap, structuredRoundSoapToEditorDraft } = await server.ssrLoadModule("/src/roundSoapContract.ts");
 const { formatSoapBasedIsbar } = await server.ssrLoadModule("/src/soapSbar.ts");
 const { AI_SOAP_OUTPUT_CONTRACT_VERSION, normalizeAiSoapText } = await server.ssrLoadModule("/src/aiSoapContract.ts");
 const {
@@ -5207,6 +5208,138 @@ try {
 } catch (error) {
   failures.push({ name: "Pathology objective routing", error: error instanceof Error ? error.message : String(error) });
   console.error(`FAIL Pathology objective routing: ${failures[failures.length - 1].error}`);
+}
+
+try {
+  const structuredDraft = {
+    headerLines: ["C99-001 71/M", "Dx: synthetic PNA w/ sepsis"],
+    subjectiveLines: ["Dyspnea improved"],
+    objective: {
+      vitalSigns: ["T 37.2 C, BP 112/68, HR 92, RR 18, SpO2 96% NC 1 L"],
+      physicalExam: ["RLL crackles"],
+      labs: [
+        { panel: "CBC/DC", values: "WBC 12.7, Neu 88.9%, Hb 12.0, Plt 259" },
+        { panel: "Chem/Renal", values: "BUN 24, Cr 1.2, Na 150, K 4.0" },
+        { panel: "Infx/Perfusion", values: "CRP 10(4) up" },
+      ],
+      microbiology: ["B/C 07-20 pending"],
+      imaging: [{ study: "CXR", date: "07-20", finding: "RLL opacity" }],
+      pathology: [],
+      other: [],
+    },
+    assessmentPlan: [
+      {
+        problemTitle: "PNA / sepsis, improving",
+        status: "improving",
+        summary: "Afebrile, hemodynamics stable; CXR 07-20 RLL opacity, B/C pending.",
+        plan: "Continue meropenem 1 g IV q8h; f/u B/C and O2 need.",
+        sourceEvidence: ["continue meropenem 1 g IV q8h", "CXR 07-20 RLL opacity"],
+      },
+      {
+        problemTitle: "Hypernatremia",
+        status: "active",
+        summary: "Na 150, new from prior 140.",
+        plan: "Follow the documented fluid/free-water plan and repeat Na.",
+        sourceEvidence: ["Na 150, prior 140"],
+      },
+    ],
+    orders: ["meropenem 1 g IV q8h"],
+    tasks: ["f/u B/C"],
+    discharge: [],
+    warnings: [],
+    highlightHints: ["Na 150", "meropenem"],
+  };
+  const sourceFields = {
+    vitals: "T 37.2 C BP 112/68 HR 92 RR 18 SpO2 96% NC 1 L",
+    labs: "WBC 12.7 Neu 88.9 Hb 12.0 Plt 259 BUN 24 Cr 1.2 Na 150 K 4.0 CRP 10 prior 4; Na prior 140",
+    images: "CXR 07-20 RLL opacity",
+    orders: "continue meropenem 1 g IV q8h",
+    other: "B/C 07-20 pending; dyspnea improved",
+  };
+  const accepted = acceptStructuredRoundSoap({
+    value: structuredDraft,
+    baselineText: "",
+    sourceFields,
+    workflowMode: "newSoap",
+  });
+  const acceptedText = editorDraftToSoapText(accepted.draft);
+  if (accepted.fatalErrors.length > 0) throw new Error(`valid structured draft was rejected: ${accepted.fatalErrors.join(" | ")}`);
+  if (!/Lab: CBC\/DC: WBC 12\.7, Neu 88\.9%, Hb 12\.0, Plt 259/.test(acceptedText)) {
+    throw new Error(`structured CBC line was rewritten or lost:\n${acceptedText}`);
+  }
+  if (!/Lab: Infx\/Perfusion: CRP 10\(4\) up/.test(acceptedText) || /Chem\/Renal:[^\n]*CRP/i.test(acceptedText)) {
+    throw new Error(`structured lab panels were regrouped incorrectly:\n${acceptedText}`);
+  }
+  if (!/# Hypernatremia[\s\S]*Na 150/.test(acceptedText) || /# .*anemia/i.test(acceptedText)) {
+    throw new Error(`A/P significance gate failed:\n${acceptedText}`);
+  }
+
+  const equivalentFormattingDraft = structuredClone(structuredDraft);
+  equivalentFormattingDraft.objective.labs[0].values = "WBC 12.7, Neu 88.9%, Hb 12, Plt 259";
+  const equivalentFormatting = acceptStructuredRoundSoap({ value: equivalentFormattingDraft, baselineText: "", sourceFields, workflowMode: "newSoap" });
+  if (equivalentFormatting.fatalErrors.some((line) => /invented Lab value/i.test(line))) {
+    throw new Error(`equivalent Lab formatting 12 vs 12.0 was rejected: ${equivalentFormatting.fatalErrors.join(" | ")}`);
+  }
+
+  const inventedLabDraft = structuredClone(structuredDraft);
+  inventedLabDraft.objective.labs[1].values = "BUN 24, Cr 15.4, Na 150, K 4.0";
+  const invented = acceptStructuredRoundSoap({ value: inventedLabDraft, baselineText: "S:\n- baseline", sourceFields, workflowMode: "newSoap" });
+  if (!invented.fatalErrors.some((line) => /invented Lab value/i.test(line))) {
+    throw new Error(`invented lab value was not blocked: ${invented.fatalErrors.join(" | ")}`);
+  }
+
+  const missingAbxDraft = structuredClone(structuredDraft);
+  missingAbxDraft.assessmentPlan[0].plan = "f/u B/C and O2 need";
+  missingAbxDraft.orders = [];
+  const missingAbx = acceptStructuredRoundSoap({ value: missingAbxDraft, baselineText: "", sourceFields, workflowMode: "newSoap" });
+  if (!missingAbx.fatalErrors.some((line) => /omitted current antimicrobial 'meropenem'/i.test(line))) {
+    throw new Error(`omitted current antibiotic was not blocked: ${missingAbx.fatalErrors.join(" | ")}`);
+  }
+
+  const repeatedAbxDraft = structuredClone(structuredDraft);
+  repeatedAbxDraft.assessmentPlan[1].plan = "Continue meropenem 1 g IV q8h and repeat Na.";
+  const repeatedAbx = acceptStructuredRoundSoap({ value: repeatedAbxDraft, baselineText: "", sourceFields, workflowMode: "newSoap" });
+  if (!repeatedAbx.fatalErrors.some((line) => /repeated meropenem under multiple A\/P/i.test(line))) {
+    throw new Error(`duplicated antibiotic ownership was not blocked: ${repeatedAbx.fatalErrors.join(" | ")}`);
+  }
+
+  const baseline = editorDraftToSoapText(structuredRoundSoapToEditorDraft(structuredDraft));
+  const dailyDraft = structuredClone(structuredDraft);
+  dailyDraft.subjectiveLines = [];
+  dailyDraft.objective.labs[1].values = "BUN 24, Cr 1.2, Na 148(150) down, K 4.0";
+  const daily = acceptStructuredRoundSoap({
+    value: dailyDraft,
+    baselineText: baseline,
+    sourceFields: { labs: "BUN 24 Cr 1.2 Na 148 prior 150 K 4.0" },
+    workflowMode: "dailyUpdate",
+  });
+  const dailyText = editorDraftToSoapText(daily.draft);
+  if (!/Dyspnea improved/.test(dailyText) || !/# PNA \/ sepsis, improving/.test(dailyText) || !/Na 148\(150\) down/.test(dailyText)) {
+    throw new Error(`structured daily update did not preserve unrelated reviewed SOAP:\n${dailyText}`);
+  }
+
+  const staleProblemDraft = structuredClone(dailyDraft);
+  staleProblemDraft.assessmentPlan.push({
+    problemTitle: "Copied old imaging issue",
+    status: "active",
+    summary: "CXR 07-20 RLL opacity.",
+    plan: "Repeat imaging.",
+    sourceEvidence: ["CXR 07-20 RLL opacity"],
+  });
+  const staleProblem = acceptStructuredRoundSoap({
+    value: staleProblemDraft,
+    baselineText: baseline,
+    sourceFields: { labs: "BUN 24 Cr 1.2 Na 148 prior 150 K 4.0" },
+    workflowMode: "dailyUpdate",
+  });
+  if (!staleProblem.fatalErrors.some((line) => /not grounded in the pasted source/i.test(line))) {
+    throw new Error(`daily update accepted a new A/P problem supported only by old baseline: ${staleProblem.fatalErrors.join(" | ")}`);
+  }
+  console.log("PASS Structured AI SOAP contract keeps Lab literal, blocks unsupported values/Abx duplication, and preserves Daily baseline");
+  supplementalPasses += 1;
+} catch (error) {
+  failures.push({ name: "Structured AI SOAP contract", error: error instanceof Error ? error.message : String(error) });
+  console.error(`FAIL Structured AI SOAP contract: ${failures[failures.length - 1].error}`);
 }
 
 await server.close();

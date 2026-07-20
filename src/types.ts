@@ -219,9 +219,45 @@ export interface SoapPatch {
   changedSections: SoapPatchChange[];
 }
 
+export type RoundSoapLabPanel =
+  | "CBC/DC"
+  | "Chem/Renal"
+  | "Liver/Coag"
+  | "Infx/Perfusion"
+  | "ABG/VBG"
+  | "Cardiac"
+  | "Other";
+
+export interface StructuredRoundSoapDraft {
+  headerLines: string[];
+  subjectiveLines: string[];
+  objective: {
+    vitalSigns: string[];
+    physicalExam: string[];
+    labs: Array<{ panel: RoundSoapLabPanel; values: string }>;
+    microbiology: string[];
+    imaging: Array<{ study: string; date: string; finding: string }>;
+    pathology: Array<{ date: string; specimen: string; result: string }>;
+    other: string[];
+  };
+  assessmentPlan: Array<{
+    problemTitle: string;
+    status: "active" | "improving" | "worsening" | "stable" | "uncertain";
+    summary: string;
+    plan: string;
+    sourceEvidence: string[];
+  }>;
+  orders: string[];
+  tasks: string[];
+  discharge: string[];
+  warnings: string[];
+  highlightHints: string[];
+}
+
 interface GenerateRoundSoapResultBase {
   draftId: string;
   soapText: string;
+  structuredDraft?: StructuredRoundSoapDraft;
   warnings: string[];
   highlightHints: string[];
   model: string;

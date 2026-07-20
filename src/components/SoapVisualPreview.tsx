@@ -1,13 +1,11 @@
 import { useMemo, type ReactNode } from "react";
-import { parseSoapText, soapTextWithDerivedHighlights } from "../soapDraft";
+import { parseSoapText } from "../soapDraft";
 import { soapHeaderLinesForDisplay } from "../soapDisplay";
 import { deriveSoapEvidence, type SoapSourceFields } from "../soapEvidence";
 import { ClinicalInlineText, ClinicalText, type LabReferenceDisplayMode } from "./ClinicalText";
 import { classifyClinicalLine, normalizeClinicalDisplayTextPreservingMarks, type ClinicalLineKind, type ClinicalLineTone } from "../clinicalLineClassifier";
-import { formatLabVisualSummaryLinesFromText } from "../labVisualSummary";
 import { formatMedicationOrderLinesForDisplay } from "../medicationOrderParser";
 import type { KeywordHighlightRule, RoundingLayoutPreferences } from "../types";
-import { hasColorMarkup } from "../utils";
 import {
   isDcSoapLineVisible,
   isLayoutSectionVisible,
@@ -25,10 +23,6 @@ interface SoapVisualPreviewProps {
   layoutPreferences?: RoundingLayoutPreferences;
   keywordRules?: KeywordHighlightRule[];
   labReferenceDisplay?: LabReferenceDisplayMode;
-}
-
-function highlighted(value: string) {
-  return soapTextWithDerivedHighlights(value);
 }
 
 function toneClass(tone: ClinicalLineTone) {
@@ -56,7 +50,7 @@ function VisualLine({
     <div className={`soap-preview-line soap-preview-line-${classified.kind} soap-preview-line-${toneClass(classified.tone)}`}>
       {displayLabel && <span className="soap-preview-line-label">{displayLabel}</span>}
       <div className="soap-preview-line-text">
-        <ClinicalText value={highlighted(displayText)} maxCharsPerLine={140} keywordRules={keywordRules} labReferenceDisplay={labReferenceDisplay} />
+        <ClinicalText value={displayText} maxCharsPerLine={140} keywordRules={keywordRules} labReferenceDisplay={labReferenceDisplay} />
       </div>
     </div>
   );
@@ -99,15 +93,9 @@ export function SoapVisualPreview({ value, compact = false, sourceFields = {}, l
   const sLines = isLayoutSectionVisible(layoutPreferences, "subjective") ? draft.sLines : [];
   const oLines = draft.oLines.filter((line) => isObjectiveSoapLineVisible(line, layoutPreferences));
   const objectiveLabLinePattern = /^!{0,2}\s*Labs?\s*[:：]/i;
-  // Clinician-colored lab lines render verbatim (the lab visual summarizer cannot keep [[color:...]] marks).
-  const objectiveLabLines = oLines.filter((line) => objectiveLabLinePattern.test(line) && !hasColorMarkup(line));
-  const objectiveNonLabLines = oLines.filter((line) => !objectiveLabLinePattern.test(line) || hasColorMarkup(line));
-  const labVisualLines = formatLabVisualSummaryLinesFromText(objectiveLabLines.join("\n"), {
-    maxGroups: 7,
-    maxItemsPerGroup: compact ? 6 : 10,
-    maxCharsPerGroup: compact ? 140 : 180,
-  });
-  const displayObjectiveCount = objectiveNonLabLines.length + labVisualLines.length;
+  const objectiveLabLines = oLines.filter((line) => objectiveLabLinePattern.test(line));
+  const objectiveNonLabLines = oLines.filter((line) => !objectiveLabLinePattern.test(line));
+  const displayObjectiveCount = oLines.length;
   const apProblems = isLayoutSectionVisible(layoutPreferences, "assessmentPlan") ? draft.apProblems : [];
   const orderLines = isLayoutSectionVisible(layoutPreferences, "orders")
     ? draft.taskLines.filter(isOrderSoapLine)
@@ -174,8 +162,8 @@ export function SoapVisualPreview({ value, compact = false, sourceFields = {}, l
                 {objectiveNonLabLines.map((line, index) => (
                   <VisualLine key={`${line}-${index}`} text={line} keywordRules={keywordRules} />
                 ))}
-                {labVisualLines.map((line, index) => (
-                  <VisualLine key={`lab-visual-${line}-${index}`} label="LAB" text={line} fallbackKind="lab" keywordRules={keywordRules} labReferenceDisplay={labReferenceDisplay} />
+                {objectiveLabLines.map((line, index) => (
+                  <VisualLine key={`lab-${line}-${index}`} text={line} fallbackKind="lab" keywordRules={keywordRules} labReferenceDisplay={labReferenceDisplay} />
                 ))}
               </>
             ) : (
@@ -201,7 +189,7 @@ export function SoapVisualPreview({ value, compact = false, sourceFields = {}, l
                   >
                     <div className="soap-preview-problem-title">
                       <span>#</span>
-                      <ClinicalText value={highlighted(problem.title)} maxCharsPerLine={100} keywordRules={keywordRules} />
+                      <ClinicalText value={problem.title} maxCharsPerLine={100} keywordRules={keywordRules} />
                     </div>
                     {problem.lines.length > 0 && (
                       <div className="soap-preview-problem-lines">

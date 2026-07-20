@@ -3561,13 +3561,25 @@ tbody tr:last-child td {
 .round-soap-composer {
   display: grid;
   gap: 12px;
+  min-width: 0;
+  width: 100%;
 }
 
 .round-soap-toolbar {
   align-items: start;
   display: flex;
+  flex-wrap: wrap;
   gap: 12px;
   justify-content: space-between;
+}
+
+.round-soap-toolbar > * {
+  min-width: 0;
+}
+
+.round-soap-toolbar .form-actions {
+  flex-wrap: wrap;
+  margin-left: auto;
 }
 
 .round-soap-toolbar h3 {
@@ -3590,7 +3602,7 @@ tbody tr:last-child td {
   border-radius: var(--radius-sm);
   display: grid;
   gap: 10px;
-  grid-template-columns: minmax(150px, 0.65fr) minmax(210px, 0.9fr) minmax(260px, 1.8fr);
+  grid-template-columns: minmax(0, 0.65fr) minmax(0, 0.9fr) minmax(0, 1.8fr);
   padding: 10px;
 }
 

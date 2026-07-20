@@ -135,8 +135,11 @@ function explicitTone(value: string): ClinicalLineTone | null {
 }
 
 function criticalSignal(text: string, kind: ClinicalLineKind, chronicRenal = false) {
+  const resolvedContext = /\b(?:resolved|recovered|off pressor|completed|prior|history of|remote)\b/i.test(text);
+  const activeCulture = /\b(?:blood|csf)\s*(?:culture|cx)\b[^.;\n]*\b(?:positive|growth|isolated)\b|\b(?:b\/c|bcx)\b[^.;\n]*\b(?:positive|growth|isolated)\b/i.test(text);
   return (
-    /\b(shock|sepsis|septic|hypotension|desat|hypox|active bleed|melena|hematemesis|stroke|ich|neutropenic fever|positive culture|b\/c|bcx|mrsa|enterococcus)\b/i.test(text) ||
+    (!resolvedContext && /\b(shock|sepsis|septic|hypotension|desat|hypox|active bleed|melena|hematemesis|stroke|ich|neutropenic fever)\b/i.test(text)) ||
+    activeCulture ||
     /\b(norepi|norepinephrine|dopamine|dobutamine|vasopressin|epinephrine|insulin drip|heparin drip)\b/i.test(text) ||
     /\b(lactate\s*(?:[4-9]|\d{2,})|troponin\s*(?:\+|positive|elevated)|inr\s*(?:[3-9]|\d{2,}))\b/i.test(text) ||
     (kind === "lab" && /\b(k\s*(?:[0-2](?:\.\d+)?|[6-9](?:\.\d+)?)|hb\s*(?:[0-7](?:\.\d+)?)|na\s*(?:1[01]\d|[0-9]\d)|wbc\s*(?:[2-9]\d|[0-2](?:\.\d+)?)|plt\s*(?:[0-4]\d))\b/i.test(text)) ||

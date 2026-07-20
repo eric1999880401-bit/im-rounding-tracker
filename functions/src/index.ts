@@ -16,9 +16,10 @@ import type { CallableInput, DocumentCallableInput, DocumentType, PatientBatchCa
 import { OPENAI_API_KEY, extractOutputText, extractRefusal, getModel, getModelForQuality, getOpenAiApiKey, getOpenAiErrorMessage, getResponseTuning, openAiBackgroundState, openAiHttpsError, postOpenAiResponse, retrieveOpenAiResponse, sanitizeQualityMode } from "./openai";
 import type { AiQualityMode } from "./openai";
 import { getRoundSoapMaxOutputTokens, resolveDocumentQuality, resolveRoundSoapQuality, ROUND_SOAP_FUNCTION_TIMEOUT_SECONDS, ROUND_SOAP_OPENAI_RESPONSE_TIMEOUT_MS, roundSoapHistoryLimit, shouldUseBackgroundRoundSoap } from "./modelRouting";
-import { asPlainObject, compactDailyNote, compactPatientContext, concretizeVagueFollowUps, findTargetPatientForBatch, leanSoapCleanup, sanitizeExistingPatientsForBatch, sanitizePatientBatchImportMode, sanitizePatientBatchOutput, sanitizePatientContext, sanitizeUserStyleProfile, truncateString } from "./sanitize";
+import { asPlainObject, compactDailyNote, compactPatientContext, findTargetPatientForBatch, sanitizeExistingPatientsForBatch, sanitizePatientBatchImportMode, sanitizePatientBatchOutput, sanitizePatientContext, sanitizeUserStyleProfile, truncateString } from "./sanitize";
 import { MAX_ROUND_SOAP_RAW_CHARS, prepareRoundSoapSource, type RoundSoapWorkflowMode } from "./sourceCompaction";
 import { buildSoapPatch } from "./soapPatch";
+import { formatStructuredRoundSoapDraft, parseStructuredRoundSoapDraft } from "./roundSoapContract";
 import { admissionSummaryStyleBullets, documentInstructions, makeBatchImportPrompt, makeDocumentPrompt, makePrompt } from "./prompts";
 import { makeRoundSoapPrompt } from "./roundSoapPrompt";
 
@@ -178,16 +179,20 @@ function parseRoundSoapResponse(responseBody: Record<string, unknown>, workflowM
     throw new HttpsError("data-loss", "OpenAI returned malformed SOAP JSON. Retry generation; no patient data was saved.");
   }
 
-  const parsed = asPlainObject(parsedDraft);
-  const soapText = leanSoapCleanup(concretizeVagueFollowUps(truncateString(parsed.soapText, MAX_REVIEWED_SOAP_CHARS).trim()));
+  const structuredDraft = parseStructuredRoundSoapDraft(parsedDraft);
+  const soapText = formatStructuredRoundSoapDraft(structuredDraft);
   if (!soapText) {
     throw new HttpsError("data-loss", "OpenAI returned an empty SOAP draft. Retry generation; no patient data was saved.");
+  }
+  if (soapText.length > MAX_REVIEWED_SOAP_CHARS) {
+    throw new HttpsError("data-loss", "OpenAI returned an overlong SOAP draft. Retry generation; no patient data was saved.");
   }
 
   return {
     soapText,
-    warnings: Array.isArray(parsed.warnings) ? parsed.warnings.map((item) => truncateString(item, 240)) : [],
-    highlightHints: Array.isArray(parsed.highlightHints) ? parsed.highlightHints.map((item) => truncateString(item, 180)).slice(0, 12) : [],
+    structuredDraft,
+    warnings: structuredDraft.warnings.map((item) => truncateString(item, 240)),
+    highlightHints: structuredDraft.highlightHints.map((item) => truncateString(item, 180)).slice(0, 12),
   };
 }
 
@@ -209,6 +214,7 @@ function roundSoapResult(params: {
   return {
     draftId: db.collection("_aiDraftIds").doc().id,
     soapText: parsed.soapText,
+    structuredDraft: parsed.structuredDraft,
     mode: params.workflowMode === "dailyUpdate" ? "patch" as const : "full" as const,
     ...(params.workflowMode === "dailyUpdate"
       ? { patch: params.patch ?? { baselineHash: params.baselineHash, changedSections: [] } }
@@ -367,7 +373,7 @@ export const generateRoundSoap = onCall(
           format: {
             type: "json_schema",
             name: "round_soap_draft",
-            description: "Single SOAP text draft for clinician review before saving.",
+            description: "Structured SOAP block draft for clinician review before saving.",
             strict: true,
             schema: roundSoapDraftSchema,
           },

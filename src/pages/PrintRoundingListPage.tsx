@@ -24,7 +24,6 @@ import {
   dischargePrepText,
   formatDateLabel,
   hasChronicRenalContext,
-  hasColorMarkup,
   plainClinicalText,
   sortPatients,
   todayKey,
@@ -35,7 +34,7 @@ import { getPatientHeadline, getRoundingDigest } from "../roundingDigest";
 import { patientToSoapDraft } from "../soapDraft";
 import { soapHeaderLinesForDisplay } from "../soapDisplay";
 import { formatMedicationOrderLinesForDisplay } from "../medicationOrderParser";
-import { buildPatientLabVisualSummary, formatLabVisualSummaryLinesFromText } from "../labVisualSummary";
+import { buildPatientLabVisualSummary } from "../labVisualSummary";
 import {
   classifyPrintVisualItem as classifyPriorityPrintVisualItem,
   isComplexPrintDraft,
@@ -773,20 +772,7 @@ function PrintRoundingListPage({
     const soap = patientToSoapDraft(patient, dailyNotesByPatient[patient.id] ?? [], todayKey());
     const limits = printLimitsForPatient(patient);
     const allLabLines = soap.oLines.filter((line) => isObjectiveSoapLineVisible(line, roundingLayout) && /^!{0,2}\s*Labs?\s*[:：]/i.test(line));
-    // Clinician-colored lab lines print verbatim (the lab visual summarizer cannot keep [[color:...]] marks).
-    const markedLabLines = allLabLines.filter((line) => hasColorMarkup(line));
-    const labLines = allLabLines.filter((line) => !hasColorMarkup(line));
-    const visualLines = formatLabVisualSummaryLinesFromText(labLines.join("\n"), {
-      patient,
-      maxGroups: limits.labItems,
-      maxItemsPerGroup: density === "ultra-compact" ? 4 : 6,
-      maxCharsPerGroup: limits.detailChars + 28,
-    });
-    const sourceLines = [
-      ...markedLabLines,
-      ...(visualLines.length > 0 ? visualLines.map((line) => `Lab: ${line}`) : labLines),
-    ];
-    return printListItems(sourceLines, "lab", limits.labItems, limits.detailChars + 28).map((item) => item.raw).join("\n");
+    return printListItems(allLabLines, "lab", limits.labItems, limits.detailChars + 28).map((item) => item.raw).join("\n");
   }
 
   function imageSoapText(patient: Patient) {

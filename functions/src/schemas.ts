@@ -273,9 +273,69 @@ export const aiDocumentDraftSchema = {
 export const roundSoapDraftSchema = {
   type: "object",
   additionalProperties: false,
-  required: ["soapText", "warnings", "highlightHints"],
+  required: ["headerLines", "subjectiveLines", "objective", "assessmentPlan", "orders", "tasks", "discharge", "warnings", "highlightHints"],
   properties: {
-    soapText: stringSchema,
+    headerLines: { type: "array", items: stringSchema },
+    subjectiveLines: { type: "array", items: stringSchema },
+    objective: {
+      type: "object",
+      additionalProperties: false,
+      required: ["vitalSigns", "physicalExam", "labs", "microbiology", "imaging", "pathology", "other"],
+      properties: {
+        vitalSigns: { type: "array", items: stringSchema },
+        physicalExam: { type: "array", items: stringSchema },
+        labs: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            required: ["panel", "values"],
+            properties: {
+              panel: { type: "string", enum: ["CBC/DC", "Chem/Renal", "Liver/Coag", "Infx/Perfusion", "ABG/VBG", "Cardiac", "Other"] },
+              values: stringSchema,
+            },
+          },
+        },
+        microbiology: { type: "array", items: stringSchema },
+        imaging: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            required: ["study", "date", "finding"],
+            properties: { study: stringSchema, date: stringSchema, finding: stringSchema },
+          },
+        },
+        pathology: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            required: ["date", "specimen", "result"],
+            properties: { date: stringSchema, specimen: stringSchema, result: stringSchema },
+          },
+        },
+        other: { type: "array", items: stringSchema },
+      },
+    },
+    assessmentPlan: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["problemTitle", "status", "summary", "plan", "sourceEvidence"],
+        properties: {
+          problemTitle: stringSchema,
+          status: { type: "string", enum: ["active", "improving", "worsening", "stable", "uncertain"] },
+          summary: stringSchema,
+          plan: stringSchema,
+          sourceEvidence: { type: "array", items: stringSchema },
+        },
+      },
+    },
+    orders: { type: "array", items: stringSchema },
+    tasks: { type: "array", items: stringSchema },
+    discharge: { type: "array", items: stringSchema },
     warnings: { type: "array", items: stringSchema },
     highlightHints: { type: "array", items: stringSchema },
   },

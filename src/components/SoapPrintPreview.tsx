@@ -1,6 +1,5 @@
 import { ClinicalInlineText } from "./ClinicalText";
 import { formatMedicationOrderLinesForDisplay } from "../medicationOrderParser";
-import { formatLabVisualSummaryLinesFromText } from "../labVisualSummary";
 import {
   classifyPrintVisualItem,
   selectPriorityPrintItems,
@@ -9,7 +8,6 @@ import {
 import { parseSoapText } from "../soapDraft";
 import { soapHeaderLinesForDisplay } from "../soapDisplay";
 import type { KeywordHighlightRule, RoundingLayoutPreferences } from "../types";
-import { hasColorMarkup } from "../utils";
 import {
   isDcSoapLineVisible,
   isLayoutSectionVisible,
@@ -87,14 +85,8 @@ export function SoapPrintPreview({ value, layoutPreferences, keywordRules = [] }
     { maxLines: 5, maxChars: 150 },
   );
   const visibleObjective = draft.oLines.filter((line) => isObjectiveSoapLineVisible(line, layoutPreferences));
-  // Clinician-colored lab lines render verbatim (the lab visual summarizer cannot keep [[color:...]] marks).
-  const labLines = visibleObjective.filter((line) => /^!{0,2}\s*Labs?\s*[:：]/i.test(line) && !hasColorMarkup(line));
-  const nonLabObjective = visibleObjective.filter((line) => !/^!{0,2}\s*Labs?\s*[:：]/i.test(line) || hasColorMarkup(line));
-  const labVisualLines = formatLabVisualSummaryLinesFromText(labLines.join("\n"), {
-    maxGroups: 7,
-    maxItemsPerGroup: 8,
-    maxCharsPerGroup: 180,
-  }).map((line) => `Lab: ${line}`);
+  const labLines = visibleObjective.filter((line) => /^!{0,2}\s*Labs?\s*[:：]/i.test(line));
+  const nonLabObjective = visibleObjective.filter((line) => !/^!{0,2}\s*Labs?\s*[:：]/i.test(line));
 
   const visibleTasks = draft.taskLines.filter((line) => isLayoutSectionVisible(layoutPreferences, "tasks") || isOrderSoapLine(line));
   const orderLines = visibleTasks.filter(isOrderSoapLine);
@@ -132,7 +124,7 @@ export function SoapPrintPreview({ value, layoutPreferences, keywordRules = [] }
           fallbackKind="other"
           lines={[
             ...printItems(nonLabObjective, "other", 6, 130).map((item) => item.text),
-            ...printItems(labVisualLines, "lab", 7, 180).map((item) => item.text),
+            ...printItems(labLines, "lab", 7, 180).map((item) => item.text),
           ]}
           keywordRules={keywordRules}
         />

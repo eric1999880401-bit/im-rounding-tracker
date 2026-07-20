@@ -46,7 +46,6 @@ import {
 } from "../clinicalLineClassifier";
 import { selectPriorityPrintItems } from "../printPriority";
 import { formatMedicationOrderLinesForDisplay } from "../medicationOrderParser";
-import { formatLabVisualSummaryLinesFromText } from "../labVisualSummary";
 import {
   isDcSoapLineVisible,
   isLayoutSectionVisible,
@@ -118,7 +117,7 @@ function classifyBoardVisualLine(line: string, fallbackKind: BoardVisualKind = "
     /^(S|V\/S|VS|Vitals?|PE|Physical exam|Lab|Image|Img|Task|Tasks|DC|Discharge|Prep)\s*:\s*/i,
     "",
   );
-  const maxChars = fallbackKind === "ap" ? 140 : 76;
+  const maxChars = fallbackKind === "ap" ? 140 : fallbackKind === "lab" ? 170 : fallbackKind === "image" ? 130 : 96;
   return {
     kind: classified.kind,
     label: isOrder ? "藥囑" : classified.label,
@@ -163,7 +162,8 @@ function renderBoardVisualLines(lines: string[], fallback: string, fallbackKind:
 }
 
 function selectBoardVisualLines(lines: string[], fallbackKind: BoardVisualKind, maxLines: number) {
-  return selectPriorityPrintItems(preferLatestBoardLines(lines), { fallbackKind, maxItems: maxLines, maxChars: fallbackKind === "ap" ? 140 : 96 })
+  const maxChars = fallbackKind === "ap" ? 140 : fallbackKind === "lab" ? 170 : fallbackKind === "image" ? 130 : 110;
+  return selectPriorityPrintItems(preferLatestBoardLines(lines), { fallbackKind, maxItems: maxLines, maxChars })
     .map((item) => item.raw)
     .filter(Boolean);
 }
@@ -1459,15 +1459,9 @@ function PatientBoardPage({
             const objectiveLabLinePattern = /^!{0,2}\s*Labs?\s*[:：]/i;
             const groupedObjectiveLabLines = visibleObjectiveLines.filter((line) => objectiveLabLinePattern.test(line));
             const groupedObjectiveNonLabLines = visibleObjectiveLines.filter((line) => !objectiveLabLinePattern.test(line));
-            const labVisualLines = formatLabVisualSummaryLinesFromText(groupedObjectiveLabLines.join("\n"), {
-              patient,
-              maxGroups: 7,
-              maxItemsPerGroup: roundingLayout.boardDensity === "normal" ? 8 : 6,
-              maxCharsPerGroup: 140,
-            }).map((line) => `Lab: ${line}`);
             const prioritizedObjectiveLines = [
-              ...selectBoardVisualLines(groupedObjectiveNonLabLines, "other", Math.max(2, 5 - labVisualLines.length)),
-              ...labVisualLines,
+              ...selectBoardVisualLines(groupedObjectiveNonLabLines, "other", 3),
+              ...selectBoardVisualLines(groupedObjectiveLabLines, "lab", roundingLayout.boardDensity === "normal" ? 4 : 3),
             ].slice(0, 6);
             const visibleApProblems = isLayoutSectionVisible(roundingLayout, "assessmentPlan") ? soap.apProblems : [];
             const mergedApLine = visibleApProblems

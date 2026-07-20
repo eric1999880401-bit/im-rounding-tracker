@@ -21,13 +21,12 @@ import StructuredSoapEditor from "./StructuredSoapEditor";
 import MedicationOrderReviewPanel, { type MedicationOrderSummaryLine } from "./MedicationOrderReviewPanel";
 import {
   acceptSoapDeltaSection,
-  guardRoundSoapDelta,
   restoreSoapDeltaSection,
   soapPatchMatchesBaseline,
   type SoapDeltaReview,
   type SoapDeltaSection,
 } from "../soapDeltaGuardrails";
-import { normalizeAiSoapText } from "../aiSoapContract";
+import { acceptStructuredRoundSoap } from "../roundSoapContract";
 import { appendSoapEditTrace, buildSoapEditTrace, nextSoapVersion, type SoapEditOrigin } from "../soapEditTrace";
 import {
   canRedo,
@@ -662,16 +661,33 @@ function RoundSoapComposer({
             userStyleProfile: aiStyleProfile,
           });
 
-      const normalizedResult = normalizeAiSoapText(result.soapText.trim() || requestBaseline || canonical.text, result.warnings ?? []);
-      const guarded = guardRoundSoapDelta({
-        workflowMode: requestWorkflowMode,
-        baselineText: requestBaseline,
-        candidateText: normalizedResult.soapText,
-        sourceFields: currentSourceFields(requestWorkflowMode),
-        candidateWarnings: normalizedResult.warnings,
-        selectedDate,
-      });
-      const nextDraft = parseSoapTextToEditorDraft(guarded.acceptedText);
+      const accepted = result.structuredDraft
+        ? acceptStructuredRoundSoap({
+            value: result.structuredDraft,
+            baselineText: requestBaseline,
+            sourceFields: currentSourceFields(requestWorkflowMode),
+            workflowMode: requestWorkflowMode,
+          })
+        : {
+            draft: parseSoapTextToEditorDraft(result.soapText.trim() || requestBaseline || canonical.text),
+            fatalErrors: [] as string[],
+            review: {
+              workflowMode: requestWorkflowMode,
+              baselineText: requestBaseline,
+              candidateText: result.soapText,
+              acceptedText: result.soapText,
+              changedSections: [],
+              warnings: [...(result.warnings ?? []), "Legacy text-only AI response received; structured validation was unavailable."],
+              highRiskWarnings: [],
+            } satisfies SoapDeltaReview,
+          };
+      if (accepted.fatalErrors.length > 0) {
+        setWarnings([...new Set([...(result.warnings ?? []), ...accepted.review.warnings])].slice(0, 8));
+        setDeltaReview(accepted.review);
+        setError(accepted.fatalErrors.join(" "));
+        return;
+      }
+      const nextDraft = accepted.draft;
       editOriginRef.current = {
         source: "ai",
         beforeText: requestBaseline,
@@ -685,10 +701,10 @@ function RoundSoapComposer({
       const patchWarnings = result.mode === "patch" && !soapPatchMatchesBaseline(result.patch, requestBaseline)
         ? ["AI patch baseline no longer matches the current editor. Baseline-preserving guardrails were applied; review changed sections."]
         : [];
-      setWarnings([...patchWarnings, ...guarded.warnings, ...guarded.highRiskWarnings]);
-      setDeltaReview(guarded);
+      setWarnings([...patchWarnings, ...accepted.review.warnings, ...accepted.review.highRiskWarnings]);
+      setDeltaReview(accepted.review);
       setStatus(
-        guarded.highRiskWarnings.length > 0
+        accepted.review.highRiskWarnings.length > 0
           ? `SOAP preview generated (${result.model}, ${result.qualityMode ?? requestQualityMode}); high-risk unrelated AI changes were held.`
           : `SOAP preview generated (${result.model}, ${result.qualityMode ?? requestQualityMode}). Edit, then Save reviewed SOAP.`,
       );
