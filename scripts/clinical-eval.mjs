@@ -5043,6 +5043,98 @@ try {
 }
 
 try {
+  const baseline = [
+    "S:",
+    "- stable overnight",
+    "O:",
+    "- V/S: BP 118/70, HR 80, SpO2 97% RA",
+    "- Lab: CBC/DC: WBC 7.2, Hb 11.0, Plt 180",
+    "- Lab: Chem/Renal: Cr 1.0, Na 140, K 4.0",
+    "- Image: CXR 07-18 mild bibasilar opacity",
+    "A/P:",
+    "# Infection, improving",
+    "- continue reviewed treatment",
+  ].join("\n");
+  const newLabs = "WBC 6.0, Neu 79.1, Hb 10.6, Plt 175\nBUN 38, Cr 1.44, eGFR 44.47, Na 150, K 3.8";
+
+  // Simulates a high-quality model that preserves the baseline but silently omits today's labs.
+  const dailyOmission = guardRoundSoapDelta({
+    workflowMode: "dailyUpdate",
+    baselineText: baseline,
+    candidateText: baseline,
+    sourceFields: {
+      vitals: "BP 106/64, HR 92, SpO2 95% NC 1 L",
+      labs: newLabs,
+      images: "CXR 07-20 RLL opacity improving, no pleural effusion",
+    },
+    selectedDate: "2026-07-20",
+  });
+  if (!/Lab: CBC\/DC: WBC 6(?:\.0)?[^\n]*Hb 10\.6/i.test(dailyOmission.acceptedText) || !/Lab: Chem\/Renal:[^\n]*Cr 1\.44[^\n]*Na 150/i.test(dailyOmission.acceptedText)) {
+    throw new Error(`Daily validator still allowed AI to omit pasted labs from O:\n${dailyOmission.acceptedText}`);
+  }
+  if (/WBC 7\.2|Cr 1\.0, Na 140/i.test(dailyOmission.acceptedText)) {
+    throw new Error(`Daily validator retained stale lab rows after a source-owned lab update:\n${dailyOmission.acceptedText}`);
+  }
+  if (!/V\/S: BP 106\/64, HR 92, SpO2 95% NC 1 L/i.test(dailyOmission.acceptedText) || /BP 118\/70/i.test(dailyOmission.acceptedText)) {
+    throw new Error(`Daily validator retained stale V/S after AI omitted the source update:\n${dailyOmission.acceptedText}`);
+  }
+  if (!/Image: CXR 07-20 RLL opacity improving, no pleural effusion/i.test(dailyOmission.acceptedText) || /CXR 07-18/i.test(dailyOmission.acceptedText)) {
+    throw new Error(`Daily validator retained stale imaging after AI omitted the source update:\n${dailyOmission.acceptedText}`);
+  }
+  if (!dailyOmission.changedSections.some((section) => section.id === "lab" && !section.blocked)) {
+    throw new Error(`Deterministic Daily O/Lab update was not reported: ${JSON.stringify(dailyOmission.changedSections)}`);
+  }
+
+  const newSoapCandidate = [
+    "S:",
+    "- fever and cough",
+    "O:",
+    "- V/S: BP 108/64, HR 104, SpO2 94% RA",
+    "- Image: CXR 07-20 RLL opacity",
+    "A/P:",
+    "# CAP",
+    "- source-grounded treatment pending review",
+  ].join("\n");
+  const newSoapOmission = guardRoundSoapDelta({
+    workflowMode: "newSoap",
+    baselineText: "",
+    candidateText: newSoapCandidate,
+    sourceFields: { vitals: "BP 108/64 HR 104 SpO2 94% RA", labs: newLabs, images: "CXR 07-20 RLL opacity" },
+    selectedDate: "2026-07-20",
+  });
+  if (!/Lab: CBC\/DC: WBC 6/i.test(newSoapOmission.acceptedText) || !/Lab: Chem\/Renal:[^\n]*Na 150/i.test(newSoapOmission.acceptedText)) {
+    throw new Error(`New SOAP validator did not restore source labs omitted by AI:\n${newSoapOmission.acceptedText}`);
+  }
+
+  const transferCandidate = [
+    "S:",
+    "- ICU transfer, awake",
+    "O:",
+    "- V/S: BP 112/68, HR 92, SpO2 96% NC 1 L",
+    "- Lab: CBC/DC: WBC 6.0, Hb 10.6, Plt 175",
+    "A/P:",
+    "# Resolving infection",
+    "- off pressor; continue reviewed plan",
+  ].join("\n");
+  const transferPartialOmission = guardRoundSoapDelta({
+    workflowMode: "transferHandoff",
+    baselineText: "",
+    candidateText: transferCandidate,
+    sourceFields: { lastSoap: transferCandidate, labs: newLabs },
+    selectedDate: "2026-07-20",
+  });
+  if (!/Lab: CBC\/DC: WBC 6\.0/i.test(transferPartialOmission.acceptedText) || !/Lab: Chem\/Renal:[^\n]*Cr 1\.44[^\n]*Na 150/i.test(transferPartialOmission.acceptedText)) {
+    throw new Error(`Transfer validator did not restore the missing Chem/Renal group:\n${transferPartialOmission.acceptedText}`);
+  }
+
+  console.log("PASS Source-owned O/Lab survives Daily, New SOAP, and Transfer model omissions");
+  supplementalPasses += 1;
+} catch (error) {
+  failures.push({ name: "Source-owned O/Lab coverage", error: error instanceof Error ? error.message : String(error) });
+  console.error(`FAIL Source-owned O/Lab coverage: ${failures[failures.length - 1].error}`);
+}
+
+try {
   const routedDraft = parseSoapTextToEditorDraft([
     "S:",
     "- no new complaint",
@@ -5101,7 +5193,7 @@ try {
     sourceFields: { other: "Final pathology 07-18, rectal biopsy: moderately differentiated adenocarcinoma." },
     selectedDate: "2026-07-20",
   });
-  if (!/^\s*-?\s*Pathology: rectal biopsy 07-18: moderately differentiated adenocarcinoma/im.test(pathologyReview.acceptedText)) {
+  if (!/^\s*-?\s*Pathology:[^\n]*07-18[^\n]*rectal biopsy[^\n]*moderately differentiated adenocarcinoma/im.test(pathologyReview.acceptedText)) {
     throw new Error(`source-backed final pathology disappeared from O:\n${pathologyReview.acceptedText}`);
   }
   if (!/CBC\/DC: WBC 8\.2, Hb 10\.8, Plt 210/i.test(pathologyReview.acceptedText)) {

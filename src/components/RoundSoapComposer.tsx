@@ -528,8 +528,8 @@ function RoundSoapComposer({
   function currentSourceFields(mode: WorkflowMode = workflowMode): SoapSourceFields {
     if (mode === "repairSoap") return { other: mixedSourceText.trim() };
     if (mixedSourceText.trim()) {
+      const routed = splitGuidedSoapSource(mixedSourceText);
       if (mode === "dailyUpdate") {
-        const routed = splitGuidedSoapSource(mixedSourceText);
         return {
           vitals: routed.vitals,
           labs: routed.labs,
@@ -538,8 +538,27 @@ function RoundSoapComposer({
           other: [routed.admission, routed.other].filter(Boolean).join("\n"),
         };
       }
-      if (mode === "newSoap") return { admission: mixedSourceText, other: mixedSourceText };
-      if (mode === "transferHandoff") return { admission: mixedSourceText, lastSoap: mixedSourceText, other: mixedSourceText };
+      if (mode === "newSoap") {
+        return {
+          admission: mixedSourceText,
+          vitals: routed.vitals,
+          labs: routed.labs,
+          images: routed.images,
+          orders: routed.orders,
+          other: routed.other,
+        };
+      }
+      if (mode === "transferHandoff") {
+        return {
+          admission: mixedSourceText,
+          lastSoap: mixedSourceText,
+          vitals: routed.vitals,
+          labs: routed.labs,
+          images: routed.images,
+          orders: routed.orders,
+          other: routed.other,
+        };
+      }
     }
     if (mode === "newSoap") return { ...newSoapFields };
     if (mode === "transferHandoff") return { ...transferFields };

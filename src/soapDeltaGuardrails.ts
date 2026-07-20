@@ -8,7 +8,7 @@ import {
 } from "./medicationOrderParser";
 import { formatLabVisualSummaryFromLines } from "./labVisualSummary";
 import { isPathologyResultLine, objectiveKindFromLine, prefixedObjectiveLine, sanitizeObjectiveLines } from "./objectiveLineSanitizer";
-import { formatSoapDraft, parseSoapText, type SoapApProblem, type SoapDraft } from "./soapDraft";
+import { formatSoapDraft, parseSoapText, splitGuidedSoapSource, type SoapApProblem, type SoapDraft } from "./soapDraft";
 import { parseLabReports, safeClinicalLine, safeClinicalLinePreservingMarks, stripColorMarkup } from "./utils";
 import type { SoapPatch } from "./types";
 
@@ -371,6 +371,127 @@ function sourceFieldsText(fields: RoundSoapSourceFields) {
   ]
     .filter(sourceHas)
     .join("\n");
+}
+
+function uniqueSourceValues(values: unknown[]) {
+  const seen = new Set<string>();
+  return values.flatMap((value) => {
+    const text = String(value ?? "").trim();
+    if (!text || seen.has(text)) return [];
+    seen.add(text);
+    return [text];
+  });
+}
+
+function mergeSourceText(...values: unknown[]) {
+  return uniqueSourceValues(values).join("\n");
+}
+
+function sourceObjectiveInputs(fields: RoundSoapSourceFields) {
+  const distinctSource = uniqueSourceValues([
+    fields.vitals,
+    fields.labs,
+    fields.images,
+    fields.orders,
+    fields.other,
+    fields.admission,
+    fields.lastSoap,
+  ]).join("\n");
+  const routed = splitGuidedSoapSource(distinctSource);
+  return {
+    vitals: mergeSourceText(fields.vitals, routed.vitals),
+    labs: mergeSourceText(fields.labs, routed.labs),
+    images: mergeSourceText(fields.images, routed.images),
+    other: mergeSourceText(fields.other, routed.other),
+  };
+}
+
+function sourceFragments(value: string) {
+  return String(value ?? "")
+    .split(/\r?\n|(?<=[.;])\s+/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+function isUsableSourceLabLine(value: string) {
+  const text = stripColorMarkup(String(value ?? ""));
+  const hasNumericResult = /\b(?:WBC|Neu|Neut|Lym|Mono|Eos|Baso|RBC|Hb|Hgb|Hct|MCV|MCH|MCHC|RDW|Plt|Platelet|MPV|MDW|BUN|Cr|CRE|Creatinine|e?GFR|Na|K|Cl|Ca|Mg|Phos|P|Osm|AST|ALT|ALP|GGT|T-?Bil|D-?Bil|Alb|PT|INR|aPTT|CRP|hsCRP|PCT|Lactate|pH|pCO2|pO2|HCO3|BE|Troponin|BNP)\s*(?:[:=]\s*)?[<>]?\s*-?\d+(?:\.\d+)?/i.test(text);
+  const hasMicroResult = /\b(?:blood|urine|sputum|CSF|stool)\s*(?:culture|Cx)\b.*\b(?:positive|negative|growth|isolated|NGTD|susceptib|resistan|pending)\b|\b(?:B\/C|BCx|U\/C|UCx)\b.*\b(?:positive|negative|growth|NGTD|pending)\b/i.test(text);
+  const hasStoolResult = /\b(?:O\s*&\s*P|O\/P|occult blood|FOBT|C\.?\s*difficile|C\.?\s*diff)\b.*\b(?:positive|negative|neg\.?|detected|not detected)\b/i.test(text);
+  return hasNumericResult || hasMicroResult || hasStoolResult;
+}
+
+function sourceVitalsLines(value: string) {
+  return uniqueLines(
+    sourceFragments(value)
+      .filter((line) => /\b(?:BP|HR|RR|SpO2|SaO2|temperature|temp|pulse)\s*[:=]?\s*\d|\bT\s*[:=]?\s*\d{2}(?:\.\d+)?|\b(?:afebrile|febrile|room air|RA|nasal cannula|NC\s*\d*\s*L)\b/i.test(line))
+      .map((line) => line
+        .replace(/^(?:V\/S|VS|Vitals?)\s*[:\uFF1A]\s*/i, "")
+        .replace(/\s+(?=(?:BP|HR|RR|SpO2|SaO2|T(?:emp(?:erature)?)?|Pulse)\b)/gi, ", ")
+        .replace(/,\s*,+/g, ", ")
+        .trim()),
+    4,
+  );
+}
+
+function lineNumericTokens(value: string) {
+  return String(value ?? "").match(/-?\d+(?:\.\d+)?/g)?.map((item) => item.replace(/^0+(?=\d)/, "")) ?? [];
+}
+
+function lineUsesSourceNumbers(line: string, sourceLines: string[]) {
+  const candidateNumbers = lineNumericTokens(line);
+  if (candidateNumbers.length < 2) return false;
+  const sourceNumbers = new Set(lineNumericTokens(sourceLines.join("\n")));
+  return candidateNumbers.every((value) => sourceNumbers.has(value));
+}
+
+function sourceLabLines(value: string) {
+  const summary = formatLabVisualSummaryFromLines(value, { includeLabPrefix: true });
+  return uniqueLines(summary.lines.filter(isUsableSourceLabLine), 12);
+}
+
+function sourceImageLines(value: string) {
+  const studyPattern = /\b(?:CT|MRI|CXR|X-?ray|echo|sono|ultrasound|US|ERCP|EGD|colonoscopy|bronchoscopy|PET)\b|\bimpression\s*:/i;
+  const lines: string[] = [];
+  let current = "";
+  sourceFragments(value).forEach((fragment) => {
+    const clean = fragment.replace(/^(?:Image|Img|Imaging)\s*[:\uFF1A]\s*/i, "").trim();
+    if (!clean) return;
+    if (studyPattern.test(clean)) {
+      if (current) lines.push(current);
+      current = clean;
+      return;
+    }
+    if (current) current = `${current} ${clean}`;
+  });
+  if (current) lines.push(current);
+  return newestImageStudyLines(uniqueLines(lines, 10), 8);
+}
+
+function sourcePathologyLines(value: string) {
+  return uniqueLines(
+    sourceFragments(value)
+      .filter(isPathologyResultLine)
+      .map((line) => {
+        const body = line
+          .replace(/^(?:O|Other)\s*[:\uFF1A]\s*/i, "")
+          .replace(/^(?:Final\s+)?Pathology\s*[:\uFF1A,-]?\s*/i, "")
+          .trim();
+        return body ? `Pathology: ${body}` : "";
+      }),
+    4,
+  );
+}
+
+function sourceObjectiveFacts(fields: RoundSoapSourceFields): ObjectiveGroups {
+  const inputs = sourceObjectiveInputs(fields);
+  return {
+    vs: sourceVitalsLines(inputs.vitals),
+    pe: [],
+    lab: sourceLabLines(inputs.labs),
+    image: sourceImageLines(inputs.images),
+    other: sourcePathologyLines(mergeSourceText(inputs.other, fields.admission, fields.lastSoap)),
+  };
 }
 
 function hemoglobinObservations(value: string) {
@@ -1134,6 +1255,66 @@ function mergeLabLinesForDaily(baseline: string[], candidate: string[], maxItems
   return uniqueLines(candidateLines.map((line) => enrichLabLineWithPreviousValues(line, previousValues)), maxItems);
 }
 
+function labVisualGroupKey(line: string) {
+  return stripColorMarkup(String(line ?? ""))
+    .replace(/^!+\s*/, "")
+    .replace(/^Lab\s*:\s*/i, "")
+    .match(/^(CBC\/DC|Chem\/Renal|Liver\/Coag|Micro|ABG\/VBG|Cardiac|Other)\s*:/i)?.[1]
+    ?.toLowerCase() ?? "";
+}
+
+function ensureSourceObjectiveCoverage(draft: SoapDraft, fields: RoundSoapSourceFields) {
+  const facts = sourceObjectiveFacts(fields);
+  const groups = splitObjective(draft.oLines);
+  const warnings: string[] = [];
+
+  if (facts.vs.length > 0 && groups.vs.length === 0) {
+    groups.vs = facts.vs;
+    warnings.push("O/V/S was omitted by AI and restored from pasted source.");
+  }
+
+  if (facts.lab.length > 0) {
+    const candidateCanonical = formatLabVisualSummaryFromLines(groups.lab, { includeLabPrefix: true }).lines;
+    const candidateKeys = new Set(candidateCanonical.map(labVisualGroupKey).filter(Boolean));
+    const missingLabGroups = facts.lab.filter((line) => {
+      const key = labVisualGroupKey(line);
+      return !key || !candidateKeys.has(key);
+    });
+    if (groups.lab.length === 0) {
+      groups.lab = facts.lab;
+      warnings.push("O/Lab was omitted by AI and restored from pasted source.");
+    } else if (missingLabGroups.length > 0) {
+      groups.lab = uniqueLines([...groups.lab, ...missingLabGroups], 12);
+      warnings.push("Missing O/Lab group(s) were restored from pasted source.");
+    }
+  }
+
+  if (facts.image.length > 0) {
+    const candidateStudyKeys = new Set(groups.image.map(imageStudyKey).filter(Boolean));
+    const missingStudies = facts.image.filter((line) => {
+      const key = imageStudyKey(line);
+      return !key || !candidateStudyKeys.has(key);
+    });
+    if (missingStudies.length > 0) {
+      groups.image = newestImageStudyLines([...groups.image, ...missingStudies], 8);
+      warnings.push("O/Image study omitted by AI was restored from pasted source.");
+    }
+  }
+
+  if (facts.other.length > 0) {
+    const missingPathology = facts.other.filter((line) => !hasEquivalentLine(groups.other, line));
+    if (missingPathology.length > 0) {
+      groups.other = uniqueLines([...groups.other, ...missingPathology], 6);
+      warnings.push("Final pathology omitted by AI was restored to O from pasted source.");
+    }
+  }
+
+  return {
+    draft: { ...draft, oLines: mergeObjective(groups, 24) },
+    warnings,
+  };
+}
+
 function hasEquivalentLine(lines: string[], target: string) {
   const key = normalizeLine(target);
   return Boolean(key && lines.some((line) => {
@@ -1221,6 +1402,7 @@ function analyzeChangedSections(baseline: SoapDraft, candidate: SoapDraft) {
 
 function draftForDailyUpdate(baseline: SoapDraft, candidate: SoapDraft, fields: RoundSoapSourceFields, _selectedDate = "") {
   const profile = sourceProfile(fields);
+  const objectiveFacts = sourceObjectiveFacts(fields);
   const warnings: string[] = [];
   const highRiskWarnings: string[] = [];
   const changed: SoapDeltaChangedSection[] = [];
@@ -1236,6 +1418,32 @@ function draftForDailyUpdate(baseline: SoapDraft, candidate: SoapDraft, fields: 
   };
 
   (["vs", "pe", "lab", "image", "other"] as const).forEach((section) => {
+    const sourceOwnedLines = objectiveFacts[section];
+    if (sourceOwnedLines.length > 0) {
+      if (section === "vs") {
+        const exactCandidate = candidateObjective.vs.filter((line) => lineUsesSourceNumbers(line, sourceOwnedLines));
+        nextObjective.vs = uniqueLines(exactCandidate.length > 0 ? exactCandidate : sourceOwnedLines, 4);
+      } else if (section === "lab") {
+        nextObjective.lab = mergeLabLinesForDaily(baseObjective.lab, sourceOwnedLines, 12);
+      } else if (section === "image") {
+        const incomingImages = newestImageStudyLines(sourceOwnedLines, 8);
+        const incomingStudyKeys = new Set(incomingImages.map(imageStudyKey).filter(Boolean));
+        const carryForward = baseObjective.image.filter((line) => {
+          const key = imageStudyKey(line);
+          return !key || !incomingStudyKeys.has(key);
+        });
+        nextObjective.image = mergeDailyLines(carryForward, incomingImages, { maxItems: 8 });
+      } else if (section === "other") {
+        const incomingPathology = sourceOwnedLines;
+        const carryForward = baseObjective.other.filter((line) => !incomingPathology.some((sourceLine) => isPathologyResultLine(sourceLine) && isPathologyResultLine(line)));
+        nextObjective.other = mergeDailyLines(carryForward, incomingPathology, { maxItems: 6 });
+      }
+      if (!sameLines(baseObjective[section], nextObjective[section])) {
+        pushChanged(changed, section, `${sectionLabels[section]} updated deterministically from pasted source`);
+      }
+      return;
+    }
+
     const differs = !sameLines(baseObjective[section], candidateObjective[section]);
     if (!differs) return;
     if (profile.allowed.has(section)) {
@@ -1437,7 +1645,9 @@ export function guardRoundSoapDelta({
   const activeAntibiotics = extractActiveAntibioticNames(sourceText);
   const beforeAntibioticText = formatSoapDraft(significanceFiltered.draft).toLowerCase();
   const missingAntibiotics = activeAntibiotics.filter((name) => !beforeAntibioticText.includes(name));
-  const sourceGroundedCandidate = ensureAntibioticApInDraft(significanceFiltered.draft, sourceText, selectedDate);
+  const antibioticGroundedCandidate = ensureAntibioticApInDraft(significanceFiltered.draft, sourceText, selectedDate);
+  const objectiveGrounded = ensureSourceObjectiveCoverage(antibioticGroundedCandidate, sourceFields);
+  const sourceGroundedCandidate = objectiveGrounded.draft;
   const afterAntibioticText = formatSoapDraft(sourceGroundedCandidate).toLowerCase();
   const restoredAntibiotics = missingAntibiotics.filter((name) => afterAntibioticText.includes(name));
   const fidelityWarnings = [
@@ -1448,6 +1658,7 @@ export function guardRoundSoapDelta({
       ? ["AI lab export header(s) without result values were rejected before reaching the editor."]
       : []),
     ...significanceFiltered.warnings,
+    ...objectiveGrounded.warnings,
     ...(restoredAntibiotics.length > 0
       ? [`Restored source-grounded active antimicrobial(s) omitted by AI: ${restoredAntibiotics.join(", ")}.`]
       : []),
