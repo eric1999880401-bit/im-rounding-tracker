@@ -2,6 +2,7 @@ import type { DailyNote, ParsedLabItem, Patient } from "./types";
 import { findLabDictionaryItem } from "./data/labDictionary";
 import { hasChronicRenalContext } from "./labParsing";
 import { labReferenceForLabel } from "./labReference";
+import { normalizeLabTableSourceText } from "./objectiveLineSanitizer";
 import { parseLabReports, safeClinicalLine, safeClinicalLinePreservingMarks, stripColorMarkup } from "./utils";
 
 const labColorMarkPattern = /\[\[(red|orange|yellow|blue|green|purple)(?:-(?:highlight|text))?:([\s\S]*?)\]\]/gi;
@@ -387,7 +388,8 @@ export function buildLabVisualSummaryFromItems(items: ParsedLabItem[], options: 
 
 export function buildLabVisualSummaryFromText(value: string, options: LabVisualSummaryOptions = {}) {
   const chronicRenal = hasChronicRenalContext(options.patient);
-  const sourceLines = splitInputLines(value)
+  const normalizedSource = normalizeLabTableSourceText(value);
+  const sourceLines = splitInputLines(normalizedSource.text)
     .map((line) => labSourceLineFrom(line, false))
     .filter((line): line is LabSourceLine => Boolean(line));
   const visualItems: LabVisualItem[] = markedVisualItemsFromText(sourceLines.map((line) => line.body).join("\n"));

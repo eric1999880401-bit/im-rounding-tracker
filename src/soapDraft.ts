@@ -3,6 +3,7 @@ import { ensureAntibioticApInDraft } from "./antibioticPlan";
 import { normalizeApProblems } from "./apProblemNormalizer";
 import { imageStudyKey } from "./clinicalFieldRouter";
 import { dedupeDiseaseItems, dedupeDiseaseText } from "./aiPostprocess/diseaseDedupe";
+import { normalizeLabTableSourceText } from "./objectiveLineSanitizer";
 import type { AiSoapDraft, AssessmentPlanItem, DailyNote, Patient, PatientTask, TaskCategory, TaskPriority } from "./types";
 import {
   createId,
@@ -376,7 +377,7 @@ export function splitGuidedSoapSource(rawText: string): Record<GuidedSoapSourceS
   };
   let current: GuidedSoapSourceSection = "other";
 
-  String(rawText ?? "")
+  normalizeLabTableSourceText(rawText).text
     .split(/\r?\n/)
     .forEach((line) => {
       const match = line.match(/^\s*(Admission|V\/S|VS|Vitals?|Lab|Labs|Image|Img|Imaging|Orders?|Meds?|Medication|藥囑|Description\s*\/\s*other|Other update\s*\/\s*task\s*\/\s*course|Last SOAP\s*\/\s*SBAR)\s*:\s*(.*)$/i);

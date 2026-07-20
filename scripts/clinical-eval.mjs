@@ -88,7 +88,8 @@ const { cleanInlineClinicalMarkers, soapHeaderLinesForDisplay } = await server.s
 const { applyClinicalColorMarkup, applyUserKeywordHighlights, clearClinicalColorMarkupAtSelection } = await server.ssrLoadModule("/src/clinicalColorMarkup.ts");
 const { labReferenceText, parseClinicalLabTokens } = await server.ssrLoadModule("/src/labReference.ts");
 const { boardDischargeTasks, hasBoardDischargeSoonSignal, isBoardNewAdmission } = await server.ssrLoadModule("/src/boardCockpit.ts");
-const { buildLabVisualSummaryFromText, formatLabVisualSummaryLinesFromText } = await server.ssrLoadModule("/src/labVisualSummary.ts");
+const { buildLabVisualSummaryFromText, formatLabVisualSummaryFromLines, formatLabVisualSummaryLinesFromText } = await server.ssrLoadModule("/src/labVisualSummary.ts");
+const { normalizeLabTableSourceText } = await server.ssrLoadModule("/src/objectiveLineSanitizer.ts");
 const { formatSoapBasedIsbar } = await server.ssrLoadModule("/src/soapSbar.ts");
 const { AI_SOAP_OUTPUT_CONTRACT_VERSION, normalizeAiSoapText } = await server.ssrLoadModule("/src/aiSoapContract.ts");
 const {
@@ -4965,6 +4966,80 @@ try {
 } catch (error) {
   failures.push({ name: "Old-patient objective cleanup", error: error instanceof Error ? error.message : String(error) });
   console.error(`FAIL Old-patient objective cleanup: ${failures[failures.length - 1].error}`);
+}
+
+try {
+  const lisPaste = [
+    "[synthetic CBC]",
+    "\u5831\u544a\u6642\u9593 WBC Neu Lym Mono Eos Baso MDW",
+    "2026-07-19 6.0 79.1* 7.6* 12.4 0.5* 0.4 31.2*",
+    "\u5831\u544a\u6642\u9593 BUN CRE GFR Ca P Na K T-Bil",
+    "2026-07-19 38 1.44 44.47 8.3 3.1 150 3.8 0.63",
+  ].join("\n");
+  const normalizedSource = normalizeLabTableSourceText(lisPaste);
+  if (/\u5831\u544a\u6642\u9593/.test(normalizedSource.text) || !/WBC 6\.0.*Neu 79\.1\*/i.test(normalizedSource.text)) {
+    throw new Error(`LIS table was not converted into labeled values: ${normalizedSource.text}`);
+  }
+  if (!/BUN 38.*Cr 1\.44.*eGFR 44\.47.*Na 150/i.test(normalizedSource.text)) {
+    throw new Error(`LIS renal row lost positional values: ${normalizedSource.text}`);
+  }
+
+  const routedSource = splitGuidedSoapSource(lisPaste);
+  if (/\u5831\u544a\u6642\u9593/.test(routedSource.labs) || !/WBC 6\.0.*Na 150/is.test(routedSource.labs)) {
+    throw new Error(`Daily paste router did not retain reconstructed labs: ${JSON.stringify(routedSource)}`);
+  }
+  const visual = formatLabVisualSummaryFromLines(routedSource.labs, { includeLabPrefix: true });
+  if (/Other:.*\u5831\u544a\u6642\u9593/i.test(visual.text) || !/CBC\/DC:.*WBC 6\.0/i.test(visual.text) || !/Chem\/Renal:.*Cr 1\.44/i.test(visual.text)) {
+    throw new Error(`visual lab formatter leaked LIS headers or lost results: ${visual.text}`);
+  }
+
+  const baseline = [
+    "S:",
+    "- stable overnight",
+    "O:",
+    "- Lab: CBC/DC: WBC 7.2, Hb 11.0, Plt 180",
+    "- Lab: Chem/Renal: Cr 1.0, Na 140, K 4.0",
+    "A/P:",
+    "# Infection, improving",
+    "- continue source-grounded treatment",
+  ].join("\n");
+  const terraCandidate = [
+    "S:",
+    "- stable overnight",
+    "O:",
+    "- Lab: Other: \u5831\u544a\u6642\u9593 WBC Neu Lym Mono Eos Baso MDW",
+    "- Other: 2026-07-19 6.0 79.1* 7.6* 12.4 0.5* 0.4 31.2*",
+    "- Lab: CBC/DC: WBC 6.0, Neu 79.1%",
+    "- Lab: Chem/Renal: Cr 1.44, Na 150, K 3.8",
+    "A/P:",
+    "# Infection, improving",
+    "- continue source-grounded treatment",
+    "# Hypernatremia",
+    "- Na 150 (140); assess free-water balance.",
+    "- cont home digoxin, dapagliflozin, entecavir, tamsulosin; pending cardiac echo.",
+  ].join("\n");
+  const terraReview = guardRoundSoapDelta({
+    workflowMode: "dailyUpdate",
+    baselineText: baseline,
+    candidateText: normalizeAiSoapText(terraCandidate).soapText,
+    sourceFields: { labs: routedSource.labs },
+    selectedDate: "2026-07-20",
+  });
+  if (/\u5831\u544a\u6642\u9593|2026-07-19 6\.0 79\.1\*/i.test(terraReview.acceptedText)) {
+    throw new Error(`Terra-style LIS garbage reached reviewed SOAP: ${terraReview.acceptedText}`);
+  }
+  if (!/WBC 6\.0/i.test(terraReview.acceptedText) || !/Na 150/i.test(terraReview.acceptedText) || !/# Hypernatremia/i.test(terraReview.acceptedText)) {
+    throw new Error(`Terra Daily update lost reconstructed labs or derived problem: ${terraReview.acceptedText}`);
+  }
+  const terraHypernatremia = parseSoapText(terraReview.acceptedText).apProblems.find((problem) => /hypernatremia/i.test(problem.title));
+  if (!terraHypernatremia || /digoxin|dapagliflozin|entecavir|tamsulosin|cardiac echo/i.test(terraHypernatremia.lines.join(" "))) {
+    throw new Error(`unrelated medication/cardiac line leaked into new Hypernatremia A/P: ${JSON.stringify(terraHypernatremia)}`);
+  }
+  console.log("PASS Terra Daily update converts LIS table rows and rejects garbage headers deterministically");
+  supplementalPasses += 1;
+} catch (error) {
+  failures.push({ name: "Terra LIS table cleanup", error: error instanceof Error ? error.message : String(error) });
+  console.error(`FAIL Terra LIS table cleanup: ${failures[failures.length - 1].error}`);
 }
 
 try {

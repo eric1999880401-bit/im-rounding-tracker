@@ -680,6 +680,30 @@ function apLineDomains(line: string) {
   return [...new Set(domains)];
 }
 
+function lineHasProblemAffinity(problem: SoapApProblem, line: string) {
+  if (hasEquivalentLine(problem.lines, line)) return true;
+  const targetSignatures = problemSignatures(problem);
+  const lineSignatures = problemSignatures(line);
+  if (targetSignatures.some((signature) => lineSignatures.includes(signature))) return true;
+
+  const targetBucket = problemBucket(problem);
+  const lineBucket = problemBucket(line);
+  if (targetBucket && lineBucket === targetBucket) return true;
+
+  const bucketPlanPatterns: Record<string, RegExp> = {
+    renal: /\b(?:free[- ]?water|water deficit|fluid balance|i\/o|daily weight|bmp|renal dose|nephrotox|dialysis|hd\b|trend (?:na|sodium|k|cr|bun)|repeat (?:na|sodium|k|cr|bun))\b/i,
+    resp: /\b(?:wean (?:o2|oxygen)|pulm rehab|breathing training|bronchodilator|nebul|nIV|BiPAP|HFNC|ventilator|airway|repeat CXR)\b/i,
+    infection: /\b(?:source control|de-?escalat|culture clearance|repeat (?:culture|b\/c|bcx)|ID follow|antibiotic duration)\b/i,
+    heme: /\b(?:transfus|trend (?:cbc|hb|hgb|plt|inr)|repeat (?:cbc|hb|hgb|plt|inr)|bleeding precaution)\b/i,
+    cardio: /\b(?:telemetry|rate control|rhythm control|volume status|daily weight|repeat echo|cardiology follow)\b/i,
+    liver: /\b(?:trend (?:lft|ast|alt|bilirubin|inr)|repeat (?:lft|ast|alt|bilirubin|inr)|hepatotoxic)\b/i,
+    neuro: /\b(?:neuro check|delirium precaution|seizure precaution|mental status)\b/i,
+    oncology: /\b(?:pathology|staging|oncology follow|tumou?r board|chemo|radiation)\b/i,
+    nutrition: /\b(?:tube feed|feeding tolerance|nutrition consult|calorie|enteral|parenteral)\b/i,
+  };
+  return Boolean(targetBucket && bucketPlanPatterns[targetBucket]?.test(line));
+}
+
 function mergeProblemLines(baselineLines: string[], candidateLines: string[], sourceText: string) {
   let updatedLines = uniqueLines(candidateLines, 3);
   const hasSpecificAntiInfective = updatedLines.some((line) => namedAntiInfectivePattern.test(stripColorMarkup(line)));
@@ -1281,15 +1305,18 @@ function draftForDailyUpdate(baseline: SoapDraft, candidate: SoapDraft, fields: 
   backedProblems.forEach((problem) => {
     const match = findMatchingProblem(problem, candidateApProblems);
     if (match) {
-      match.title = baseline.apProblems.find((baselineProblem) => problemMatchScore(problem, baselineProblem) > 0)?.title ?? problem.title;
+      const baselineMatch = baseline.apProblems.find((baselineProblem) => problemMatchScore(problem, baselineProblem) > 0);
+      match.title = baselineMatch?.title ?? problem.title;
       const sourceDomains = new Set(problem.lines.flatMap(apLineDomains));
+      const supplementalLines = match.lines.filter((line) => {
+        if (hasEquivalentLine(problem.lines, line)) return false;
+        if (!baselineMatch && !lineHasProblemAffinity(problem, line)) return false;
+        const domains = apLineDomains(line);
+        return domains.length === 0 || !domains.some((domain) => sourceDomains.has(domain));
+      });
       match.lines = uniqueLines([
         ...problem.lines,
-        ...match.lines.filter((line) => {
-          if (hasEquivalentLine(problem.lines, line)) return false;
-          const domains = apLineDomains(line);
-          return domains.length === 0 || !domains.some((domain) => sourceDomains.has(domain));
-        }),
+        ...supplementalLines,
       ], 2);
     } else {
       candidateApProblems.push(problem);

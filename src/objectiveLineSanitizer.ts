@@ -12,6 +12,20 @@ const objectivePrefixPattern = /^(?:O|Objective|Other|V\/S|VS|Vitals?|PE|Physica
 const explicitObjectivePrefixPattern = /^(V\/S|VS|Vitals?|PE|Physical exam|Labs?|Image|Img)\s*[:\uFF1A]\s*/i;
 const labLabelPattern = /\b(?:WBC|Neu|Neut|Lym|Mono|Eos|Baso|NRBC|RBC|Hb|Hgb|Hct|MCV|MCH|MCHC|RDW|Plt|Platelet|MPV|MDW|BUN|Cr|CRE|Creatinine|e?GFR|Na|K|Cl|Ca|Mg|Phos|P|Osm|AST|ALT|ALP|GGT|T-?Bil|D-?Bil|Alb|PT|INR|aPTT|CRP|hsCRP|PCT|Lactate)\b/gi;
 const labResultPattern = /\b(?:WBC|Neu|Neut|Lym|Mono|Eos|Baso|NRBC|RBC|Hb|Hgb|Hct|MCV|MCH|MCHC|RDW|Plt|Platelet|MPV|MDW|BUN|Cr|CRE|Creatinine|e?GFR|Na|K|Cl|Ca|Mg|Phos|P|Osm|AST|ALT|ALP|GGT|T-?Bil|D-?Bil|Alb|PT|INR|aPTT|CRP|hsCRP|PCT|Lactate)\s*(?:[:=]\s*)?[<>]?\s*-?\d+(?:\.\d+)?/i;
+const positionalLabValuePattern = /^[<>]?-?\d+(?:,\d{3})*(?:\.\d+)?%?(?:\*+|[HL])?$/i;
+
+const canonicalLabLabels: Record<string, string> = {
+  neut: "Neu",
+  hgb: "Hb",
+  platelet: "Plt",
+  cre: "Cr",
+  creatinine: "Cr",
+  gfr: "eGFR",
+  egfr: "eGFR",
+  phos: "P",
+  crp: "CRP",
+  hscrp: "hsCRP",
+};
 
 function withoutTone(value: string) {
   return String(value ?? "").trim().replace(/^!!?\s*/, "").replace(/^\*\s+/, "").trim();
@@ -95,10 +109,88 @@ export function objectiveKindFromLine(value: string, fallback: ObjectiveLineKind
 
 export function isLabReportHeaderNoise(value: string) {
   const body = plainObjectiveBody(value);
-  if (!body || labResultPattern.test(body)) return false;
+  if (!body) return false;
   const labels = new Set([...body.matchAll(new RegExp(labLabelPattern.source, "gi"))].map((match) => match[0].toLowerCase()));
+  const resultCount = [...body.matchAll(new RegExp(labResultPattern.source, "gi"))].length;
   const hasHeaderCue = /(?:\u5831\u544a\u6642\u9593|\u6aa2\u9a57\u9805\u76ee|report\s*time|reported\s*at|test\s*name|analyte|reference\s*range)/i.test(body);
-  return (hasHeaderCue && labels.size >= 3) || labels.size >= 8;
+  if (resultCount >= Math.max(2, Math.ceil(labels.size * 0.5))) return false;
+  return (hasHeaderCue && labels.size >= 3) || (labels.size >= 8 && resultCount < Math.ceil(labels.size * 0.5));
+}
+
+function positionalLabLabels(value: string) {
+  const body = plainObjectiveBody(value);
+  return [...body.matchAll(new RegExp(labLabelPattern.source, "gi"))].map((match) => {
+    const raw = match[0];
+    return canonicalLabLabels[raw.toLowerCase()] ?? raw;
+  });
+}
+
+function positionalLabRow(value: string, labels: string[]) {
+  const body = plainObjectiveBody(value);
+  const date = body.match(/^\s*(20\d{2}[-/]\d{1,2}[-/]\d{1,2}|\d{1,2}\/\d{1,2})\b/)?.[1] ?? "";
+  const withoutDate = date
+    ? body.slice(body.indexOf(date) + date.length).replace(/^\s+\d{1,2}:\d{2}(?::\d{2})?\s*/, "").trim()
+    : body;
+  const rawTokens = withoutDate.split(/\s+/).filter(Boolean);
+  const tokens: string[] = [];
+  rawTokens.forEach((token) => {
+    if (/^\*+$/.test(token) && tokens.length > 0) {
+      tokens[tokens.length - 1] += token;
+      return;
+    }
+    tokens.push(token);
+  });
+  const numericCount = tokens.filter((token) => positionalLabValuePattern.test(token)).length;
+  if (labels.length < 2 || numericCount < 2 || numericCount < Math.min(labels.length, tokens.length) * 0.5) return "";
+
+  const items = labels.flatMap((label, index) => {
+    const rawValue = tokens[index] ?? "";
+    if (!positionalLabValuePattern.test(rawValue)) return [];
+    const markedAbnormal = /\*|[HL]$/i.test(rawValue);
+    const cleanValue = rawValue.replace(/\*+/g, "");
+    return cleanValue ? [`${label} ${cleanValue}${markedAbnormal ? "*" : ""}`] : [];
+  });
+  if (items.length < 2) return "";
+  return `${items.some((item) => /\*$/.test(item)) ? "! " : ""}${date ? `${date} ` : ""}${items.join(", ")}`.trim();
+}
+
+export function isLabReportValueRowNoise(value: string) {
+  const body = plainObjectiveBody(value);
+  if (!/^\s*(?:20\d{2}[-/]\d{1,2}[-/]\d{1,2}|\d{1,2}\/\d{1,2})\b/.test(body)) return false;
+  if (labResultPattern.test(body) || /\b(?:BP|HR|RR|SpO2|SaO2|CT|MRI|CXR|culture|Cx)\b/i.test(body)) return false;
+  const withoutDate = body.replace(/^\s*(?:20\d{2}[-/]\d{1,2}[-/]\d{1,2}|\d{1,2}\/\d{1,2})\b/, "").trim();
+  return withoutDate.split(/\s+/).filter((token) => positionalLabValuePattern.test(token)).length >= 3;
+}
+
+export function normalizeLabTableSourceText(value: string) {
+  const accepted: string[] = [];
+  const rejected: string[] = [];
+  let pendingLabels: string[] = [];
+
+  String(value ?? "").split(/\r?\n/).forEach((rawLine) => {
+    const line = rawLine.trim();
+    if (!line) return;
+    if (isLabReportHeaderNoise(line)) {
+      pendingLabels = positionalLabLabels(line);
+      rejected.push(line);
+      return;
+    }
+    if (pendingLabels.length > 0) {
+      const reconstructed = positionalLabRow(line, pendingLabels);
+      pendingLabels = [];
+      if (reconstructed) {
+        accepted.push(reconstructed);
+        return;
+      }
+    }
+    if (isLabReportValueRowNoise(line)) {
+      rejected.push(line);
+      return;
+    }
+    accepted.push(line);
+  });
+
+  return { text: accepted.join("\n"), lines: accepted, rejected };
 }
 
 export function sanitizeObjectiveLines(lines: string[]) {
@@ -107,7 +199,7 @@ export function sanitizeObjectiveLines(lines: string[]) {
   lines.forEach((line) => {
     const original = String(line ?? "").trim();
     if (!original) return;
-    if (isLabReportHeaderNoise(original)) {
+    if (isLabReportHeaderNoise(original) || isLabReportValueRowNoise(original)) {
       rejected.push(original);
       return;
     }
