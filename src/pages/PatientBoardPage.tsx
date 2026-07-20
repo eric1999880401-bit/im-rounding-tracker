@@ -1125,7 +1125,14 @@ function PatientBoardPage({
               <option value="">No target - batch text must include bed or patient code</option>
               {activeSourcePatients.map((patient) => (
                 <option value={patient.id} key={patient.id}>
-                  {[patient.bed || "No bed", patient.patientCode || "No code", patient.primaryDiagnosis || patient.oneLiner || "No Dx"]
+                  {[
+                    patient.bed || "No bed",
+                    patient.patientCode || "No code",
+                    patient.primaryDiagnosis
+                      || getRoundingDigest(patient, dailyNotesByPatient[patient.id] ?? [], { mode: "board", hideCompletedTasks: true }).diagnosis
+                      || safeClinicalLine(patient.oneLiner, 90)
+                      || "No Dx",
+                  ]
                     .filter(Boolean)
                     .join(" / ")}
                 </option>
@@ -1431,6 +1438,7 @@ function PatientBoardPage({
             const patientNotes = dailyNotesByPatient[patient.id] ?? [];
             const soap = patientToSoapDraft(patient, patientNotes, todayKey());
             const digest = getRoundingDigest(patient, patientNotes, { mode: "board", hideCompletedTasks: true });
+            const fallbackDiagnosis = patient.primaryDiagnosis || digest.diagnosis || safeClinicalLine(patient.oneLiner, 120);
             const headline = getPatientHeadline(patient, patientNotes);
             const carriedKeys = buildCarriedForwardKeys(patientNotes, todayKey());
             const chronicRenal = hasChronicRenalContext(patient);
@@ -1440,7 +1448,7 @@ function PatientBoardPage({
             const contextLines = soapHeaderLinesForDisplay(
               soap.header.filter((line) => isSoapHeaderLineVisible(line, roundingLayout) && !/^Red flags:|^Date:|^Attending:/i.test(line)),
               {
-                dx: digest.diagnosis || patient.primaryDiagnosis || patient.oneLiner,
+                dx: fallbackDiagnosis,
                 issues: digest.issues,
                 pmh: digest.risks,
               },
@@ -1532,7 +1540,7 @@ function PatientBoardPage({
                       </div>
                     ))}
                     {contextLines.length === 0 && (
-                      <div className="board-soap-header-primary">Dx: {patient.primaryDiagnosis || patient.oneLiner || "-"}</div>
+                      <div className="board-soap-header-primary">Dx: {fallbackDiagnosis || "-"}</div>
                     )}
                     <div className="muted">Attending: {patient.attending || t("board.unassigned")}</div>
                   </div>

@@ -134,6 +134,29 @@ export function dailyNoteFromPatient(patient: Patient, date = todayKey()): Daily
   };
 }
 
+/**
+ * Legacy/basic-field edits may still update the structured daily-note fields,
+ * but they must never clear the clinician-reviewed SOAP source of truth.
+ */
+export function dailyNoteFromPatientPreservingSoap(
+  patient: Patient,
+  existingNote: DailyNote | null | undefined,
+  date = todayKey(),
+): DailyNote {
+  const nextNote = dailyNoteFromPatient(patient, date);
+  if (!existingNote) return nextNote;
+
+  return {
+    ...existingNote,
+    ...nextNote,
+    soapText: existingNote.soapText ?? nextNote.soapText,
+    soapStatus: existingNote.soapStatus ?? nextNote.soapStatus,
+    soapUpdatedAt: existingNote.soapUpdatedAt ?? nextNote.soapUpdatedAt,
+    soapVersion: existingNote.soapVersion ?? nextNote.soapVersion,
+    soapEditHistory: existingNote.soapEditHistory ?? nextNote.soapEditHistory,
+  };
+}
+
 export function patientWithDailyNote(patient: Patient, note?: DailyNote): Patient {
   if (!note) return patient;
   return {

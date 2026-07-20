@@ -23,6 +23,7 @@ import {
 import { useT } from "../i18n";
 import {
   dailyNoteFromPatient,
+  dailyNoteFromPatientPreservingSoap,
   dailyNoteMatchesSavedSnapshot,
   emptyDailyNote,
   getLatestNonEmptyDailyNote,
@@ -512,7 +513,7 @@ function PatientDetailPage({
   function noteFromDraft(patient: Patient): DailyNote {
     const now = nowIso();
     return {
-      ...dailyNoteFromPatient(patient, selectedDate),
+      ...dailyNoteFromPatientPreservingSoap(patient, selectedNote, selectedDate),
       date: selectedDate,
       createdAt: selectedNote?.createdAt || now,
       updatedAt: now,

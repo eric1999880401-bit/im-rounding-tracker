@@ -37,6 +37,7 @@ const {
   nowIso,
   createId,
   dailyNoteMatchesSavedSnapshot,
+  dailyNoteFromPatientPreservingSoap,
 } = await server.ssrLoadModule("/src/utils.ts");
 const { getRoundingDigest, getPatientHeadline } = await server.ssrLoadModule("/src/roundingDigest.ts");
 const { buildCarriedForwardKeys, isCarriedForwardLine } = await server.ssrLoadModule("/src/soapLineDelta.ts");
@@ -4746,6 +4747,43 @@ try {
 } catch (error) {
   failures.push({ name: "SOAP prompt contract", error: error instanceof Error ? error.message : String(error) });
   console.error(`FAIL SOAP prompt contract: ${failures[failures.length - 1].error}`);
+}
+
+try {
+  const patient = {
+    ...emptyPatient(),
+    id: "synthetic-preserve-soap",
+    primaryDiagnosis: "concise synthetic diagnosis",
+    vitalSigns: "T 36.7 C, BP 118/72, HR 82",
+  };
+  const reviewed = {
+    ...emptyDailyNote("2026-07-20"),
+    soapText: "S:\n- no new complaint\nO:\n- V/S: T 36.5 C\nA/P:\n# Synthetic infection\n- continue current treatment",
+    soapStatus: "reviewed",
+    soapUpdatedAt: "2026-07-20T08:00:00.000Z",
+    soapVersion: 7,
+    soapEditHistory: [{
+      id: "trace-1",
+      timestamp: "2026-07-20T08:00:00.000Z",
+      source: "manual",
+      workflowMode: "dailyUpdate",
+      beforeHash: "before",
+      afterHash: "after",
+      changes: [],
+    }],
+  };
+  const saved = dailyNoteFromPatientPreservingSoap(patient, reviewed, "2026-07-20");
+  if (saved.soapText !== reviewed.soapText || saved.soapStatus !== "reviewed" || saved.soapVersion !== 7 || saved.soapEditHistory?.length !== 1) {
+    throw new Error(`basic-field save cleared canonical SOAP metadata: ${JSON.stringify(saved)}`);
+  }
+  if (!/BP 118\/72/.test(saved.vitalSigns)) {
+    throw new Error(`basic-field save did not retain structured field edit: ${saved.vitalSigns}`);
+  }
+  console.log("PASS Basic-field save preserves canonical reviewed SOAP");
+  supplementalPasses += 1;
+} catch (error) {
+  failures.push({ name: "Basic-field SOAP preservation", error: error instanceof Error ? error.message : String(error) });
+  console.error(`FAIL Basic-field SOAP preservation: ${failures[failures.length - 1].error}`);
 }
 
 try {

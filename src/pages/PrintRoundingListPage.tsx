@@ -747,6 +747,10 @@ function PrintRoundingListPage({
       },
       { maxLines: 5, maxChars: 150 },
     ).filter((line) => !patient.patientCode || !line.includes(patient.patientCode));
+    if (headerLines.length === 0) {
+      const fallbackDiagnosis = patient.primaryDiagnosis || digest.diagnosis;
+      return fallbackDiagnosis ? displayPrintLine(`Dx: ${fallbackDiagnosis}`) : "";
+    }
     return removePrintEllipsis(headerLines.slice(0, 4).map(displayPrintLine).filter(Boolean).join(" | "));
   }
 
