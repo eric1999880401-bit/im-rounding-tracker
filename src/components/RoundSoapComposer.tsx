@@ -13,8 +13,15 @@ import {
   type SoapEditorFormat,
 } from "../soapDraft";
 import type { SoapSourceFields } from "../soapEvidence";
-import { editorDraftToSoapText, emptySoapEditorLine, mergeOrderSourceIntoEditorDraft, parseSoapTextToEditorDraft, splitSoapEditorTaskLines } from "../soapEditorDraft";
-import { emptyDailyNote, nowIso } from "../utils";
+import {
+  editorDraftToSoapText,
+  emptySoapEditorLine,
+  mergeOrderSourceIntoEditorDraft,
+  parseCanonicalSoapTextToEditorDraft,
+  parseSoapTextToEditorDraft,
+  splitSoapEditorTaskLines,
+} from "../soapEditorDraft";
+import { emptyDailyNote, hasChronicRenalContext, nowIso } from "../utils";
 import { SoapVisualPreview } from "./SoapVisualPreview";
 import SoapPrintPreview from "./SoapPrintPreview";
 import StructuredSoapEditor from "./StructuredSoapEditor";
@@ -268,9 +275,9 @@ function RoundSoapComposer({
   const setQualityMode = (value: RoundSoapQualityMode) => {
     setQualityModeState(value);
   };
-  const [editorDraft, setEditorDraft] = useState(() => parseSoapTextToEditorDraft(canonical.text));
+  const [editorDraft, setEditorDraft] = useState(() => parseCanonicalSoapTextToEditorDraft(canonical.text));
   const [editorHistory, setEditorHistory] = useState<UndoRedoHistory<ReturnType<typeof parseSoapTextToEditorDraft>>>(() =>
-    createUndoRedoHistory(parseSoapTextToEditorDraft(canonical.text)),
+    createUndoRedoHistory(parseCanonicalSoapTextToEditorDraft(canonical.text)),
   );
   const [rawSoapText, setRawSoapText] = useState(canonical.text);
   const [dirty, setDirty] = useState(false);
@@ -290,7 +297,7 @@ function RoundSoapComposer({
   const pendingSavedSoapRef = useRef<{ date: string; text: string; note: DailyNote } | null>(null);
   const pendingOrderSourcesRef = useRef<Record<WorkflowMode, boolean>>(emptyPendingOrderSources);
   const editOriginRef = useRef<SoapEditOrigin | null>(null);
-  const manualBaselineRef = useRef(editorDraftToSoapText(parseSoapTextToEditorDraft(canonical.text)));
+  const manualBaselineRef = useRef(editorDraftToSoapText(parseCanonicalSoapTextToEditorDraft(canonical.text)));
   const recoveryScope = { kind: "roundSoap" as const, patientId: patient.id, selectedDate };
   const recoveryBaseline = canonical.text;
   const recoveryBaselineUpdatedAt = selectedNoteForDate(dailyNotes, selectedDate)?.soapUpdatedAt || selectedNoteForDate(dailyNotes, selectedDate)?.updatedAt || "";
@@ -362,7 +369,7 @@ function RoundSoapComposer({
       if (pendingSavedSoap.date === selectedDate && canonical.text !== pendingSavedSoap.text) return;
       pendingSavedSoapRef.current = null;
     }
-    const nextDraft = parseSoapTextToEditorDraft(canonical.text);
+    const nextDraft = parseCanonicalSoapTextToEditorDraft(canonical.text);
     setEditorDraftState(nextDraft);
     const normalizedBaseline = editorDraftToSoapText(nextDraft);
     manualBaselineRef.current = normalizedBaseline;
@@ -377,7 +384,7 @@ function RoundSoapComposer({
     if (!nextSoapText) return;
     pendingSavedSoapRef.current = null;
     editOriginRef.current = null;
-    const nextDraft = parseSoapTextToEditorDraft(nextSoapText);
+    const nextDraft = parseCanonicalSoapTextToEditorDraft(nextSoapText);
     updateEditorDraft(nextDraft);
     setError("");
     setWarnings([]);
@@ -597,7 +604,7 @@ function RoundSoapComposer({
 
   function restoreRecoveryDraft() {
     if (!recoveryDraft?.payload.soapText.trim()) return;
-    const nextDraft = parseSoapTextToEditorDraft(recoveryDraft.payload.soapText);
+    const nextDraft = parseCanonicalSoapTextToEditorDraft(recoveryDraft.payload.soapText);
     updateEditorDraft(nextDraft);
     setDeltaReview(null);
     setError("");
@@ -775,7 +782,7 @@ function RoundSoapComposer({
       // before the compatibility patient-field mirror so an unrelated patient
       // document failure cannot make a reviewed A/P disappear from the list.
       await onSaveDailyNote(nextPatient.id, nextNote);
-      const nextDraft = parseSoapTextToEditorDraft(reviewedText);
+      const nextDraft = parseCanonicalSoapTextToEditorDraft(reviewedText);
       pendingSavedSoapRef.current = { date: selectedDate, text: reviewedText, note: nextNote };
       let compatibilityWarning = "";
       try {
@@ -815,7 +822,7 @@ function RoundSoapComposer({
   }
 
   function loadDeltaSoapText(nextText: string, nextStatus: string) {
-    const nextDraft = parseSoapTextToEditorDraft(nextText);
+    const nextDraft = parseCanonicalSoapTextToEditorDraft(nextText);
     updateEditorDraft(nextDraft);
     setStatus(nextStatus);
   }
@@ -844,7 +851,7 @@ function RoundSoapComposer({
 
   function resetToCanonical() {
     pendingSavedSoapRef.current = null;
-    const nextDraft = parseSoapTextToEditorDraft(canonical.text);
+    const nextDraft = parseCanonicalSoapTextToEditorDraft(canonical.text);
     setEditorDraftState(nextDraft);
     setRawSoapText(editorDraftToSoapText(nextDraft));
     setMixedSourceText("");
@@ -976,6 +983,7 @@ function RoundSoapComposer({
             sourceFields={currentSourceFields(workflowMode)}
             layoutPreferences={layoutPreferences}
             keywordRules={keywordRules}
+            chronicRenal={hasChronicRenalContext(patient)}
             labReferenceDisplay="none"
           />
         </section>
@@ -1492,7 +1500,7 @@ function RoundSoapComposer({
             </button>
           </div>
           {previewMode === "print" ? (
-            <SoapPrintPreview value={soapText} layoutPreferences={layoutPreferences} keywordRules={keywordRules} />
+            <SoapPrintPreview value={soapText} layoutPreferences={layoutPreferences} keywordRules={keywordRules} chronicRenal={hasChronicRenalContext(patient)} />
           ) : (
             <SoapVisualPreview
               value={soapText}
@@ -1500,6 +1508,7 @@ function RoundSoapComposer({
               sourceFields={currentSourceFields()}
               layoutPreferences={layoutPreferences}
               keywordRules={keywordRules}
+              chronicRenal={hasChronicRenalContext(patient)}
               labReferenceDisplay={compact ? "none" : "detail"}
             />
           )}

@@ -2,6 +2,7 @@ import { extractActiveAntibioticNames } from "./antibioticPlan";
 import { classifyClinicalLine, type ClinicalLineKind } from "./clinicalLineClassifier";
 import {
   editorDraftToSoapText,
+  parseCanonicalSoapTextToEditorDraft,
   parseSoapTextToEditorDraft,
   splitSoapEditorTaskLines,
   type SoapEditorDraft,
@@ -279,7 +280,7 @@ export function acceptStructuredRoundSoap(params: {
   sourceFields: RoundSoapSourceFields;
   workflowMode: RoundSoapWorkflowMode;
 }): StructuredRoundSoapAcceptance {
-  const baseline = parseSoapTextToEditorDraft(params.baselineText);
+  const baseline = parseCanonicalSoapTextToEditorDraft(params.baselineText);
   const generated = structuredRoundSoapToEditorDraft(params.value);
   const source = sourceText(params.sourceFields);
   const sourceHasVitals = hasText(params.sourceFields.vitals) || looksLikeVitals(source);

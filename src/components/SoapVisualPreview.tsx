@@ -1,20 +1,22 @@
 import { useMemo, type ReactNode } from "react";
-import { parseSoapText } from "../soapDraft";
+import { normalizeClinicalDisplayTextPreservingMarks, type ClinicalLineTone } from "../clinicalLineClassifier";
+import { formatMedicationOrderLinesForDisplay } from "../medicationOrderParser";
+import {
+  buildRoundNoteViewModel,
+  makeRoundNoteLineView,
+  type RoundNoteLineView,
+} from "../roundNoteViewModel";
 import { soapHeaderLinesForDisplay } from "../soapDisplay";
 import { deriveSoapEvidence, type SoapSourceFields } from "../soapEvidence";
-import { ClinicalInlineText, ClinicalText, type LabReferenceDisplayMode } from "./ClinicalText";
-import { classifyClinicalLine, normalizeClinicalDisplayTextPreservingMarks, type ClinicalLineKind, type ClinicalLineTone } from "../clinicalLineClassifier";
-import { formatMedicationOrderLinesForDisplay } from "../medicationOrderParser";
 import type { KeywordHighlightRule, RoundingLayoutPreferences } from "../types";
 import {
   isDcSoapLineVisible,
   isLayoutSectionVisible,
   isObjectiveSoapLineVisible,
-  isOrderSoapLine,
   isSoapHeaderLineVisible,
   isTaskSoapLineVisible,
-  stripOrderLinePrefix,
 } from "../userPreferences";
+import { ClinicalInlineText, ClinicalText, type LabReferenceDisplayMode } from "./ClinicalText";
 
 interface SoapVisualPreviewProps {
   value: string;
@@ -23,6 +25,7 @@ interface SoapVisualPreviewProps {
   layoutPreferences?: RoundingLayoutPreferences;
   keywordRules?: KeywordHighlightRule[];
   labReferenceDisplay?: LabReferenceDisplayMode;
+  chronicRenal?: boolean;
 }
 
 function toneClass(tone: ClinicalLineTone) {
@@ -30,27 +33,22 @@ function toneClass(tone: ClinicalLineTone) {
 }
 
 function VisualLine({
+  line,
   label,
-  text,
-  fallbackKind = "other",
   keywordRules = [],
   labReferenceDisplay = "none",
 }: {
+  line: RoundNoteLineView;
   label?: string;
-  text: string;
-  fallbackKind?: ClinicalLineKind;
   keywordRules?: KeywordHighlightRule[];
   labReferenceDisplay?: LabReferenceDisplayMode;
 }) {
-  const classified = classifyClinicalLine(text, { fallbackKind, lockKind: fallbackKind !== "other" });
-  const isOrder = fallbackKind === "task" && isOrderSoapLine(text);
-  const displayLabel = label || (isOrder ? "藥囑" : classified.label);
-  const displayText = isOrder ? stripOrderLinePrefix(text) : text;
+  const displayLabel = label ?? line.label;
   return (
-    <div className={`soap-preview-line soap-preview-line-${classified.kind} soap-preview-line-${toneClass(classified.tone)}`}>
+    <div className={`soap-preview-line soap-preview-line-${line.kind} soap-preview-line-${toneClass(line.tone)}`}>
       {displayLabel && <span className="soap-preview-line-label">{displayLabel}</span>}
       <div className="soap-preview-line-text">
-        <ClinicalText value={displayText} maxCharsPerLine={140} keywordRules={keywordRules} labReferenceDisplay={labReferenceDisplay} />
+        <ClinicalText value={line.text} keywordRules={keywordRules} labReferenceDisplay={labReferenceDisplay} />
       </div>
     </div>
   );
@@ -82,45 +80,56 @@ function EmptyLine({ text = "No entry" }: { text?: string }) {
   return <span className="muted soap-preview-empty">{text}</span>;
 }
 
-export function SoapVisualPreview({ value, compact = false, sourceFields = {}, layoutPreferences, keywordRules = [], labReferenceDisplay = "none" }: SoapVisualPreviewProps) {
-  const draft = parseSoapText(value);
+export function SoapVisualPreview({
+  value,
+  compact = false,
+  sourceFields = {},
+  layoutPreferences,
+  keywordRules = [],
+  labReferenceDisplay = "none",
+  chronicRenal = false,
+}: SoapVisualPreviewProps) {
+  const view = useMemo(() => buildRoundNoteViewModel(value, { chronicRenal }), [chronicRenal, value]);
   const evidence = useMemo(() => deriveSoapEvidence(value, sourceFields), [sourceFields, value]);
   const headerLines = soapHeaderLinesForDisplay(
-    draft.header.filter((line) => isSoapHeaderLineVisible(line, layoutPreferences)),
-    { dx: draft.apProblems.slice(0, 2).map((problem) => problem.title).filter(Boolean).join(" / ") },
+    view.header.map((line) => line.raw).filter((line) => isSoapHeaderLineVisible(line, layoutPreferences)),
+    { dx: view.assessmentPlan.slice(0, 2).map((problem) => problem.title.text).filter(Boolean).join(" / ") },
     { maxLines: 4, maxChars: compact ? 110 : 140 },
   );
-  const sLines = isLayoutSectionVisible(layoutPreferences, "subjective") ? draft.sLines : [];
-  const oLines = draft.oLines.filter((line) => isObjectiveSoapLineVisible(line, layoutPreferences));
-  const objectiveLabLinePattern = /^!{0,2}\s*Labs?\s*[:：]/i;
-  const objectiveLabLines = oLines.filter((line) => objectiveLabLinePattern.test(line));
-  const objectiveNonLabLines = oLines.filter((line) => !objectiveLabLinePattern.test(line));
-  const displayObjectiveCount = oLines.length;
-  const apProblems = isLayoutSectionVisible(layoutPreferences, "assessmentPlan") ? draft.apProblems : [];
-  const orderLines = isLayoutSectionVisible(layoutPreferences, "orders")
-    ? draft.taskLines.filter(isOrderSoapLine)
+  const sLines = isLayoutSectionVisible(layoutPreferences, "subjective") ? view.subjective : [];
+  const oLines = view.objective.all.filter((line) => isObjectiveSoapLineVisible(line.raw, layoutPreferences));
+  const objectiveLabLines = oLines.filter((line) => line.kind === "lab");
+  const objectiveNonLabLines = oLines.filter((line) => line.kind !== "lab");
+  const apProblems = isLayoutSectionVisible(layoutPreferences, "assessmentPlan") ? view.assessmentPlan : [];
+  const displayOrderLines = isLayoutSectionVisible(layoutPreferences, "orders")
+    ? formatMedicationOrderLinesForDisplay(
+        view.orders.map((line) => line.raw),
+        layoutPreferences?.orderDisplayMode ?? "summary",
+        compact ? 4 : 6,
+      ).map((line, index) => makeRoundNoteLineView(line, "orders", "task", `display-order-${index}`, { chronicRenal }))
     : [];
-  const displayOrderLines = formatMedicationOrderLinesForDisplay(orderLines, layoutPreferences?.orderDisplayMode ?? "summary", compact ? 4 : 6);
   const taskLines = isLayoutSectionVisible(layoutPreferences, "tasks")
-    ? draft.taskLines.filter((line) => !isOrderSoapLine(line) && isTaskSoapLineVisible(line, layoutPreferences))
+    ? view.tasks.filter((line) => isTaskSoapLineVisible(line.raw, layoutPreferences))
     : [];
-  const dcLines = draft.dcLines.filter((line) => isDcSoapLineVisible(line, layoutPreferences));
+  const dcLines = view.dc.filter((line) => isDcSoapLineVisible(line.raw, layoutPreferences));
   const hasObjectiveSections =
     isLayoutSectionVisible(layoutPreferences, "objectiveVitals") ||
     isLayoutSectionVisible(layoutPreferences, "objectivePhysicalExam") ||
     isLayoutSectionVisible(layoutPreferences, "objectiveLabs") ||
     isLayoutSectionVisible(layoutPreferences, "objectiveImages");
-  const redCount = [
+  const highYieldLines = [
     ...sLines,
     ...oLines,
     ...taskLines,
     ...dcLines,
     ...apProblems.flatMap((problem) => [problem.title, ...problem.lines]),
-  ].filter((line) => classifyClinicalLine(line).tone === "critical").length;
-  const mergedApLine = apProblems
-    .map((problem) => [problem.title, ...problem.lines].filter(Boolean).join(": "))
+  ];
+  const redCount = highYieldLines.filter((line) => line.tone === "critical").length;
+  const mergedApText = apProblems
+    .map((problem) => [problem.title.text, ...problem.lines.map((line) => line.text)].filter(Boolean).join(": "))
     .filter(Boolean)
     .join("; ");
+  const mergedApLine = makeRoundNoteLineView(mergedApText, "assessmentPlan", "ap", "merged-ap", { chronicRenal });
 
   return (
     <div className={compact ? "soap-visual-preview compact-soap-visual-preview" : "soap-visual-preview"}>
@@ -146,94 +155,84 @@ export function SoapVisualPreview({ value, compact = false, sourceFields = {}, l
 
       <div className="soap-preview-grid">
         {isLayoutSectionVisible(layoutPreferences, "subjective") && (
-          <Section title="S" badge={`${sLines.length || 0}`}>
-            {sLines.length > 0 ? (
-              sLines.map((line, index) => <VisualLine key={`${line}-${index}`} text={line} fallbackKind="s" keywordRules={keywordRules} />)
-            ) : (
-              <EmptyLine />
-            )}
+          <Section title="S" badge={`${sLines.length}`}>
+            {sLines.length > 0
+              ? sLines.map((line) => <VisualLine key={line.id} line={line} keywordRules={keywordRules} />)
+              : <EmptyLine />}
           </Section>
         )}
 
         {hasObjectiveSections && (
-          <Section title="O" badge={`${displayObjectiveCount || 0}`}>
-            {displayObjectiveCount > 0 ? (
+          <Section title="O" badge={`${oLines.length}`}>
+            {oLines.length > 0 ? (
               <>
-                {objectiveNonLabLines.map((line, index) => (
-                  <VisualLine key={`${line}-${index}`} text={line} keywordRules={keywordRules} />
+                {objectiveNonLabLines.map((line) => (
+                  <VisualLine key={line.id} line={line} keywordRules={keywordRules} />
                 ))}
-                {objectiveLabLines.map((line, index) => (
-                  <VisualLine key={`lab-${line}-${index}`} text={line} fallbackKind="lab" keywordRules={keywordRules} labReferenceDisplay={labReferenceDisplay} />
+                {objectiveLabLines.map((line) => (
+                  <VisualLine
+                    key={line.id}
+                    line={line}
+                    keywordRules={keywordRules}
+                    labReferenceDisplay={labReferenceDisplay}
+                  />
                 ))}
               </>
-            ) : (
-              <EmptyLine />
-            )}
+            ) : <EmptyLine />}
           </Section>
         )}
 
         {isLayoutSectionVisible(layoutPreferences, "assessmentPlan") && layoutPreferences?.apDisplayMode === "merged" && (
           <Section title="A/P" badge={apProblems.length ? "merged" : "0"} important={apProblems.length > 0}>
-            {mergedApLine ? <VisualLine text={mergedApLine} fallbackKind="ap" keywordRules={keywordRules} /> : <EmptyLine />}
+            {mergedApText ? <VisualLine line={mergedApLine} keywordRules={keywordRules} /> : <EmptyLine />}
           </Section>
         )}
 
         {isLayoutSectionVisible(layoutPreferences, "assessmentPlan") && layoutPreferences?.apDisplayMode !== "merged" && (
-          <Section title="A/P" badge={`${apProblems.length || 0}`} important={apProblems.length > 0}>
+          <Section title="A/P" badge={`${apProblems.length}`} important={apProblems.length > 0}>
             {apProblems.length > 0 ? (
               <div className="soap-preview-ap-list">
-                {apProblems.map((problem, index) => (
-                  <article
-                    className={`soap-preview-problem soap-preview-line-${toneClass(classifyClinicalLine(`${problem.title} ${problem.lines.join(" ")}`, { fallbackKind: "ap" }).tone)}`}
-                    key={`${problem.title}-${index}`}
-                  >
+                {apProblems.map((problem) => (
+                  <article className={`soap-preview-problem soap-preview-line-${toneClass(problem.title.tone)}`} key={problem.id}>
                     <div className="soap-preview-problem-title">
                       <span>#</span>
-                      <ClinicalText value={problem.title} maxCharsPerLine={100} keywordRules={keywordRules} />
+                      <ClinicalText value={problem.title.text} keywordRules={keywordRules} />
                     </div>
                     {problem.lines.length > 0 && (
                       <div className="soap-preview-problem-lines">
-                        {problem.lines.map((line, lineIndex) => (
-                          <VisualLine key={`${line}-${lineIndex}`} text={line} fallbackKind="ap" keywordRules={keywordRules} />
+                        {problem.lines.map((line) => (
+                          <VisualLine key={line.id} line={line} keywordRules={keywordRules} />
                         ))}
                       </div>
                     )}
                   </article>
                 ))}
               </div>
-            ) : (
-              <EmptyLine />
-            )}
+            ) : <EmptyLine />}
           </Section>
         )}
 
         {isLayoutSectionVisible(layoutPreferences, "orders") && (
-          <Section title="藥囑" badge={`${displayOrderLines.length || 0}`}>
-            {displayOrderLines.length > 0 ? (
-              displayOrderLines.map((line, index) => <VisualLine key={`${line}-${index}`} text={line} fallbackKind="task" keywordRules={keywordRules} />)
-            ) : (
-              <EmptyLine text={layoutPreferences?.orderDisplayMode === "collapsed" ? "藥囑已收起" : "無藥囑"} />
-            )}
+          <Section title="藥囑" badge={`${displayOrderLines.length}`}>
+            {displayOrderLines.length > 0
+              ? displayOrderLines.map((line) => <VisualLine key={line.id} line={line} keywordRules={keywordRules} />)
+              : <EmptyLine text={layoutPreferences?.orderDisplayMode === "collapsed" ? "Medication orders collapsed" : "No medication orders"} />}
           </Section>
         )}
 
         {isLayoutSectionVisible(layoutPreferences, "tasks") && (
-          <Section title="Tasks" badge={`${taskLines.length || 0}`}>
-            {taskLines.length > 0 ? (
-              taskLines.map((line, index) => <VisualLine key={`${line}-${index}`} text={line} fallbackKind="task" keywordRules={keywordRules} />)
-            ) : (
-              <EmptyLine text="No pending task" />
-            )}
+          <Section title="Tasks" badge={`${taskLines.length}`}>
+            {taskLines.length > 0
+              ? taskLines.map((line) => <VisualLine key={line.id} line={line} keywordRules={keywordRules} />)
+              : <EmptyLine text="No pending task" />}
           </Section>
         )}
 
         {(isLayoutSectionVisible(layoutPreferences, "dcBarriers") || isLayoutSectionVisible(layoutPreferences, "dcPrep")) && (
-          <Section title="DC" badge={`${dcLines.length || 0}`}>
-            {dcLines.length > 0 ? (
-              dcLines.map((line, index) => <VisualLine key={`${line}-${index}`} text={line} fallbackKind="dc" keywordRules={keywordRules} />)
-            ) : (
-              <EmptyLine text="No DC item" />
-            )}
+          <Section title="DC" badge={`${dcLines.length}`}>
+            {dcLines.length > 0
+              ? dcLines.map((line) => <VisualLine key={line.id} line={line} keywordRules={keywordRules} />)
+              : <EmptyLine text="No DC item" />}
           </Section>
         )}
       </div>
@@ -246,9 +245,7 @@ export function SoapVisualPreview({ value, compact = false, sourceFields = {}, l
               <strong>Missing data</strong>
               <ul>
                 {evidence.missingData.map((item) => (
-                  <li className={`soap-evidence-${item.severity}`} key={item.id}>
-                    {item.message}
-                  </li>
+                  <li className={`soap-evidence-${item.severity}`} key={item.id}>{item.message}</li>
                 ))}
               </ul>
             </div>
@@ -258,9 +255,7 @@ export function SoapVisualPreview({ value, compact = false, sourceFields = {}, l
               <strong>Why highlighted</strong>
               <ul>
                 {evidence.why.map((item) => (
-                  <li key={item.id}>
-                    {item.label}: {item.refs.map((ref) => ref.line).join("; ")}
-                  </li>
+                  <li key={item.id}>{item.label}: {item.refs.map((ref) => ref.line).join("; ")}</li>
                 ))}
               </ul>
             </div>

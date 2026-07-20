@@ -2271,7 +2271,8 @@ tbody tr:last-child td {
 .patient-board-soap-context,
 .patient-board-soap-main,
 .patient-board-soap-ap {
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
+  word-break: normal;
 }
 
 .board-soap-header-lines,

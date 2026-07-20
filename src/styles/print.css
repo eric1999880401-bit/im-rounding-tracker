@@ -794,14 +794,15 @@
   line-height: var(--print-line-height);
   min-width: 0;
   max-width: 100%;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
   word-break: normal;
 }
 
 .print-section-ap .print-visual-text,
 .print-section-objective .print-visual-text,
 .print-section-taskdc .print-visual-text {
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
+  word-break: normal;
 }
 
 .print-visual-text .clinical-mark {

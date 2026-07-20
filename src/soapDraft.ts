@@ -61,6 +61,29 @@ function cleanSoapLine(value: unknown, maxChars = SOAP_LINE_LIMIT) {
     .trim();
 }
 
+// Reviewed SOAP is clinician-owned data. Parsing and serializing it may
+// normalize whitespace, but must never shorten, merge, reorder, or infer away
+// content. Legacy import/fallback paths continue to use cleanSoapLine.
+function cleanCanonicalSoapLine(value: unknown) {
+  return String(value ?? "")
+    .replace(/[\r\n]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function canonicalSoapLines(values: unknown[]) {
+  return values.map(cleanCanonicalSoapLine).filter(Boolean);
+}
+
+function canonicalApProblems(problems: SoapApProblem[]) {
+  return problems
+    .map((problem) => ({
+      title: cleanCanonicalSoapLine(problem.title),
+      lines: canonicalSoapLines(problem.lines),
+    }))
+    .filter((problem) => problem.title || problem.lines.length > 0);
+}
+
 function uniqueSoapLines(values: unknown[], maxItems = 20, maxChars = SOAP_LINE_LIMIT, splitSemicolon = true) {
   const seen = new Set<string>();
   const lines: string[] = [];
@@ -831,12 +854,12 @@ export function aiSoapDraftToSoapDraft(draft: AiSoapDraft, patient?: Patient, se
 function formatApHeading(title: string) {
   const raw = String(title || "Problem").trim();
   const tonePrefix = raw.match(/^!+\s*/)?.[0] ?? "";
-  const clean = cleanSoapLine(raw.replace(/^!+\s*/, ""), 90) || "Problem";
+  const clean = cleanCanonicalSoapLine(raw.replace(/^!+\s*/, "")) || "Problem";
   return `${tonePrefix}# ${clean}`.trim();
 }
 
 function plainApTitle(title: string) {
-  return cleanSoapLine(String(title || "Problem").replace(/^!+\s*/, ""), 90) || "Problem";
+  return cleanCanonicalSoapLine(String(title || "Problem").replace(/^!+\s*/, "")) || "Problem";
 }
 
 export function formatSoapDraft(draft: SoapDraft) {
@@ -1007,21 +1030,28 @@ function sectionFromLine(line: string): { section: SoapSection; label: string; r
 }
 
 function problemHeadingText(line: string) {
-  const raw = normalizeSoapSymbols(line).trim().replace(/^!+\s*/, "");
+  const normalized = normalizeSoapSymbols(line).trim();
+  const tonePrefix = normalized.match(/^(!!|!)\s*/)?.[1] ?? "";
+  const raw = normalized.replace(/^!+\s*/, "");
   const stripped = stripSoapBullet(line).trim().replace(/^!+\s*/, "");
   const hash = stripped.match(/^#+\s*(.+)$/);
-  if (hash) return cleanSoapLine(hash[1], 90);
-  const numbered = raw.match(/^\(?\d{1,2}[\.)]\s+([^:]{3,90})$/) ?? raw.match(/^\d{1,2}\s*[\u3001]\s*([^:]{3,90})$/);
-  return numbered ? cleanSoapLine(numbered[1], 90) : "";
+  if (hash) {
+    const title = cleanCanonicalSoapLine(hash[1]);
+    return title ? `${tonePrefix ? `${tonePrefix} ` : ""}${title}` : "";
+  }
+  const numbered = raw.match(/^\(?\d{1,2}[\.)]\s+(.+)$/) ?? raw.match(/^\d{1,2}\s*[\u3001]\s*(.+)$/);
+  if (!numbered || numbered[1].includes(":")) return "";
+  const title = cleanCanonicalSoapLine(numbered[1]);
+  return title ? `${tonePrefix ? `${tonePrefix} ` : ""}${title}` : "";
 }
 
 function inlineApProblem(line: string) {
   const stripped = stripSoapBullet(line);
   const clean = stripped.replace(/^!+\s*/, "");
-  const match = clean.match(/^([^:]{3,80}):\s*(.+)$/);
+  const match = clean.match(/^([^:]{3,160}):\s*(.+)$/);
   if (!match || match[1].includes("[[")) return null;
-  const title = cleanSoapLine(match[1], 72);
-  const body = cleanSoapLine(`${stripped.startsWith("!") ? "!" : ""}${match[2]}`, 130);
+  const title = cleanCanonicalSoapLine(match[1]);
+  const body = cleanCanonicalSoapLine(`${stripped.startsWith("!") ? "! " : ""}${match[2]}`);
   if (!title || !body || /^(?:s|o|a\/p|ap|tasks?|dc|v\/s|vs|pe|lab|image|img)$/i.test(title)) return null;
   return { title, body };
 }
@@ -1118,7 +1148,7 @@ export function parseSoapText(text: string): SoapDraft {
     else if (section === "dc") draft.dcLines.push(line);
     else if (section === "warnings") draft.warnings.push(line);
     else if (section === "ap") {
-      const heading = problemHeadingText(rawLine) || (line.startsWith("#") ? cleanSoapLine(line.replace(/^#\s*/, ""), 80) : "");
+      const heading = problemHeadingText(rawLine) || (line.startsWith("#") ? cleanCanonicalSoapLine(line.replace(/^#\s*/, "")) : "");
       if (heading) {
         currentProblem = { title: heading, lines: [] };
         draft.apProblems.push(currentProblem);
@@ -1190,13 +1220,13 @@ export function parseSoapText(text: string): SoapDraft {
   });
 
   return {
-    header: uniqueSoapLines(draft.header, 8, 150),
-    sLines: uniqueSoapLines(draft.sLines, 6, 130),
-    oLines: uniqueSoapLines(draft.oLines, 14, 150),
-    apProblems: dedupeApProblems(draft.apProblems),
-    taskLines: uniqueSoapLines(draft.taskLines, 8, 130),
-    dcLines: uniqueSoapLines(draft.dcLines, 5, 130),
-    warnings: uniqueSoapLines(draft.warnings, 5, 130),
+    header: canonicalSoapLines(draft.header),
+    sLines: canonicalSoapLines(draft.sLines),
+    oLines: canonicalSoapLines(draft.oLines),
+    apProblems: canonicalApProblems(draft.apProblems),
+    taskLines: canonicalSoapLines(draft.taskLines),
+    dcLines: canonicalSoapLines(draft.dcLines),
+    warnings: canonicalSoapLines(draft.warnings),
   };
 }
 

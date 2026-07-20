@@ -67,6 +67,13 @@ function markPreservingEditorText(value: string) {
   return normalizeClinicalDisplayTextPreservingMarks(withoutTone);
 }
 
+function normalizeCanonicalEditorText(value: string) {
+  return String(value ?? "")
+    .replace(/[\r\n]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function editorLineText(value: string, classifiedText: string) {
   // classifyClinicalLine strips [[color:...]] marks; keep them so clinician color tags survive round-trips.
   return hasColorMarkup(value) ? markPreservingEditorText(value) : withoutTonePrefix(classifiedText);
@@ -185,24 +192,31 @@ export function mergeOrderSourceIntoEditorDraft(draft: SoapEditorDraft, sourceTe
   return { ...draft, taskLines: [...orderLines, ...nextOrderLines, ...taskOnlyLines] };
 }
 
-export function parseSoapTextToEditorDraft(text: string): SoapEditorDraft {
-  const normalized = normalizeSoapTextForEditor(text);
-  const draft = parseSoapText(normalized);
-  const sanitizedObjective = sanitizeObjectiveLines(draft.oLines);
+function soapDraftToEditorDraft(draft: SoapDraft, options: { sanitizeLegacy: boolean; originalText: string }): SoapEditorDraft {
+  const sanitizedObjective = options.sanitizeLegacy
+    ? sanitizeObjectiveLines(draft.oLines)
+    : {
+        accepted: draft.oLines.map((line) => ({
+          original: line,
+          text: line,
+          kind: objectiveKindFromLine(line, "other"),
+        })),
+        rejected: [] as string[],
+      };
   const result: SoapEditorDraft = {
     headerLines: draft.header.map((line) => makeLine(line, "header")),
     sLines: draft.sLines.map((line) => makeLine(line, "s")),
     oLines: sanitizedObjective.accepted.map((line) => makeLine(line.text, line.kind)),
-    apProblems: normalizeApProblems(draft.apProblems).map(makeProblem),
+    apProblems: (options.sanitizeLegacy ? normalizeApProblems(draft.apProblems) : draft.apProblems).map(makeProblem),
     taskLines: draft.taskLines.map((line) => makeTaskLine(line)),
     dcLines: draft.dcLines.map((line) => makeLine(line, "dc")),
     warnings: draft.warnings.map((line) => makeLine(line, "other")),
     unsortedLines: sanitizedObjective.rejected.map((line) => makeLine(`Ignored lab export header without result values: ${line}`, "other")),
   };
 
-  const hasSections = /^\s*(?:S|O|A\/P|AP|Tasks?|DC)\s*:/im.test(String(text ?? ""));
-  if (!hasSections && String(text ?? "").trim()) {
-    result.unsortedLines = String(text)
+  const hasSections = /^\s*(?:S|O|A\/P|AP|Tasks?|DC)\s*:/im.test(options.originalText);
+  if (options.sanitizeLegacy && !hasSections && options.originalText.trim()) {
+    result.unsortedLines = options.originalText
       .split(/\r?\n/)
       .map((line) => line.trim())
       .filter(Boolean)
@@ -213,12 +227,25 @@ export function parseSoapTextToEditorDraft(text: string): SoapEditorDraft {
   return result;
 }
 
+// Untrusted AI/raw/legacy text gets one explicit normalization pass before it
+// enters the editor. Do not use this for already reviewed dailyNote.soapText.
+export function parseSoapTextToEditorDraft(text: string): SoapEditorDraft {
+  const normalized = normalizeSoapTextForEditor(text);
+  return soapDraftToEditorDraft(parseSoapText(normalized), { sanitizeLegacy: true, originalText: text });
+}
+
+// Canonical reviewed SOAP is loaded losslessly. Clinical cleanup belongs before
+// clinician acceptance, never on this read/save path.
+export function parseCanonicalSoapTextToEditorDraft(text: string): SoapEditorDraft {
+  return soapDraftToEditorDraft(parseSoapText(text), { sanitizeLegacy: false, originalText: text });
+}
+
 function serializeLine(line: SoapEditorLine, fallbackKind: ClinicalLineKind) {
   const kind = line.kind || fallbackKind;
   const raw = !hasColorMarkup(line.text) && (kind === "vs" || kind === "pe" || kind === "lab" || kind === "image")
     ? stripRepeatedObjectivePrefixes(line.text)
     : line.text;
-  const clean = safeClinicalLinePreservingMarks(raw, 170);
+  const clean = normalizeCanonicalEditorText(raw);
   if (!clean) return "";
   const prefix =
     kind === "vs"
@@ -236,7 +263,7 @@ function serializeLine(line: SoapEditorLine, fallbackKind: ClinicalLineKind) {
 
 function serializeTaskLine(line: SoapEditorLine) {
   if (line.subtype !== "order") return serializeLine(line, "task");
-  const clean = safeClinicalLinePreservingMarks(line.text, 170);
+  const clean = normalizeCanonicalEditorText(line.text);
   if (!clean) return "";
   const tonePrefix = line.tone === "critical" ? "!! " : line.tone === "important" ? "! " : "";
   const hasExplicitOrderPrefix = /^(?:order|orders?|meds?|藥囑|Abx|Anticoag\/AP|Steroid\/Immuno|Cardio\/Renal|Resp|Insulin\/Glucose|IVF\/Lyte|Nutrition|Monitoring|PRN|Routine(?: hidden)?)\s*[:：]/i.test(clean);
@@ -245,9 +272,9 @@ function serializeTaskLine(line: SoapEditorLine) {
 }
 
 function serializeProblem(problem: SoapEditorProblem) {
-  const title = safeClinicalLinePreservingMarks(problem.title, 110) || "Problem";
+  const title = normalizeCanonicalEditorText(problem.title) || "Problem";
   const titlePrefix = problem.tone === "critical" ? "!! " : problem.tone === "important" ? "! " : "";
-  const lines = problem.lines.map((line) => serializeLine(line, "ap")).filter(Boolean).slice(0, 2);
+  const lines = problem.lines.map((line) => serializeLine(line, "ap")).filter(Boolean);
   return {
     title: `${titlePrefix}${title}`.trim(),
     lines,

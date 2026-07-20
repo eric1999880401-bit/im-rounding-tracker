@@ -1,5 +1,4 @@
 import { useState } from "react";
-import type { ReactNode } from "react";
 import type {
   DailyNotesByPatient,
   MiscTask,
@@ -14,12 +13,10 @@ import type {
   UserPreferences,
 } from "../types";
 import {
-  getActiveProblemItems,
   getActiveAttendingNames,
   getActivePatients,
   getAdmissionSummaryText,
   getPatientDisplaySummary,
-  getUnderlyingDiseaseItems,
   groupPatientsByAttending,
   dischargePrepText,
   formatDateLabel,
@@ -31,22 +28,24 @@ import {
 import { ClinicalInlineText, ClinicalText } from "../components/ClinicalText";
 import { useT } from "../i18n";
 import { getPatientHeadline, getRoundingDigest } from "../roundingDigest";
-import { patientToSoapDraft } from "../soapDraft";
+import { getCanonicalSoapText, patientToSoapDraft } from "../soapDraft";
 import { soapHeaderLinesForDisplay } from "../soapDisplay";
-import { formatMedicationOrderLinesForDisplay } from "../medicationOrderParser";
-import { buildPatientLabVisualSummary } from "../labVisualSummary";
 import {
-  classifyPrintVisualItem as classifyPriorityPrintVisualItem,
+  buildRoundNoteViewModelFromDraft,
+  makeRoundNoteLineView,
+  selectRoundNoteLines,
+  type RoundNoteLineView,
+  type RoundNoteViewModel,
+} from "../roundNoteViewModel";
+import { formatMedicationOrderLinesForDisplay } from "../medicationOrderParser";
+import {
   isComplexPrintDraft,
-  selectPriorityPrintItems,
   shortPrintText,
-  type PrintVisualKind,
 } from "../printPriority";
 import {
   isDcSoapLineVisible,
   isLayoutSectionVisible,
   isObjectiveSoapLineVisible,
-  isOrderSoapLine,
   isSoapHeaderLineVisible,
   isTaskSoapLineVisible,
   normalizeRoundingLayoutPreferences,
@@ -259,59 +258,6 @@ function PrintRoundingListPage({
       .trim());
   }
 
-  function isImportantPrintLine(value: string) {
-    return /^!/.test(value.trim()) || /\bcritical\b|\burgent\b|\[URGENT\]|\bLab\s+\*/i.test(value);
-  }
-
-  function printListItems(value: string | string[], fallbackKind: PrintVisualKind = "other", maxItems = Number.POSITIVE_INFINITY, maxChars = printLimits().detailChars) {
-    return selectPriorityPrintItems(value, { fallbackKind, maxItems, maxChars });
-  }
-
-  function printItemClassName(item: { raw: string; text: string }) {
-    return [
-      "print-soap-item",
-      isImportantPrintLine(item.raw) || item.text.startsWith("*") ? "print-soap-important" : "",
-      /^Lab \*/i.test(item.text) ? "print-lab-critical-line" : "",
-      /^Lab \u0394/i.test(item.text) ? "print-lab-trend-line" : "",
-      /^Lab Ref/i.test(item.text) ? "print-lab-ref-line" : "",
-    ].filter(Boolean).join(" ");
-  }
-
-  function classifyPrintVisualItem(item: { raw: string; text: string }, fallbackKind: PrintVisualKind, chronicRenal = false) {
-    return classifyPriorityPrintVisualItem(item, fallbackKind, chronicRenal);
-  }
-
-  function printVisualLabelForSection(label: string, fallbackKind: PrintVisualKind) {
-    const normalized = label.includes("藥囑") ? "藥囑" : label;
-    if (label.includes("藥") || label.includes("亙") || /order/i.test(label)) return "藥囑";
-    if (fallbackKind === "s" && normalized === "S") return "";
-    if (fallbackKind === "ap" && normalized === "A/P") return "";
-    return normalized;
-  }
-
-  function renderPrintVisualItems(items: Array<{ raw: string; text: string; hidden?: boolean }>, keyPrefix: string, fallbackKind: PrintVisualKind, chronicRenal = false) {
-    if (items.length === 0) return null;
-    return (
-      <div className="print-visual-list">
-        {items.map((item, index) => {
-          const visual = classifyPrintVisualItem(item, fallbackKind, chronicRenal);
-          const visualLabel = printVisualLabelForSection(visual.label, fallbackKind);
-          return (
-            <div
-              className={`print-visual-row ${visualLabel ? "" : "print-visual-row-unlabeled"} print-visual-${visual.kind} print-visual-${visual.tone}${item.hidden ? " print-visual-hidden-note" : ""}`}
-              key={`${keyPrefix}-${visualLabel}-${visual.text}-${index}`}
-            >
-              {visualLabel && <span className="print-visual-label">{visualLabel}</span>}
-              <span className="print-visual-text">
-                <ClinicalInlineText value={visual.text} keywordRules={preferences.keywordHighlightRules} />
-              </span>
-            </div>
-          );
-        })}
-      </div>
-    );
-  }
-
   function simpleRedFlagText(value: string) {
     return cleanPrintLine(value)
       .replace(/^!+/, "")
@@ -321,213 +267,6 @@ function PrintRoundingListPage({
 
   function shortText(value: string, maxChars = printLimits().detailChars) {
     return shortPrintText(value, maxChars);
-  }
-
-  function cleanPrintTail(value: string) {
-    let clean = value.replace(/\s+[+,;:-]\s*$/g, "").trim();
-    for (let index = 0; index < 2; index += 1) {
-      clean = clean
-        .replace(/\s+(?:w\/|!+)\.?$/i, "")
-        .replace(/\s+\b(?:if|and|or|with|without|for|to|from|of|the|a|an|when|as|no)\b\.?$/i, "")
-        .replace(/\s+\b(?:check|review|confirm|correct|verify|monitor|coordinate|consider|assess|treat|after|acute|s\/p|ct|mri|cxr|image)\b\.?$/i, "")
-        .replace(/\s*,\s*$/g, "")
-        .trim();
-    }
-    return clean;
-  }
-
-  function toShortWords(value: string, maxChars = printLimits().detailChars) {
-    const clean = cleanPrintLine(value)
-      .replace(/\bright\b/gi, "R")
-      .replace(/\bleft\b/gi, "L")
-      .replace(/\bbilateral\b/gi, "B/L")
-      .replace(/\bwithout\b/gi, "w/o")
-      .replace(/\bwith\b/gi, "w/")
-      .replace(/\bsuspected\b/gi, "susp")
-      .replace(/\bcompatible with\b/gi, "c/w")
-      .replace(/\bconcerning for\b/gi, "c/f")
-      .replace(/\bfollow[- ]?up\b/gi, "f/u")
-      .replace(/\bacute ischemic stroke\b/gi, "AIS")
-      .replace(/\binfarctions?\b/gi, "infarct")
-      .replace(/\bhemorrhage\b/gi, "ICH")
-      .replace(/\bpneumonia\b/gi, "PNA")
-      .replace(/\bperoneal\/tibial CMAP & sural SNAP unelicitable\b/gi, "peroneal/tibial/sural unelicitable")
-      .replace(/\bCMAP & sural SNAP\b/gi, "CMAP/SNAP")
-      .replace(/\s+/g, " ")
-      .trim();
-    if (clean.length <= maxChars) return clean;
-
-    const limit = Math.max(8, maxChars);
-    const words = clean.split(" ");
-    const kept: string[] = [];
-    for (const word of words) {
-      const next = [...kept, word].join(" ");
-      if (next.length > limit) break;
-      kept.push(word);
-    }
-    return cleanPrintTail(kept.join(" ") || clean.slice(0, limit).trim());
-  }
-
-  function splitClinicalClauses(value: string) {
-    return cleanPrintLine(value)
-      .replace(/\b\d+\.\s*/g, "; ")
-      .split(/\s*(?:;|。|\.|\n|, and | and )\s*/i)
-      .map(cleanPrintLine)
-      .filter(Boolean);
-  }
-
-  function lowValueClause(value: string) {
-    return /\b(unremarkable|normal|no acute|no definite|no evidence|negative for|within normal|stable|unchanged|mild atrophy|elderly|small vessel disease|degenerative|pulse \+|no cv angle|no cva|no ich|no hemorrhage|no intracranial hemorrhage)\b/i.test(value);
-  }
-
-  function clinicalSignalScore(value: string, kind: "image" | "pe") {
-    const text = value.toLowerCase();
-    let score = 0;
-    if (/!|critical|urgent|pending|new|acute|worsen|progress/.test(text)) score += 5;
-    if (kind === "image" && /infarct|stroke|ich|hemorrhage|bleed|hypodense|stenosis|occlusion|aneurysm|mass|tumou?r|abscess|pneumonia|\bpna\b|edema|effusion|pe\b|dvt|fracture|hematoma|obstruction|pending|unelicitable/.test(text)) score += 7;
-    if (kind === "pe" && /weak|palsy|dysarth|aphasia|numb|sensory|motor|nystagmus|facial|pale|jaundice|crackle|wheeze|rales|murmur|jvp|edema|tender|guard|distend|melena|blood|cyanosis|rash|wound|pus|erythem|pooling|discharge/.test(text)) score += 7;
-    if (/\b(r|l|rt|lt|right|left|bil|b\/l)\b/.test(text)) score += 1;
-    if (/\d/.test(text)) score += 1;
-    if (lowValueClause(value)) score -= 8;
-    return score;
-  }
-
-  function bestClinicalSignal(value: string, kind: "image" | "pe", maxChars = printLimits().detailChars) {
-    const clauses = splitClinicalClauses(value);
-    if (clauses.length === 0) return "";
-    const scored = clauses
-      .map((clause) => ({ clause, score: clinicalSignalScore(clause, kind) }))
-      .sort((a, b) => b.score - a.score || a.clause.length - b.clause.length);
-    const best = scored.find((entry) => entry.score > 0)?.clause ?? scored.find((entry) => !lowValueClause(entry.clause))?.clause ?? scored[0]?.clause ?? "";
-    return toShortWords(best, maxChars);
-  }
-
-  function shortStudyType(value: string) {
-    const text = value.trim();
-    if (!text) return "";
-    if (/mri|mra/i.test(text) && /brain/i.test(text)) return "MRI/MRA brain";
-    if (/ct|cta/i.test(text) && /brain/i.test(text)) return "CT/CTA brain";
-    if (/cxr|chest x/i.test(text)) return "CXR";
-    if (/pelvis/i.test(text) && /mri/i.test(text)) return "MRI pelvis";
-    if (/carotid|tcd/i.test(text)) return "Carotid/TCD";
-    if (/abi/i.test(text)) return "ABI";
-    if (/ncv|emg/i.test(text)) return "NCV/EMG";
-    if (/ultrasound|sono|u\/s/i.test(text)) return "U/S";
-    return toShortWords(text, 18);
-  }
-
-  function uniqueTags(tags: string[]) {
-    const seen = new Set<string>();
-    return tags.filter((tag) => {
-      const clean = tag.trim();
-      const key = clean.toLowerCase();
-      if (!clean || seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
-  }
-
-  function joinTags(tags: string[], maxItems: number) {
-    const unique = uniqueTags(tags);
-    const visible = unique.slice(0, maxItems);
-    return visible.join(", ");
-  }
-
-  function sidePrefix(text: string) {
-    if (/\b(left|lt)\b/i.test(text)) return "L";
-    if (/\b(right|rt)\b/i.test(text)) return "R";
-    return "";
-  }
-
-  function diagnosisSummary(patient: Patient) {
-    const text = [patient.primaryDiagnosis, patient.oneLiner].filter(Boolean).join(" ");
-    const diagnosisText = patient.primaryDiagnosis || patient.oneLiner;
-    const lower = text.toLowerCase();
-    const tags: string[] = [];
-    const side = sidePrefix(diagnosisText);
-    const nihss = text.match(/\bnihss\s*[:=]?\s*(\d+)/i)?.[1];
-
-    if (/tia/.test(lower) && !/stroke|infarct/.test(lower)) tags.push("TIA");
-    if (/ischemic stroke|acute stroke|\bais\b|infarct|cva/.test(lower)) {
-      tags.push(`${side ? `${side} ` : ""}AIS${nihss ? ` NIHSS${nihss}` : ""}`);
-    }
-    if (/mca/.test(lower) && /stenos/.test(lower)) tags.push(`${side ? `${side} ` : ""}MCA stenosis`);
-    if (/ica|carotid/.test(lower) && /stenos/.test(lower)) tags.push(`${side ? `${side} ` : ""}ICA stenosis`);
-    if (/basal ganglia/.test(lower)) tags.push(`${side ? `${side} ` : ""}BG`);
-    if (/cerebell/.test(lower)) tags.push(`${side ? `${side} ` : ""}cerebellar`);
-    if (/pons|pontine/.test(lower)) tags.push("pontine");
-    if (/subcortical/.test(lower)) tags.push(`${side ? `${side} ` : ""}subcortical`);
-    if (/posterior circulation|post circ/.test(lower)) tags.push("post circ");
-    if (/a[\s-]*to[\s-]*a|artery[\s-]*to[\s-]*artery/.test(lower)) tags.push("r/o A-A");
-    if (/ramsay/.test(lower)) tags.push("Ramsay Hunt");
-    if (/parkinson/.test(lower)) tags.push("Parkinson");
-    if (/cholangitis/.test(lower) && /sepsis|septic|shock/.test(lower)) tags.push("cholangitis sepsis");
-    else if (/sepsis|septic/.test(lower)) tags.push("sepsis");
-    if (/pneumonia|\bpna\b/.test(lower)) tags.push("PNA");
-    if (/urinary tract infection|\buti\b/.test(lower)) tags.push("UTI");
-    if (/postmenopausal bleeding|vaginal bleeding|\bpmb\b/.test(lower)) tags.push("PMB");
-    if (/diabetes|dm/.test(lower) && /poor|uncontrol|hypergly/.test(lower)) tags.push("DM poor ctrl");
-    if (/visual|auditory|hallucination/.test(lower)) tags.push("hallucination");
-
-    const summary = joinTags(tags, density === "ultra-compact" ? 3 : 4);
-    return summary || shortText(text, printLimits().detailChars);
-  }
-
-  function riskSummary(patient: Patient) {
-    const text = [
-      patient.underlyingDiseases,
-      patient.admissionPMH,
-      ...getUnderlyingDiseaseItems(patient),
-    ].join(" ");
-    const lower = text.toLowerCase();
-    const tags: string[] = [];
-
-    if (/\bhtn\b|hypertension/.test(lower)) tags.push("HTN");
-    if (/\bdm\b|diabetes|t2dm/.test(lower)) tags.push("DM");
-    if (/hyperlipidemia|\bhld\b|dyslipidemia/.test(lower)) tags.push("HLD");
-    if (/afib|atrial fibrillation|paroxysmal af/.test(lower)) tags.push("AF");
-    if (/\bcad\b|coronary/.test(lower)) tags.push("CAD");
-    if (/heart failure|\bhf\b|chf|lvhf|nyha|reduced ef|hfr?ef/.test(lower)) tags.push("HF");
-    if (/\bckd\b|esrd|dialysis|renal/.test(lower)) tags.push("CKD");
-    if (/tia|stroke|cva/.test(lower)) tags.push("old CVA/TIA");
-    if (/\bsle\b|lupus/.test(lower)) tags.push("SLE");
-    if (/\bhbv\b|hepatitis b/.test(lower)) tags.push("HBV");
-    if (/\bhcv\b|hepatitis c/.test(lower)) tags.push("HCV");
-    if (/cirrhosis/.test(lower)) tags.push("cirrhosis");
-    if (/copd|asthma/.test(lower)) tags.push("COPD/asthma");
-    if (/pulmonary hypertension|phtn/.test(lower)) tags.push("pulm HTN");
-    if (/tricuspid regurgitation|\btr\b/.test(lower)) tags.push("TR");
-    if (/hypothyroid|hyperthyroid|thyroid/.test(lower)) tags.push("thyroid");
-    if (/cancer|malign|carcinoma|tumou?r|ca\b/.test(lower)) tags.push("CA hx");
-
-    const maxItems = density === "ultra-compact" ? 4 : 5;
-    return joinTags(tags, maxItems) || compactList(getUnderlyingDiseaseItems(patient), Math.min(printLimits().pmh, 2), 22);
-  }
-
-  function issueSummary(patient: Patient) {
-    const text = [
-      patient.activeProblems,
-      ...getActiveProblemItems(patient),
-    ].join(" ");
-    const lower = text.toLowerCase();
-    const tags: string[] = [];
-
-    if (/urinary tract infection|\buti\b/.test(lower)) tags.push("UTI");
-    if (/postmenopausal bleeding|vaginal bleeding|\bpmb\b|ob gyn|obgyn/.test(lower)) tags.push("PMB");
-    if (/diabetes|dm/.test(lower) && /poor|uncontrol|hypergly/.test(lower)) tags.push("DM poor ctrl");
-    if (/aki|acute kidney|renal function/.test(lower)) tags.push("AKI");
-    if (/anemia|bleed|hb drop/.test(lower)) tags.push("anemia/bleed");
-    if (/neutropenic|neutropenia|leukopenia|wbc low/.test(lower)) tags.push("neutropenia");
-    if (/infection|sepsis|pneumonia|\bpna\b/.test(lower)) tags.push(/pneumonia|\bpna\b/.test(lower) ? "PNA" : "infection");
-    if (/dysphag|swallow/.test(lower)) tags.push("dysphagia");
-    if (/carotid|mca|ica/.test(lower) && /stenos/.test(lower)) tags.push("large-vessel stenosis");
-    const hasFocalNeuroDeficit =
-      /hemiparesis|hemiplegia|aphasia|dysarth|facial droop|cn\s*[ivx]+|palsy|numbness|sensory loss|focal deficit/.test(lower) ||
-      (/weak/.test(lower) && /\b(stroke|neuro|focal|hemip|cva|spinal|cord)\b/.test(lower));
-    if (hasFocalNeuroDeficit) tags.push("neuro deficit");
-
-    const maxItems = density === "ultra-compact" ? 2 : 4;
-    return joinTags(tags, maxItems);
   }
 
   function clinicalItems(value: string) {
@@ -542,286 +281,23 @@ function PrintRoundingListPage({
     return visible.filter(Boolean).join("; ");
   }
 
-  function compactText(value: string, maxChars = printLimits().detailChars, maxItems = 2) {
-    return compactList(clinicalItems(value), maxItems, maxChars);
-  }
-
-  function allClinicalText(value: string, maxChars = printLimits().detailChars) {
-    const items = clinicalItems(value);
-    return compactList(items, items.length, maxChars);
-  }
-
-  function presentationSummary(patient: Patient) {
-    return compactList(
-      [
-        patient.oneLiner,
-        getAdmissionSummaryText(patient, { allowFallback: false }),
-        patient.chiefComplaint || patient.admissionChiefConcern,
-        patient.presentIllnessOrHPI || patient.hpiOrAdmissionStory,
-      ],
-      3,
-      printLimits().detailChars,
-    );
-  }
-
-  function pmhSummary(patient: Patient) {
-    return compactList(
-      [...getUnderlyingDiseaseItems(patient), patient.admissionPMH].filter(Boolean),
-      printLimits().pmh,
-      24,
-    );
-  }
-
-  function activeProblemSummary(patient: Patient) {
-    return compactList(getActiveProblemItems(patient), printLimits().problems, printLimits().chars);
-  }
-
-  function courseSummary(patient: Patient) {
-    return compactList(
-      [
-        patient.hospitalCourseHighlights,
-        patient.earlyHospitalCourse,
-      ],
-      density === "ultra-compact" ? 1 : 2,
-      printLimits().detailChars,
-    );
-  }
-
-  function importantObjectiveText(value: string, maxChars = printLimits().chars, maxItems = 1) {
-    const importantPattern = /abnormal|important|\bfever\b|\bfebrile\b|hypotherm|tachy|brady|hypot|hypert|shock|desat|hypox|spo2|oxygen|nasal|nc\b|o2\b|high|low|elevat|drop|worse|hypergly|hypogly|sugar|glucose|\bac\b|\bpc\b|\bhs\b|insulin|bleed|pain|unstable/i;
-    const normalOnlyPattern = /\bafebrile\b|\bnormal\b|\bwnl\b|\bstable\b|within normal/i;
-    const items = clinicalItems(value).filter((item) => {
-      if (item.trim().startsWith("!")) return true;
-      if (normalOnlyPattern.test(item) && !/(abnormal|important|hypot|hypert|tachy|brady|desat|hypox|high|low|elevat|drop|worse|hypergly|hypogly|bleed|pain|unstable)/i.test(item)) {
-        return false;
-      }
-      return importantPattern.test(item);
-    });
-    return compactList(items, maxItems, maxChars);
-  }
-
-  function shortDateSortValue(value: string) {
-    return String(value || "").replace(/\D/g, "");
-  }
-
-  function uniqueLines(lines: string[]) {
-    const seen = new Set<string>();
-    return lines.filter((line) => {
-      const key = cleanPrintLine(line).toLowerCase();
-      if (!key || seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
-  }
-
-  function labFocusGroups(patient: Patient) {
-    return buildPatientLabVisualSummary(patient, dailyNotesByPatient[patient.id] ?? [], {
-      maxGroups: printLimitsForPatient(patient).labItems,
-      maxItemsPerGroup: density === "ultra-compact" ? 4 : 6,
-      maxCharsPerGroup: printLimitsForPatient(patient).detailChars + 28,
-    }).map((group) => ({
-      label: group.label,
-      title: group.label,
-      items: [group.text.replace(new RegExp(`^${group.label}:\\s*`, "i"), "")],
-      className: group.tone === "critical" ? "print-lab-row-critical" : group.tone === "important" ? "print-lab-row-trend" : "print-lab-row-ref",
-    }));
-  }
-
-  function renderLabMiniTable(patient: Patient) {
-    const groups = labFocusGroups(patient);
-    if (groups.length === 0) return null;
-
-    return (
-      <div className="print-lab-mini-table" aria-label="Lab focus" role="table">
-        {groups.map((group) => (
-          <div className={`print-lab-mini-row ${group.className}`} key={group.label} role="row">
-            <span className="print-lab-mini-label" role="rowheader" title={group.title}>
-              {group.label}
-            </span>
-            <span className="print-lab-mini-values" role="cell">
-              <ClinicalInlineText value={group.items.join(", ")} keywordRules={preferences.keywordHighlightRules} />
-            </span>
-          </div>
-        ))}
-      </div>
-    );
-  }
-
-  function renderPrintLabFocus(patient: Patient) {
-    const groups = buildPatientLabVisualSummary(patient, dailyNotesByPatient[patient.id] ?? [], {
-      maxGroups: 99,
-      maxItemsPerGroup: 8,
-      maxCharsPerGroup: printLimitsForPatient(patient).detailChars + 40,
-    }).filter((group) => group.items.length > 0);
-
-    if (groups.length === 0) return null;
-
-    return (
-      <div className="print-lab-groups">
-        {groups.map((group) => (
-          <div className="print-lab-group" key={group.label}>
-            <span className="print-lab-date">{group.label}</span>
-            <span className="print-lab-chip-row">
-              <span className={`print-lab-chip ${group.tone === "critical" || group.tone === "important" ? "important" : ""}`}>
-                <ClinicalInlineText value={group.items.map((item) => item.text).join(", ")} keywordRules={preferences.keywordHighlightRules} />
-              </span>
-            </span>
-          </div>
-        ))}
-      </div>
-    );
-  }
-
-  function imageLines(patient: Patient) {
-    return getRoundingDigest(patient, dailyNotesByPatient[patient.id] ?? [], {
-      mode: "board",
-      hideCompletedTasks,
-    }).image.split(/\n/).map(cleanPrintLine).filter(Boolean).slice(0, printLimitsForPatient(patient).images);
-  }
-
-  function peSummaryText(patient: Patient) {
-    const objective = getRoundingDigest(patient, dailyNotesByPatient[patient.id] ?? [], {
-      mode: "board",
-      hideCompletedTasks,
-    }).objective;
-    const peLine = objective
-      .split(/\n/)
-      .map((line) => line.trim())
-      .find((line) => /^PE:/i.test(line));
-    return peLine ? cleanPrintLine(peLine.replace(/^PE:\s*/i, "")) : "";
-  }
-
-  function taskSummaryText(patient: Patient) {
-    const limits = printLimits();
-    const tasks = hideCompletedTasks ? patient.tasks.filter((task) => !task.done) : patient.tasks;
-    const sortedTasks = [...tasks].sort((a, b) => {
-      const priority = { urgent: 0, normal: 1, low: 2 };
-      return priority[a.priority] - priority[b.priority];
-    });
-    const urgentTasks = sortedTasks.filter((task) => task.priority === "urgent" || task.text.trim().startsWith("!"));
-    const routineTasks = sortedTasks.filter((task) => !urgentTasks.includes(task));
-    const selectedTasks = [
-      ...urgentTasks,
-      ...routineTasks.slice(0, Math.max(limits.tasks - urgentTasks.length, 0)),
-    ];
-    const visible = selectedTasks.map((task) => {
-      const text = task.text.trim().startsWith("!") ? task.text.trim().slice(1).trim() : task.text;
-      return `${task.priority === "urgent" ? "[URGENT] " : ""}${shortText(text, limits.chars)}${task.dueDate ? ` (${task.dueDate})` : ""}`;
-    });
-    return visible.filter(Boolean).join("; ");
-  }
-
-  function careMilestoneText(patient: Patient) {
-    const sourceLines = [
-      patient.hospitalCourseHighlights,
-      patient.earlyHospitalCourse,
-      patient.initialPlan,
-      patient.assessment,
-      patient.plan,
-      patient.dischargePlan,
-      ...patient.tasks.map((task) => task.text),
-    ].flatMap(clinicalItems);
-    const importantPattern = /\b(abx|antibiotic|ceftriaxone|cefazolin|cefepime|ceftazidime|ampicillin|sulbactam|zosyn|piperacillin|tazobactam|vanco|vancomycin|meropenem|ertapenem|levofloxacin|ciprofloxacin|metronidazole|procedure|operation|surgery|biopsy|scope|egd|cfs|catheter|drain|stent|pci|ptca|intubation|extubation|central line|consult|referral|rehab|pt|ot|st|swallow|id|nephro|cardio|neuro|gi|gs|obgyn|urology)\b/i;
-    const importantLines = sourceLines.filter((line) => importantPattern.test(line));
-    return compactList(importantLines, importantLines.length, printLimits().detailChars);
-  }
-
-  function assessmentPlanSummaryText(patient: Patient) {
-    return getRoundingDigest(patient, dailyNotesByPatient[patient.id] ?? [], {
-      mode: "board",
-      hideCompletedTasks,
-    }).assessmentPlan.replace(/\n/g, "; ");
-  }
-
-  function patientContextText(patient: Patient) {
+  function patientContextText(patient: Patient, view: RoundNoteViewModel, hasReviewedSoap: boolean) {
     const notes = dailyNotesByPatient[patient.id] ?? [];
-    const soap = patientToSoapDraft(patient, notes, todayKey());
-    const digest = getRoundingDigest(patient, notes, { mode: "rounds", hideCompletedTasks });
+    const digest = hasReviewedSoap ? null : getRoundingDigest(patient, notes, { mode: "rounds", hideCompletedTasks });
     const headerLines = soapHeaderLinesForDisplay(
-      soap.header.filter((line) => isSoapHeaderLineVisible(line, roundingLayout) && !/^Red flags:|^Date:|^Attending:/i.test(line)),
+      view.header.map((line) => line.raw).filter((line) => isSoapHeaderLineVisible(line, roundingLayout) && !/^Red flags:|^Date:|^Attending:/i.test(line)),
       {
-        dx: digest.diagnosis || patient.primaryDiagnosis || patient.oneLiner,
-        issues: digest.issues,
-        pmh: digest.risks,
+        dx: view.assessmentPlan[0]?.title.text || patient.primaryDiagnosis || digest?.diagnosis || patient.oneLiner,
+        issues: digest?.issues ?? "",
+        pmh: digest?.risks ?? "",
       },
       { maxLines: 5, maxChars: 150 },
     ).filter((line) => !patient.patientCode || !line.includes(patient.patientCode));
     if (headerLines.length === 0) {
-      const fallbackDiagnosis = patient.primaryDiagnosis || digest.diagnosis;
+      const fallbackDiagnosis = view.assessmentPlan[0]?.title.text || patient.primaryDiagnosis || digest?.diagnosis || "";
       return fallbackDiagnosis ? displayPrintLine(`Dx: ${fallbackDiagnosis}`) : "";
     }
     return removePrintEllipsis(headerLines.slice(0, 4).map(displayPrintLine).filter(Boolean).join(" | "));
-  }
-
-  function subjectiveSoapText(patient: Patient) {
-    if (!isLayoutSectionVisible(roundingLayout, "subjective")) return "";
-    const soap = patientToSoapDraft(patient, dailyNotesByPatient[patient.id] ?? [], todayKey());
-    const limits = printLimitsForPatient(patient);
-    return printListItems(soap.sLines, "s", limits.subjective, limits.detailChars).map((item) => item.raw).join("\n");
-  }
-
-  function objectiveSoapText(patient: Patient) {
-    const soap = patientToSoapDraft(patient, dailyNotesByPatient[patient.id] ?? [], todayKey());
-    const objectiveLines = soap.oLines.filter((line) => isObjectiveSoapLineVisible(line, roundingLayout) && !/^!{0,2}\s*(?:lab|image|img)\s*[:：]/i.test(line));
-    const limits = printLimitsForPatient(patient);
-    return printListItems(objectiveLines, "other", density === "ultra-compact" ? 2 : limits.pe + 2, limits.detailChars).map((item) => item.raw).join("\n");
-  }
-
-  function labSoapText(patient: Patient) {
-    if (!isLayoutSectionVisible(roundingLayout, "objectiveLabs")) return "";
-    const soap = patientToSoapDraft(patient, dailyNotesByPatient[patient.id] ?? [], todayKey());
-    const limits = printLimitsForPatient(patient);
-    const allLabLines = soap.oLines.filter((line) => isObjectiveSoapLineVisible(line, roundingLayout) && /^!{0,2}\s*Labs?\s*[:：]/i.test(line));
-    return printListItems(allLabLines, "lab", limits.labItems, limits.detailChars + 28).map((item) => item.raw).join("\n");
-  }
-
-  function imageSoapText(patient: Patient) {
-    if (!isLayoutSectionVisible(roundingLayout, "objectiveImages")) return "";
-    const soap = patientToSoapDraft(patient, dailyNotesByPatient[patient.id] ?? [], todayKey());
-    const images = soap.oLines
-      .filter((line) => /^!{0,2}\s*(?:image|img)\s*[:：]/i.test(line))
-      .map((line) => line.replace(/^!{0,2}\s*(?:image|img)\s*[:：]\s*/i, ""));
-    const limits = printLimitsForPatient(patient);
-    return printListItems(images, "image", limits.images, limits.detailChars).map((item) => item.raw).join("\n");
-  }
-
-  function assessmentSoapText(patient: Patient) {
-    if (!isLayoutSectionVisible(roundingLayout, "assessmentPlan")) return "";
-    const soap = patientToSoapDraft(patient, dailyNotesByPatient[patient.id] ?? [], todayKey());
-    const limits = printLimitsForPatient(patient);
-    const apLines = soap.apProblems
-      .map((problem) => {
-        const body = problem.lines
-          .slice(0, density === "ultra-compact" ? 1 : 2)
-          .map(displayPrintLine)
-          .filter(Boolean)
-          .join("; ");
-        return [problem.title, body].filter(Boolean).join(": ");
-      });
-    const apText = printListItems(apLines, "ap", limits.apProblems, limits.detailChars + 24)
-      .map((item) => item.raw)
-      .join("\n");
-    return apText || issueSummary(patient) || diagnosisSummary(patient);
-  }
-
-  function taskDcText(patient: Patient) {
-    const soap = patientToSoapDraft(patient, dailyNotesByPatient[patient.id] ?? [], todayKey());
-    const limits = printLimitsForPatient(patient);
-    const taskLimit = limits.tasks;
-    const dcLimit = density === "normal" ? 2 : 1;
-    const orderLines = isLayoutSectionVisible(roundingLayout, "orders")
-      ? soap.taskLines.filter(isOrderSoapLine)
-      : [];
-    const taskLines = isLayoutSectionVisible(roundingLayout, "tasks")
-      ? soap.taskLines.filter((line) => !isOrderSoapLine(line) && isTaskSoapLineVisible(line, roundingLayout))
-      : [];
-    const displayOrderLines = formatMedicationOrderLinesForDisplay(orderLines, roundingLayout.orderDisplayMode, Math.min(taskLimit, density === "normal" ? 8 : 4));
-    const taskDcLines = [
-      ...displayOrderLines,
-      ...taskLines,
-      ...soap.dcLines.filter((line) => isDcSoapLineVisible(line, roundingLayout)).slice(0, dcLimit).map((line) => (/^Prep:/i.test(line) ? line : `DC: ${line}`)),
-    ].filter(Boolean);
-    return printListItems(taskDcLines, "task", taskLimit + dcLimit, limits.detailChars).map((item) => item.raw).join("\n");
   }
 
   function taskDcTitle() {
@@ -832,54 +308,50 @@ function PrintRoundingListPage({
     ].filter(Boolean).map((item) => (item.includes("藥囑") ? "藥囑" : item)).join(" / ") || "Tasks / DC";
   }
 
-  function blockField(label: string, value: ReactNode) {
-    if (value === null || value === undefined || value === false) return null;
-    if (typeof value === "string" && !value.trim()) return null;
+  function printRoundLineLabel(line: RoundNoteLineView) {
+    if (line.section === "subjective" || line.section === "assessmentPlan") return "";
+    if (line.section === "orders") return "藥囑";
+    if (line.section === "tasks") return "T";
+    if (line.section === "dc") return "DC";
+    return line.label;
+  }
+
+  function renderRoundPrintLines(lines: RoundNoteLineView[], keyPrefix: string) {
+    if (lines.length === 0) return null;
     return (
-      <div className="print-block-field" key={label}>
-        <strong>{label}:</strong> {value}
+      <div className="print-visual-list">
+        {lines.map((line) => {
+          const label = printRoundLineLabel(line);
+          return (
+            <div
+              className={`print-visual-row ${label ? "" : "print-visual-row-unlabeled"} print-visual-${line.kind} print-visual-${line.tone}`}
+              key={`${keyPrefix}-${line.id}`}
+            >
+              {label && <span className="print-visual-label">{label}</span>}
+              <span className="print-visual-text">
+                <ClinicalInlineText value={line.text} keywordRules={preferences.keywordHighlightRules} />
+              </span>
+            </div>
+          );
+        })}
       </div>
     );
   }
 
-  function sectionBox(title: string, value: string, extra?: ReactNode, fallbackKind: PrintVisualKind = "other", chronicRenal = false) {
-    const visibleItems = printListItems(value.split(/\r?\n/), fallbackKind);
-    if (visibleItems.length === 0 && !extra) return null;
+  function roundSectionBox(title: string, lines: RoundNoteLineView[]) {
+    if (lines.length === 0) return null;
     const sectionClass = title === "S"
       ? "print-section-subjective"
       : title === "O"
         ? "print-section-objective"
-        : fallbackKind === "ap"
+        : title === "A/P"
           ? "print-section-ap"
-          : fallbackKind === "task"
-            ? "print-section-taskdc"
-            : "";
+          : "print-section-taskdc";
     return (
-      <div className={["print-section-box", sectionClass].filter(Boolean).join(" ")}>
+      <div className={`print-section-box ${sectionClass}`}>
         <div className="print-section-title">{title}</div>
-        {renderPrintVisualItems(visibleItems, title, fallbackKind, chronicRenal)}
-        {extra}
+        {renderRoundPrintLines(lines, title)}
       </div>
-    );
-  }
-
-  function renderPrintItems(value: string, keyPrefix: string, fallbackKind: PrintVisualKind = "other", chronicRenal = false) {
-    const visibleItems = printListItems(value.split(/\r?\n/), fallbackKind);
-    if (visibleItems.length === 0) return null;
-    return <div className="print-soap-list-extra">{renderPrintVisualItems(visibleItems, keyPrefix, fallbackKind, chronicRenal)}</div>;
-  }
-
-  function objectiveExtra(patient: Patient) {
-    const soapLabText = labSoapText(patient);
-    const soapLab = renderPrintItems(soapLabText, `${patient.id}-lab`, "lab", hasChronicRenalContext(patient));
-    const lab = soapLab || (isLayoutSectionVisible(roundingLayout, "objectiveLabs") ? renderLabMiniTable(patient) : null);
-    const image = renderPrintItems(imageSoapText(patient), `${patient.id}-image`, "image");
-    if (!lab && !image) return null;
-    return (
-      <>
-        {lab}
-        {image}
-      </>
     );
   }
 
@@ -940,13 +412,62 @@ function PrintRoundingListPage({
         <div className="print-patient-list">
           {sectionPatients.map((patient) => {
             const soapForPrint = patientToSoapDraft(patient, dailyNotesByPatient[patient.id] ?? [], todayKey());
+            const canonicalMeta = getCanonicalSoapText(patient, dailyNotesByPatient[patient.id] ?? [], todayKey());
+            const hasReviewedSoap = canonicalMeta.source !== "fallback";
+            const chronicRenal = hasChronicRenalContext(patient);
+            const roundView = buildRoundNoteViewModelFromDraft(soapForPrint, { chronicRenal });
             const limits = printLimitsForPatient(patient);
             const isExpanded = isExpandedPrintPatient(patient);
-            const headline = getPatientHeadline(patient, dailyNotesByPatient[patient.id] ?? [], { mode: "rounds" });
+            const headline = hasReviewedSoap ? null : getPatientHeadline(patient, dailyNotesByPatient[patient.id] ?? [], { mode: "rounds" });
+            const contextText = patientContextText(patient, roundView, hasReviewedSoap);
             const soapRedFlags = isLayoutSectionVisible(roundingLayout, "redFlags")
-              ? soapForPrint.header.find((line) => /^Red flags:/i.test(line))?.replace(/^Red flags:\s*/i, "") ?? ""
+              ? roundView.header.find((line) => /^Red flags:/i.test(line.raw))?.raw.replace(/^Red flags:\s*/i, "") ?? ""
               : "";
-            const redFlagItems = printListItems(clinicalItems(soapRedFlags).map(simpleRedFlagText), "red", limits.redFlags, limits.detailChars);
+            const redFlagItems = selectRoundNoteLines(
+              clinicalItems(soapRedFlags).map((line, index) =>
+                makeRoundNoteLineView(
+                  simpleRedFlagText(line),
+                  "warnings",
+                  "red",
+                  `print-${patient.id}-red-${index}`,
+                  { chronicRenal },
+                ),
+              ),
+              limits.redFlags,
+            );
+            const subjectiveLines = isLayoutSectionVisible(roundingLayout, "subjective")
+              ? selectRoundNoteLines(roundView.subjective, limits.subjective)
+              : [];
+            const objectiveLines = selectRoundNoteLines(
+              roundView.objective.all.filter((line) => isObjectiveSoapLineVisible(line.raw, roundingLayout)),
+              limits.pe + limits.labItems + limits.images,
+            );
+            const assessmentLines = isLayoutSectionVisible(roundingLayout, "assessmentPlan")
+              ? selectRoundNoteLines(
+                  roundView.assessmentPlan.map((problem, index) =>
+                    makeRoundNoteLineView(
+                      [problem.title.text, ...problem.lines.map((line) => line.text)].filter(Boolean).join(": "),
+                      "assessmentPlan",
+                      "ap",
+                      `print-${patient.id}-ap-${index}`,
+                      { chronicRenal },
+                    ),
+                  ),
+                  limits.apProblems,
+                )
+              : [];
+            const displayedOrders = isLayoutSectionVisible(roundingLayout, "orders")
+              ? formatMedicationOrderLinesForDisplay(
+                  roundView.orders.map((line) => line.raw),
+                  roundingLayout.orderDisplayMode,
+                  density === "normal" ? 8 : 4,
+                ).map((line, index) => makeRoundNoteLineView(line, "orders", "task", `print-${patient.id}-order-${index}`, { chronicRenal }))
+              : [];
+            const taskLines = isLayoutSectionVisible(roundingLayout, "tasks")
+              ? roundView.tasks.filter((line) => isTaskSoapLineVisible(line.raw, roundingLayout))
+              : [];
+            const dcLines = roundView.dc.filter((line) => isDcSoapLineVisible(line.raw, roundingLayout));
+            const taskDcLines = selectRoundNoteLines([...displayedOrders, ...taskLines, ...dcLines], limits.tasks + (density === "normal" ? 2 : 1));
 
             return (
               <article className={isExpanded ? "print-patient-block print-patient-expanded" : "print-patient-block"} key={patient.id}>
@@ -964,8 +485,8 @@ function PrintRoundingListPage({
                   <div className={`print-headline print-headline-${headline.tone}`}>{headline.text}</div>
                 )}
 
-                {patientContextText(patient) && (
-                  <div className="print-patient-context">{patientContextText(patient)}</div>
+                {contextText && (
+                  <div className="print-patient-context">{contextText}</div>
                 )}
 
                 {briefInCards && (patient.showAdmissionBriefOnPrint || patient.isNewAdmission) && getAdmissionSummaryText(patient, { allowFallback: false }).trim() && (
@@ -977,15 +498,15 @@ function PrintRoundingListPage({
                 {redFlagItems.length > 0 && (
                   <div className="print-red-flags">
                     <strong>Red Flags:</strong>
-                    {renderPrintVisualItems(redFlagItems, `red-${patient.id}`, "red")}
+                    {renderRoundPrintLines(redFlagItems, `red-${patient.id}`)}
                   </div>
                 )}
 
                 <div className="print-summary-grid">
-                  {sectionBox("S", subjectiveSoapText(patient), undefined, "s")}
-                  {sectionBox("O", objectiveSoapText(patient), objectiveExtra(patient), "other", hasChronicRenalContext(patient))}
-                  {sectionBox("A/P", assessmentSoapText(patient), undefined, "ap", hasChronicRenalContext(patient))}
-                  {sectionBox(taskDcTitle(), taskDcText(patient), undefined, "task")}
+                  {roundSectionBox("S", subjectiveLines)}
+                  {roundSectionBox("O", objectiveLines)}
+                  {roundSectionBox("A/P", assessmentLines)}
+                  {roundSectionBox(taskDcTitle(), taskDcLines)}
                 </div>
               </article>
             );

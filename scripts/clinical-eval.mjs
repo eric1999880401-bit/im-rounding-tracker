@@ -61,7 +61,8 @@ const { buildConcisePatientClinicalUpdate } = await server.ssrLoadModule("/src/c
 const { sanitizeAiSoapDraftForReview } = await server.ssrLoadModule("/src/aiDraftSanitizer.ts");
 const { routePatientImportDraft, routePatientClinicalFields } = await server.ssrLoadModule("/src/clinicalFieldRouter.ts");
 const { classifyClinicalLine, compactDisplaySymbols, normalizeClinicalDisplayText, normalizeClinicalDisplayTextPreservingMarks } = await server.ssrLoadModule("/src/clinicalLineClassifier.ts");
-const { editorDraftToSoapText, lintSoapEditorDraft, mergeOrderSourceIntoEditorDraft, parseSoapTextToEditorDraft, splitSoapEditorTaskLines } = await server.ssrLoadModule("/src/soapEditorDraft.ts");
+const { editorDraftToSoapText, lintSoapEditorDraft, mergeOrderSourceIntoEditorDraft, parseCanonicalSoapTextToEditorDraft, parseSoapTextToEditorDraft, splitSoapEditorTaskLines } = await server.ssrLoadModule("/src/soapEditorDraft.ts");
+const { buildRoundNoteViewModel, selectRoundNoteLines } = await server.ssrLoadModule("/src/roundNoteViewModel.ts");
 const { buildAntibioticApSummary, ensureAntibioticApInDraft } = await server.ssrLoadModule("/src/antibioticPlan.ts");
 const {
   buildUserAiStyleProfile,
@@ -5340,6 +5341,73 @@ try {
 } catch (error) {
   failures.push({ name: "Structured AI SOAP contract", error: error instanceof Error ? error.message : String(error) });
   console.error(`FAIL Structured AI SOAP contract: ${failures[failures.length - 1].error}`);
+}
+
+try {
+  const longLabLine = [
+    "Lab: CBC/DC: WBC 18.7, Neu 91.2%, Hb 8.6(9.4) down, Plt 72(104) down",
+    "Chem/Renal: BUN 68, Cr 3.42(2.71) up, eGFR 18, Na 151(146) up, K 5.7, Mg 1.8, Ca 7.4, P 5.9",
+    "Liver/Coag: AST 286, ALT 419, T-bil 3.1, Alb 2.5, PT 19.8, INR 1.8",
+    "Infx/Perfusion: CRP 22.4(14.1) up, lactate 3.8(2.1) up; B/C 07-20 GNR pending final susceptibility",
+  ].join("; ");
+  const longProblemTitle = "Sepsis with multiorgan dysfunction from probable biliary source, hemodynamics improving after source control";
+  const canonicalText = [
+    "H9-901 TEST-LOSSLESS 72/M",
+    "S:",
+    "- Dyspnea improved; no new chest pain.",
+    "O:",
+    `- ${longLabLine}`,
+    "- Pathology 07-19 rectal biopsy: moderately differentiated adenocarcinoma, MMR pending.",
+    "A/P:",
+    `# ${longProblemTitle}`,
+    "- Piperacillin/tazobactam 4.5 g IV q8h since 07-18; B/C GNR, f/u final ID/AST.",
+    "- ERCP 07-19 w/ CBD stent; trend bilirubin/lactate and monitor BP/UO.",
+    "- Reassess Abx duration after source control and culture finalization.",
+    "Tasks:",
+    "- f/u B/C final ID/AST and repeat lactate at 14:00.",
+  ].join("\n");
+
+  const parsed = parseSoapText(canonicalText);
+  if (!parsed.oLines.some((line) => line.includes("B/C 07-20 GNR pending final susceptibility"))) {
+    throw new Error(`canonical parser truncated the Lab tail:\n${parsed.oLines.join("\n")}`);
+  }
+  if (parsed.apProblems[0]?.title !== longProblemTitle) {
+    throw new Error(`canonical parser truncated the A/P title: ${parsed.apProblems[0]?.title ?? "(missing)"}`);
+  }
+
+  const roundTrip = editorDraftToSoapText(parseCanonicalSoapTextToEditorDraft(canonicalText));
+  if (!roundTrip.includes("B/C 07-20 GNR pending final susceptibility")) {
+    throw new Error(`structured editor truncated the Lab tail:\n${roundTrip}`);
+  }
+  if (!roundTrip.includes("Pathology 07-19 rectal biopsy: moderately differentiated adenocarcinoma, MMR pending.")) {
+    throw new Error(`structured editor lost pathology from O:\n${roundTrip}`);
+  }
+  if (!roundTrip.includes("Reassess Abx duration after source control and culture finalization.")) {
+    throw new Error(`structured editor silently removed the third clinician A/P line:\n${roundTrip}`);
+  }
+  if (parseSoapText(roundTrip).apProblems[0]?.lines.length !== 3) {
+    throw new Error(`structured editor changed the clinician's three A/P lines:\n${roundTrip}`);
+  }
+  const view = buildRoundNoteViewModel(roundTrip);
+  if (view.objective.labs.length !== 1 || !view.objective.labs[0].text.includes("B/C 07-20 GNR pending final susceptibility")) {
+    throw new Error(`shared view model changed or lost the long Lab line: ${JSON.stringify(view.objective.labs)}`);
+  }
+  if (view.objective.other.length !== 1 || !/Pathology 07-19 rectal biopsy/.test(view.objective.other[0].text)) {
+    throw new Error(`shared view model did not keep pathology in O: ${JSON.stringify(view.objective.other)}`);
+  }
+  if (view.assessmentPlan[0]?.title.label !== "A/P" || view.assessmentPlan[0]?.lines.some((line) => line.label !== "A/P")) {
+    throw new Error(`A/P section label changed because of Lab/Image terms: ${JSON.stringify(view.assessmentPlan[0])}`);
+  }
+  const compactObjective = selectRoundNoteLines(view.objective.all, 1);
+  const roundTripLabLine = parseSoapText(roundTrip).oLines[0];
+  if (!compactObjective.some((line) => line.raw === roundTripLabLine) || compactObjective.some((line) => line.raw.includes("B/C 07-20") && line.raw !== roundTripLabLine)) {
+    throw new Error(`display selection split or rewrote the canonical Lab line: ${JSON.stringify(compactObjective)}`);
+  }
+  console.log("PASS Canonical SOAP round-trip is lossless for long Lab, pathology, and clinician A/P lines");
+  supplementalPasses += 1;
+} catch (error) {
+  failures.push({ name: "Canonical SOAP lossless round-trip", error: error instanceof Error ? error.message : String(error) });
+  console.error(`FAIL Canonical SOAP lossless round-trip: ${failures[failures.length - 1].error}`);
 }
 
 await server.close();
