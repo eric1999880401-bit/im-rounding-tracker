@@ -162,6 +162,7 @@ const deltaSectionLabels: Record<SoapDeltaSection, string> = {
   pe: "PE",
   lab: "Lab",
   image: "Image",
+  other: "O/Other",
   ap: "A/P",
   orders: "藥囑",
   tasks: "Tasks",

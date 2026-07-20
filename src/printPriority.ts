@@ -118,7 +118,10 @@ export function classifyPrintVisualItem(item: { raw: string; text: string }, fal
   const lockedKind = fallbackKind === "task" && isDcLine ? "dc" : fallbackKind;
   const classified = classifyClinicalLine(source, {
     fallbackKind: lockedKind,
-    lockKind: lockedKind !== "other" && lockedKind !== "image",
+    // The SOAP parser/sanitizer already owns section routing. Reclassifying an
+    // Image line here can turn oncologic T-stage text (for example T4bN0M0)
+    // into a false temperature/V/S label in Print.
+    lockKind: lockedKind !== "other",
     chronicRenal,
   });
   const label = classified.kind === "task" ? (isOrderSoapLine(source) ? "藥囑" : "T") : classified.label;

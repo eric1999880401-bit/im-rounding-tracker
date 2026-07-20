@@ -6,7 +6,7 @@ import {
   stripClinicalMarkup,
 } from "./clinicalLineClassifier";
 import { normalizeApProblems } from "./apProblemNormalizer";
-import { objectiveKindFromLine, sanitizeObjectiveLines, stripRepeatedObjectivePrefixes } from "./objectiveLineSanitizer";
+import { objectiveKindFromLine, sanitizeObjectiveLines, stripRepeatedObjectivePrefixes, type ObjectiveLineKind } from "./objectiveLineSanitizer";
 import { formatSoapDraft, normalizeSoapTextForEditor, parseSoapText, type SoapApProblem, type SoapDraft } from "./soapDraft";
 import { createId, hasColorMarkup, safeClinicalLine, safeClinicalLinePreservingMarks } from "./utils";
 
@@ -75,10 +75,12 @@ function editorLineText(value: string, classifiedText: string) {
 function makeLine(value: string, fallbackKind: ClinicalLineKind): SoapEditorLine {
   const classified = classifyClinicalLine(value, { fallbackKind, explicitTone: bangTone(value) });
   const lockedKind = fallbackKind === "task" || fallbackKind === "dc" || fallbackKind === "ap" || fallbackKind === "s" || fallbackKind === "header";
-  const objectiveFallback = classified.kind === "vs" || classified.kind === "pe" || classified.kind === "lab" || classified.kind === "image"
-    ? classified.kind
+  const objectiveFallback = (fallbackKind === "vs" || fallbackKind === "pe" || fallbackKind === "lab" || fallbackKind === "image" || fallbackKind === "other")
+    ? fallbackKind as ObjectiveLineKind
     : "other";
-  const inferredKind = fallbackKind === "other"
+  // sanitizeObjectiveLines has already resolved conflicting AI prefixes. Do
+  // not let a second broad classifier turn CT T4bN0M0 into a temperature/V/S.
+  const inferredKind = !lockedKind
     ? objectiveKindFromLine(value, objectiveFallback)
     : classified.kind;
   const editorText = editorLineText(value, classified.text);

@@ -7,7 +7,7 @@ import {
   type MedicationOrderCategory,
 } from "./medicationOrderParser";
 import { formatLabVisualSummaryFromLines } from "./labVisualSummary";
-import { objectiveKindFromLine, prefixedObjectiveLine, sanitizeObjectiveLines } from "./objectiveLineSanitizer";
+import { isPathologyResultLine, objectiveKindFromLine, prefixedObjectiveLine, sanitizeObjectiveLines } from "./objectiveLineSanitizer";
 import { formatSoapDraft, parseSoapText, type SoapApProblem, type SoapDraft } from "./soapDraft";
 import { parseLabReports, safeClinicalLine, safeClinicalLinePreservingMarks, stripColorMarkup } from "./utils";
 import type { SoapPatch } from "./types";
@@ -21,6 +21,7 @@ export type SoapDeltaSection =
   | "pe"
   | "lab"
   | "image"
+  | "other"
   | "ap"
   | "orders"
   | "tasks"
@@ -59,6 +60,7 @@ interface ObjectiveGroups {
   pe: string[];
   lab: string[];
   image: string[];
+  other: string[];
 }
 
 const sectionLabels: Record<SoapDeltaSection, string> = {
@@ -68,6 +70,7 @@ const sectionLabels: Record<SoapDeltaSection, string> = {
   pe: "PE",
   lab: "Lab",
   image: "Image",
+  other: "O/Other",
   ap: "A/P",
   orders: "\u85e5\u56d1",
   tasks: "Tasks",
@@ -200,6 +203,7 @@ function filterUnsupportedDailyAp(problems: SoapApProblem[], fields: RoundSoapSo
 function lineKind(line: string): keyof ObjectiveGroups {
   const text = String(line ?? "").replace(/^!+\s*/, "");
   const sanitizedKind = objectiveKindFromLine(text);
+  if (isPathologyResultLine(text)) return "other";
   if (sanitizedKind === "vs" || sanitizedKind === "pe" || sanitizedKind === "lab" || sanitizedKind === "image") return sanitizedKind;
   if (/^(?:image|img)\s*:/i.test(text) || /\b(?:CT|MRI|CXR|sono|ultrasound|US\b|echo|ERCP|EGD|colonoscopy|impression)\b/i.test(text)) return "image";
   if (/^(?:v\/s|vs|vitals?)\s*:/i.test(text) || /\b(?:BP|HR|RR|SpO2|T\s*\d|afebrile|pressor|norepi|oxygen|O2|NC\s*\d*L?|RA)\b/i.test(text)) return "vs";
@@ -210,11 +214,11 @@ function lineKind(line: string): keyof ObjectiveGroups {
   if (classified.kind === "vs") return "vs";
   if (classified.kind === "lab") return "lab";
   if (classified.kind === "image") return "image";
-  return "pe";
+  return "other";
 }
 
 function splitObjective(lines: string[]): ObjectiveGroups {
-  const groups: ObjectiveGroups = { vs: [], pe: [], lab: [], image: [] };
+  const groups: ObjectiveGroups = { vs: [], pe: [], lab: [], image: [], other: [] };
   sanitizeObjectiveLines(lines).accepted.forEach((line) => {
     const kind = line.kind === "other" ? lineKind(line.text) : line.kind;
     groups[kind].push(line.text);
@@ -229,6 +233,7 @@ function mergeObjective(groups: ObjectiveGroups, maxItems = 18) {
       ...groups.pe.map((line) => ensureObjectivePrefix(line, "PE")),
       ...groups.lab.map((line) => ensureObjectivePrefix(line, "Lab")),
       ...groups.image.map((line) => ensureObjectivePrefix(line, "Image")),
+      ...groups.other,
     ],
     maxItems,
   );
@@ -538,6 +543,7 @@ function sourceProfile(fields: RoundSoapSourceFields) {
     if (/\b(bp|hr|rr|spo2|v\/s|vs|vitals?|fever|afebrile)\b/i.test(other)) allowed.add("vs");
     if (/\b(wbc|hb|plt|cr|bun|na|k\b|lactate|crp|inr|culture|b\/c|bcx)\b/i.test(other)) allowed.add("lab");
     if (/\b(ct|mri|cxr|echo|sono|ultrasound|image|impression)\b/i.test(other)) allowed.add("image");
+    if (isPathologyResultLine(other)) allowed.add("other");
     if (/\b(order|meds?|abx|antibiotic|hold|resume|stop|start|continue|insulin|heparin|lasix)\b/i.test(other)) allowed.add("orders");
   }
   return {
@@ -850,6 +856,7 @@ function newestImageStudyLines(lines: string[], maxItems = 8) {
 }
 
 function taskExplicitlyCompleted(task: string, sourceText: string) {
+  if (/\b(?:bx|biopsy|pathology|histology|cytology)\b/i.test(task) && isPathologyResultLine(sourceText)) return true;
   if (!/\b(?:completed|done|passed|resolved|final negative|discontinued|stopped)\b/i.test(sourceText)) return false;
   if (/\b(?:ambulat\w*|walk\w*|exertional oxygen|oxygen saturation)\b/i.test(task) && /\b(?:ambulat\w*|walk\w*)\b.*\b(?:completed|done|passed)\b|\b(?:completed|done|passed)\b.*\b(?:ambulat\w*|walk\w*)\b/i.test(sourceText)) return true;
   if (/\b(?:culture|b\/c|bcx)\b/i.test(task) && /\b(?:culture|b\/c|bcx)\b.*\b(?:final negative|completed|done)\b|\b(?:final negative|completed|done)\b.*\b(?:culture|b\/c|bcx)\b/i.test(sourceText)) return true;
@@ -1176,7 +1183,7 @@ function analyzeChangedSections(baseline: SoapDraft, candidate: SoapDraft) {
   if (!sameLines(baseline.sLines, candidate.sLines)) pushChanged(changed, "s", "Subjective changed");
   const baseObjective = splitObjective(baseline.oLines);
   const candidateObjective = splitObjective(candidate.oLines);
-  (["vs", "pe", "lab", "image"] as const).forEach((section) => {
+  (["vs", "pe", "lab", "image", "other"] as const).forEach((section) => {
     if (!sameLines(baseObjective[section], candidateObjective[section])) pushChanged(changed, section, `${sectionLabels[section]} changed`);
   });
   if (!sameProblems(baseline.apProblems, candidate.apProblems)) pushChanged(changed, "ap", "A/P changed");
@@ -1201,9 +1208,10 @@ function draftForDailyUpdate(baseline: SoapDraft, candidate: SoapDraft, fields: 
     pe: baseObjective.pe,
     lab: baseObjective.lab,
     image: baseObjective.image,
+    other: baseObjective.other,
   };
 
-  (["vs", "pe", "lab", "image"] as const).forEach((section) => {
+  (["vs", "pe", "lab", "image", "other"] as const).forEach((section) => {
     const differs = !sameLines(baseObjective[section], candidateObjective[section]);
     if (!differs) return;
     if (profile.allowed.has(section)) {
@@ -1227,6 +1235,14 @@ function draftForDailyUpdate(baseline: SoapDraft, candidate: SoapDraft, fields: 
           return !key || !incomingStudyKeys.has(key);
         });
         nextObjective[section] = mergeDailyLines(baselineWithoutReplacedStudies, newestCandidateImages, { maxItems: 8 });
+      } else if (section === "other") {
+        const supportedOther = filterUnsupportedDailyLines(candidateObjective.other, fields, baselineText, "O/Other");
+        warnings.push(...supportedOther.warnings);
+        const incomingHasPathology = supportedOther.accepted.some(isPathologyResultLine);
+        const carryForward = incomingHasPathology
+          ? baseObjective.other.filter((line) => !isPathologyResultLine(line))
+          : baseObjective.other;
+        nextObjective.other = mergeDailyLines(carryForward, supportedOther.accepted, { maxItems: 6 });
       } else {
         nextObjective[section] = mergeDailyLines(baseObjective[section], candidateObjective[section], { maxItems: 5 });
       }
@@ -1287,7 +1303,7 @@ function draftForDailyUpdate(baseline: SoapDraft, candidate: SoapDraft, fields: 
       const merged = mergeApProblemsForDaily(
         baseline.apProblems,
         filteredAp.problems,
-        profile.allowed.has("s") || profile.allowed.has("pe") || profile.allowed.has("lab") || profile.allowed.has("image"),
+        profile.allowed.has("s") || profile.allowed.has("pe") || profile.allowed.has("lab") || profile.allowed.has("image") || profile.allowed.has("other"),
         pastedSourceText,
         new Set(backedProblems.map((problem) => apKey(problem.title))),
       );

@@ -83,7 +83,7 @@ const {
   guardRoundSoapDelta,
   restoreSoapDeltaSection,
 } = await server.ssrLoadModule("/src/soapDeltaGuardrails.ts");
-const { displayPrintLine, selectPriorityPrintItems } = await server.ssrLoadModule("/src/printPriority.ts");
+const { classifyPrintVisualItem, displayPrintLine, selectPriorityPrintItems } = await server.ssrLoadModule("/src/printPriority.ts");
 const { cleanInlineClinicalMarkers, soapHeaderLinesForDisplay } = await server.ssrLoadModule("/src/soapDisplay.ts");
 const { applyClinicalColorMarkup, applyUserKeywordHighlights, clearClinicalColorMarkupAtSelection } = await server.ssrLoadModule("/src/clinicalColorMarkup.ts");
 const { labReferenceText, parseClinicalLabTokens } = await server.ssrLoadModule("/src/labReference.ts");
@@ -2902,11 +2902,18 @@ try {
 try {
   const lockedAp = classifyClinicalLine("Lab: Cr 2.7, Hb 8.7, INR 10; CXR improved", { fallbackKind: "ap", lockKind: true });
   const objectiveLab = classifyClinicalLine("Lab: Cr 2.7, Hb 8.7, INR 10", { fallbackKind: "lab" });
+  const lockedImage = classifyPrintVisualItem(
+    { raw: "Abd CT 07-08 rectal tumor, T4bN0M0", text: "Abd CT 07-08 rectal tumor, T4bN0M0" },
+    "image",
+  );
   if (lockedAp.kind !== "ap" || lockedAp.label !== "A/P" || !/^Lab:/i.test(lockedAp.text)) {
     throw new Error(`A/P section was not label-locked: ${JSON.stringify(lockedAp)}`);
   }
   if (objectiveLab.kind !== "lab" || objectiveLab.label !== "LAB") {
     throw new Error(`Objective lab did not remain LAB: ${JSON.stringify(objectiveLab)}`);
+  }
+  if (lockedImage.kind !== "image" || lockedImage.label !== "IMG") {
+    throw new Error(`Print reclassified CT T-stage as ${lockedImage.label}: ${JSON.stringify(lockedImage)}`);
   }
   const markedHeaders = ["!! Dx: cholangitis sepsis", "! PMH: CKD3/HFrEF", "Dx: !! bacteremia"];
   const normalizedHeaders = markedHeaders.map(normalizeClinicalDisplayText);
@@ -4888,6 +4895,81 @@ try {
 } catch (error) {
   failures.push({ name: "Old-patient objective cleanup", error: error instanceof Error ? error.message : String(error) });
   console.error(`FAIL Old-patient objective cleanup: ${failures[failures.length - 1].error}`);
+}
+
+try {
+  const routedDraft = parseSoapTextToEditorDraft([
+    "S:",
+    "- no new complaint",
+    "O:",
+    "- Lab: CBC/DC: WBC 7.0 (5.8)\u2191(5.8), Neu 78.8% (75.4%)\u2191(75.4), Hb 11.4 (12.5)\u2193(12.5)",
+    "- Lab: Other: \u5831\u544a\u6642\u9593 WBC Neu NRBC MCHC MCH MCV PLT RDW Hct Hb BUN CRE GFR Ca P Na K T-Bil hsCRP ALT Mg Osm",
+    "- V/S: Abd CT 07-08: synthetic rectal mass, T4bN0M0",
+    "- Lab: Pathology: rectal biopsy 07-18: moderately differentiated adenocarcinoma",
+    "A/P:",
+    "# Rectal cancer",
+    "- staging pending multidisciplinary review",
+  ].join("\n"));
+  const ctLine = routedDraft.oLines.find((line) => /Abd CT 07-08/i.test(line.text));
+  const pathologyLine = routedDraft.oLines.find((line) => /Pathology: rectal biopsy/i.test(line.text));
+  if (ctLine?.kind !== "image") {
+    throw new Error(`CT with T4bN0M0 was not kept as Image: ${JSON.stringify(ctLine)}`);
+  }
+  if (pathologyLine?.kind !== "other") {
+    throw new Error(`final biopsy result was not retained as O/Other: ${JSON.stringify(pathologyLine)}`);
+  }
+  if (routedDraft.oLines.some((line) => /\u5831\u544a\u6642\u9593|NRBC MCHC MCH MCV/i.test(line.text))) {
+    throw new Error(`LIS header survived in O: ${JSON.stringify(routedDraft.oLines)}`);
+  }
+  const normalizedCbc = routedDraft.oLines.find((line) => /CBC\/DC:/i.test(line.text))?.text ?? "";
+  if (!/WBC 7\.0\u2191\(5\.8\).*Neu 78\.8%\u2191\(75\.4%\).*Hb 11\.4\u2193\(12\.5\)/i.test(normalizedCbc) || /\(5\.8\)\u2191\(5\.8\)/.test(normalizedCbc)) {
+    throw new Error(`legacy duplicated lab trend syntax survived: ${normalizedCbc}`);
+  }
+
+  const baseline = [
+    "S:",
+    "- no new complaint",
+    "O:",
+    "- Lab: CBC/DC: WBC 8.2, Hb 10.8, Plt 210",
+    "- Image: Colonoscopy 07-14: synthetic rectal mass, s/p biopsy",
+    "A/P:",
+    "# Rectal mass",
+    "- Colonoscopy biopsy pending.",
+    "Tasks:",
+    "- ! f/u bx report",
+  ].join("\n");
+  const candidate = [
+    "S:",
+    "- no new complaint",
+    "O:",
+    "- Pathology: rectal biopsy 07-18: moderately differentiated adenocarcinoma",
+    "A/P:",
+    "# Rectal mass",
+    "- Pathology 07-18: moderately differentiated adenocarcinoma; discuss staging/plan.",
+    "Tasks:",
+    "- f/u bx report",
+  ].join("\n");
+  const pathologyReview = guardRoundSoapDelta({
+    workflowMode: "dailyUpdate",
+    baselineText: baseline,
+    candidateText: candidate,
+    sourceFields: { other: "Final pathology 07-18, rectal biopsy: moderately differentiated adenocarcinoma." },
+    selectedDate: "2026-07-20",
+  });
+  if (!/^\s*-?\s*Pathology: rectal biopsy 07-18: moderately differentiated adenocarcinoma/im.test(pathologyReview.acceptedText)) {
+    throw new Error(`source-backed final pathology disappeared from O:\n${pathologyReview.acceptedText}`);
+  }
+  if (!/CBC\/DC: WBC 8\.2, Hb 10\.8, Plt 210/i.test(pathologyReview.acceptedText)) {
+    throw new Error(`unrelated high-value Lab was lost during pathology update:\n${pathologyReview.acceptedText}`);
+  }
+  if (/f\/u bx report/i.test(pathologyReview.acceptedText)) {
+    throw new Error(`completed biopsy follow-up task survived final pathology:\n${pathologyReview.acceptedText}`);
+  }
+  console.log("PASS Pathology stays in O, completed biopsy tasks clear, and CT T-stage stays Image");
+  supplementalPasses += 1;
+} catch (error) {
+  failures.push({ name: "Pathology objective routing", error: error instanceof Error ? error.message : String(error) });
+  console.error(`FAIL Pathology objective routing: ${failures[failures.length - 1].error}`);
 }
 
 await server.close();

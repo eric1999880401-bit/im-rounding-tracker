@@ -55,6 +55,7 @@ function explicitObjectiveKind(value: string): ObjectiveLineKind | "" {
 }
 
 function contentObjectiveKind(body: string): ObjectiveLineKind | "" {
+  if (isPathologyResultLine(body)) return "other";
   if (/\b(?:CT|MRI|CXR|X-?ray|echo|sono|ultrasound|US|ERCP|EGD|colonoscopy|bronchoscopy|PET)\b|\bimpression\s*:/i.test(body)) return "image";
   if (/\b(?:BP|HR|RR|SpO2|SaO2)\s*[:=]?\s*\d|\bT\s*[:=]?\s*\d{2}(?:\.\d+)?|\b(?:afebrile|room air|RA|nasal cannula|NC\s*\d*\s*L)\b/i.test(body)) return "vs";
   if (
@@ -64,6 +65,23 @@ function contentObjectiveKind(body: string): ObjectiveLineKind | "" {
   ) return "lab";
   if (/\b(?:conscious|alert|clear breath|crackles|wheez|murmur|tender|edema|jaundice|abd(?:omen|ominal)|bowel sounds?|motor|strength)\b/i.test(body)) return "pe";
   return "";
+}
+
+export function isPathologyResultLine(value: string) {
+  const body = plainObjectiveBody(value);
+  const explicitReport = /\b(?:final\s+)?(?:pathology|histology|cytology|IHC|immunohistochem\w*)\b|\bbiopsy\s*(?:result|report|pathology)\b/i.test(body);
+  const biopsyDiagnosis = /\bbiopsy\b/i.test(body) && /\b(?:adenocarcinoma|squamous(?:\s+cell)?\s+carcinoma|carcinoma|malignan\w*|lymphoma|dysplasia|benign|negative\s+for\s+malignancy|consistent\s+with)\b/i.test(body);
+  return explicitReport || biopsyDiagnosis;
+}
+
+export function normalizeLegacyLabTrendSyntax(value: string) {
+  return String(value ?? "").replace(
+    /(\b[A-Za-z][A-Za-z0-9./-]{0,15}\s+)(-?\d+(?:\.\d+)?%?)\s*\((-?\d+(?:\.\d+)?%?)\)\s*([\u2191\u2193])(?:\((-?\d+(?:\.\d+)?%?)\))?/g,
+    (full, label: string, current: string, previous: string, arrow: string, repeatedPrevious?: string) => {
+      if (repeatedPrevious && repeatedPrevious.replace(/%$/, "") !== previous.replace(/%$/, "")) return full;
+      return `${label}${current}${arrow}(${previous})`;
+    },
+  );
 }
 
 export function objectiveKindFromLine(value: string, fallback: ObjectiveLineKind = "other"): ObjectiveLineKind {
@@ -93,9 +111,11 @@ export function sanitizeObjectiveLines(lines: string[]) {
       rejected.push(original);
       return;
     }
-    const text = stripRepeatedObjectivePrefixes(original);
+    const kind = objectiveKindFromLine(original);
+    const stripped = stripRepeatedObjectivePrefixes(original);
+    const text = kind === "lab" ? normalizeLegacyLabTrendSyntax(stripped) : stripped;
     if (!text) return;
-    accepted.push({ original, text, kind: objectiveKindFromLine(original) });
+    accepted.push({ original, text, kind });
   });
   return { accepted, rejected };
 }
