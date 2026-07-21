@@ -6,7 +6,13 @@ import {
   stripClinicalMarkup,
 } from "./clinicalLineClassifier";
 import { normalizeApProblems } from "./apProblemNormalizer";
-import { objectiveKindFromLine, sanitizeObjectiveLines, stripRepeatedObjectivePrefixes, type ObjectiveLineKind } from "./objectiveLineSanitizer";
+import {
+  normalizeObjectiveLabExportLines,
+  objectiveKindFromLine,
+  sanitizeObjectiveLines,
+  stripRepeatedObjectivePrefixes,
+  type ObjectiveLineKind,
+} from "./objectiveLineSanitizer";
 import { formatSoapDraft, normalizeSoapTextForEditor, parseSoapText, type SoapApProblem, type SoapDraft } from "./soapDraft";
 import { createId, hasColorMarkup, safeClinicalLine, safeClinicalLinePreservingMarks } from "./utils";
 
@@ -234,10 +240,14 @@ export function parseSoapTextToEditorDraft(text: string): SoapEditorDraft {
   return soapDraftToEditorDraft(parseSoapText(normalized), { sanitizeLegacy: true, originalText: text });
 }
 
-// Canonical reviewed SOAP is loaded losslessly. Clinical cleanup belongs before
-// clinician acceptance, never on this read/save path.
+// Canonical reviewed SOAP is loaded losslessly except for non-clinical LIS/HIS
+// table metadata. No clinical line is inferred, shortened, or deduplicated.
 export function parseCanonicalSoapTextToEditorDraft(text: string): SoapEditorDraft {
-  return soapDraftToEditorDraft(parseSoapText(text), { sanitizeLegacy: false, originalText: text });
+  const draft = parseSoapText(text);
+  return soapDraftToEditorDraft(
+    { ...draft, oLines: normalizeObjectiveLabExportLines(draft.oLines) },
+    { sanitizeLegacy: false, originalText: text },
+  );
 }
 
 function serializeLine(line: SoapEditorLine, fallbackKind: ClinicalLineKind) {

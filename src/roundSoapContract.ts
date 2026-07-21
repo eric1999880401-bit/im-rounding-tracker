@@ -1,6 +1,7 @@
 import { extractActiveAntibioticNames } from "./antibioticPlan";
 import { classifyClinicalLine, type ClinicalLineKind } from "./clinicalLineClassifier";
 import { formatLabVisualSummaryLinesFromText } from "./labVisualSummary";
+import { normalizeObjectiveLabExportLines, objectiveKindFromLine } from "./objectiveLineSanitizer";
 import {
   editorDraftToSoapText,
   parseCanonicalSoapTextToEditorDraft,
@@ -38,7 +39,7 @@ function editorLine(text: string, kind: ClinicalLineKind, subtype?: "order"): So
 
 export function structuredRoundSoapToEditorDraft(value: StructuredRoundSoapDraft): SoapEditorDraft {
   const objective = value.objective;
-  const oLines = [
+  const rawOLines = [
     ...objective.vitalSigns.map((text) => editorLine(text.replace(/^(?:V\/S|VS|Vitals?)\s*:\s*/i, ""), "vs")),
     ...objective.physicalExam.map((text) => editorLine(text.replace(/^(?:PE|Physical exam)\s*:\s*/i, ""), "pe")),
     ...objective.labs.map((item) => editorLine(`${item.panel}: ${item.values}`.replace(/^Lab\s*:\s*/i, ""), "lab")),
@@ -47,6 +48,19 @@ export function structuredRoundSoapToEditorDraft(value: StructuredRoundSoapDraft
     ...objective.pathology.map((item) => editorLine(`Pathology: ${[item.specimen, item.date].filter(Boolean).join(" ")}: ${item.result}`, "other")),
     ...objective.other.map((text) => editorLine(text, "other")),
   ].filter((line) => line.text);
+  const originalLines = new Map<string, SoapEditorLine[]>();
+  rawOLines.forEach((line) => {
+    const key = clean(line.text).toLowerCase();
+    originalLines.set(key, [...(originalLines.get(key) ?? []), line]);
+  });
+  const oLines = normalizeObjectiveLabExportLines(rawOLines.map((line) => line.text))
+    .map((text) => {
+      const key = clean(text).toLowerCase();
+      const originals = originalLines.get(key) ?? [];
+      const original = originals.shift();
+      if (original) return original;
+      return editorLine(text, objectiveKindFromLine(text, "other"));
+    });
 
   return {
     headerLines: value.headerLines.map((text) => editorLine(text, "header")),

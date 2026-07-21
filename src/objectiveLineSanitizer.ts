@@ -266,6 +266,15 @@ export function normalizeLabTableSourceText(value: string) {
   return { text: accepted.join("\n"), lines: accepted, rejected };
 }
 
+// Older reviewed notes may already contain pasted LIS/HIS table metadata.
+// Normalize only the Objective lines used by the editor/display path: pure
+// headers disappear, while positional result rows are reconstructed. Nothing
+// is written back until the clinician explicitly saves the reviewed SOAP.
+export function normalizeObjectiveLabExportLines(lines: string[]) {
+  if (lines.length === 0) return [];
+  return normalizeLabTableSourceText(lines.join("\n")).lines;
+}
+
 export function sanitizeObjectiveLines(lines: string[]) {
   const accepted: SanitizedObjectiveLine[] = [];
   const rejected: string[] = [];

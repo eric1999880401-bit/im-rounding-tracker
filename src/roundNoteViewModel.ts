@@ -4,7 +4,11 @@ import {
   type ClinicalLineKind,
   type ClinicalLineTone,
 } from "./clinicalLineClassifier";
-import { objectiveKindFromLine, stripRepeatedObjectivePrefixes } from "./objectiveLineSanitizer";
+import {
+  normalizeObjectiveLabExportLines,
+  objectiveKindFromLine,
+  stripRepeatedObjectivePrefixes,
+} from "./objectiveLineSanitizer";
 import { parseSoapText, type SoapApProblem, type SoapDraft } from "./soapDraft";
 import { isOrderSoapLine, stripOrderLinePrefix } from "./userPreferences";
 
@@ -129,7 +133,8 @@ function problemView(problem: SoapApProblem, index: number, options: RoundNoteVi
 }
 
 export function buildRoundNoteViewModelFromDraft(draft: SoapDraft, options: RoundNoteViewModelOptions = {}): RoundNoteViewModel {
-  const objective = draft.oLines.map((line, index) => objectiveLine(line, index, options));
+  const objective = normalizeObjectiveLabExportLines(draft.oLines)
+    .map((line, index) => objectiveLine(line, index, options));
   const taskOrOrderLines = draft.taskLines.map((line, index) => ({ line, index, order: isOrderSoapLine(line) }));
   return {
     header: draft.header.map((line, index) => makeRoundNoteLineView(line, "header", "header", `header-${index}`, options)),

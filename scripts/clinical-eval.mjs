@@ -5085,6 +5085,56 @@ try {
   if (/Mono 4\.3|Eos 2\.4|Baso 1\.0|MCHC 33\.1|MCH 29\.2|MCV 88\.3|RDW 14\.0/.test(visual.text)) {
     throw new Error(`low-yield normal CBC values crowded the rounding Lab row: ${visual.text}`);
   }
+
+  const storedHeaderPollution = [
+    "S:",
+    "- No new complaint",
+    "O:",
+    "- Other: \u5831\u544a\u6642\u9593 WBC Neu Lym Mono Eos Baso E.S.R MDW",
+    "- Other: \u5831\u544a\u6642\u9593 NRBC MCHC MCH MCV PLT PDW RDW Hct Hb",
+    "- Lab: CBC/DC: WBC 8.5, Neu 81.7\u2191, Hb 12.0, Plt 223",
+    "- Lab: Chem/Renal: BUN 30\u2191, Cr 1.68\u2191, eGFR 34.82, Na 140, K 4.1",
+    "A/P:",
+    "# Infection",
+    "- Continue source-directed treatment.",
+  ].join("\n");
+  const canonicalEditor = parseCanonicalSoapTextToEditorDraft(storedHeaderPollution);
+  const canonicalObjectiveText = canonicalEditor.oLines.map((line) => line.text).join(" ");
+  if (/\u5831\u544a\u6642\u9593|\bMDW\b|\bPDW\b/.test(canonicalObjectiveText)) {
+    throw new Error(`saved HIS headers still leaked into the canonical editor: ${canonicalObjectiveText}`);
+  }
+  if (!/WBC 8\.5.*Hb 12\.0.*Plt 223/i.test(canonicalObjectiveText) || !/Cr 1\.68.*eGFR 34\.82.*K 4\.1/i.test(canonicalObjectiveText)) {
+    throw new Error(`canonical header cleanup removed real Lab findings: ${canonicalObjectiveText}`);
+  }
+  const canonicalView = buildRoundNoteViewModel(storedHeaderPollution);
+  const displayedObjectiveText = canonicalView.objective.all.map((line) => line.text).join(" ");
+  if (/\u5831\u544a\u6642\u9593|\bMDW\b|\bPDW\b/.test(displayedObjectiveText)) {
+    throw new Error(`saved HIS headers still leaked into Board/Preview/Print view data: ${displayedObjectiveText}`);
+  }
+
+  const structuredHeaderPollution = structuredRoundSoapToEditorDraft({
+    headerLines: [],
+    subjectiveLines: [],
+    objective: {
+      vitalSigns: [],
+      physicalExam: [],
+      labs: [{ panel: "CBC/DC", values: "WBC 8.5, Hb 12.0, Plt 223" }],
+      microbiology: [],
+      imaging: [],
+      pathology: [],
+      other: ["\u5831\u544a\u6642\u9593 WBC Neu Lym Mono Eos Baso E.S.R MDW"],
+    },
+    assessmentPlan: [],
+    orders: [],
+    tasks: [],
+    discharge: [],
+    warnings: [],
+    highlightHints: [],
+  });
+  const structuredObjectiveText = structuredHeaderPollution.oLines.map((line) => line.text).join(" ");
+  if (/\u5831\u544a\u6642\u9593|\bMDW\b/.test(structuredObjectiveText) || !/WBC 8\.5.*Hb 12\.0.*Plt 223/i.test(structuredObjectiveText)) {
+    throw new Error(`structured AI Lab header cleanup failed: ${structuredObjectiveText}`);
+  }
   console.log("PASS HIS table parser preserves unknown-column offsets and renders compact high-yield Lab groups");
   supplementalPasses += 1;
 } catch (error) {
