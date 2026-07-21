@@ -1,8 +1,8 @@
 import type { DailyNote, ParsedLabItem, Patient } from "./types";
 import { findLabDictionaryItem } from "./data/labDictionary";
+import { buildCanonicalLabDataset, canonicalLabSelectionKey } from "./labDataset";
 import { hasChronicRenalContext } from "./labParsing";
 import { labReferenceForLabel } from "./labReference";
-import { normalizeLabTableSourceText } from "./objectiveLineSanitizer";
 import { parseLabReports, safeClinicalLine, safeClinicalLinePreservingMarks, stripColorMarkup } from "./utils";
 
 const labColorMarkPattern = /\[\[(red|orange|yellow|blue|green|purple)(?:-(?:highlight|text))?:([\s\S]*?)\]\]/gi;
@@ -19,6 +19,7 @@ export type LabVisualGroupId =
 export type LabVisualTone = "critical" | "important" | "plain";
 
 export interface LabVisualItem {
+  sourceId: string;
   key: string;
   label: string;
   value: string;
@@ -51,6 +52,8 @@ export interface LabVisualSummaryOptions {
   maxCharsPerGroup?: number;
   includePlain?: boolean;
   includeLabPrefix?: boolean;
+  preferredItemIds?: string[];
+  preferredLabels?: string[];
 }
 
 interface LabSourceLine {
@@ -62,9 +65,9 @@ interface LabSourceLine {
 
 const labGroupOrder: Array<{ id: LabVisualGroupId; label: string; keys: string[] }> = [
   { id: "cbc", label: "CBC/DC", keys: ["WBC", "Neu", "Hb", "Hct", "Plt", "RBC", "MCV", "RDW", "Lym", "Mono", "Eos", "Baso", "Band"] },
-  { id: "renalLyte", label: "Chem/Renal", keys: ["BUN", "Cr", "eGFR", "Na", "K", "CRP", "hsCRP", "PCT", "Lactate", "Cl", "Ca", "Mg", "P", "Uric acid", "Osm", "ESR"] },
+  { id: "renalLyte", label: "Chem/Renal", keys: ["BUN", "Cr", "eGFR", "Na", "K", "Cl", "Ca", "Mg", "P", "Uric acid", "Osm"] },
   { id: "liverCoag", label: "Liver/Coag", keys: ["AST", "ALT", "ALP", "GGT", "T-Bil", "D-Bil", "Alb", "PT", "INR", "aPTT", "D-dimer", "Fibrinogen", "FDP"] },
-  { id: "infxPerfusion", label: "Micro", keys: ["Blood culture", "Sputum culture", "Urine culture"] },
+  { id: "infxPerfusion", label: "Infx/Perfusion", keys: ["CRP", "hsCRP", "PCT", "Lactate", "ESR", "Blood culture", "Sputum culture", "Urine culture", "Microbiology"] },
   { id: "gas", label: "ABG/VBG", keys: ["pH", "pCO2", "pO2", "HCO3", "BE", "SaO2", "SpO2"] },
   { id: "cardiac", label: "Cardiac", keys: ["Troponin I", "Troponin T", "Troponin", "CK", "CK-MB", "BNP", "NT-proBNP"] },
   { id: "other", label: "Other", keys: [] },
@@ -72,9 +75,9 @@ const labGroupOrder: Array<{ id: LabVisualGroupId; label: string; keys: string[]
 
 const coreDisplayKeys: Record<LabVisualGroupId, string[]> = {
   cbc: ["WBC", "Neu", "Hb", "Plt", "Hct"],
-  renalLyte: ["BUN", "Cr", "eGFR", "Na", "K", "CRP", "hsCRP", "PCT", "Lactate", "Mg", "Ca", "P"],
+  renalLyte: ["BUN", "Cr", "eGFR", "Na", "K", "Mg", "Ca", "P"],
   liverCoag: ["AST", "ALT", "ALP", "T-Bil", "Alb", "PT", "INR", "aPTT"],
-  infxPerfusion: ["Blood culture", "Sputum culture", "Urine culture"],
+  infxPerfusion: ["CRP", "hsCRP", "PCT", "Lactate", "ESR", "Blood culture", "Sputum culture", "Urine culture", "Microbiology"],
   gas: ["pH", "pCO2", "pO2", "HCO3", "BE", "SaO2", "SpO2"],
   cardiac: ["Troponin I", "Troponin T", "Troponin", "BNP", "NT-proBNP", "CK-MB"],
   other: [],
@@ -84,7 +87,7 @@ const defaultGroupItemLimits: Record<LabVisualGroupId, number> = {
   cbc: 7,
   renalLyte: 11,
   liverCoag: 8,
-  infxPerfusion: 4,
+  infxPerfusion: 8,
   gas: 7,
   cardiac: 6,
   other: 4,
@@ -187,6 +190,7 @@ function markedVisualItemsFromText(value: string): LabVisualItem[] {
       const tone: LabVisualTone = segment.color === "red" || computedTone === "critical" ? "critical" : "important";
       const groupId = parsed ? groupIdForItem(parsed) : "other";
       items.push({
+        sourceId: parsed?.id ?? "",
         key: parsed ? label.toLowerCase() : `marked|${segment.inner.toLowerCase()}`,
         label,
         value,
@@ -278,13 +282,12 @@ function trendDirection(label: string, value: string, previousValue: string) {
 }
 
 function groupIdForItem(item: ParsedLabItem): LabVisualGroupId {
+  if (/^(?:Microbiology|Stool studies)$/i.test(String(item.name || item.label || ""))) return "infxPerfusion";
   const dictionaryGroup = dictionaryItemFor(item.name || item.label)?.group ?? "";
   if (dictionaryGroup === "CBC / DC") return "cbc";
   if (dictionaryGroup === "Renal / Electrolytes") return "renalLyte";
   if (dictionaryGroup === "Liver / GI" || dictionaryGroup === "Coagulation") return "liverCoag";
-  if (dictionaryGroup === "Inflammation / Infection") {
-    return /culture/i.test(String(item.name || item.label || "")) ? "infxPerfusion" : "renalLyte";
-  }
+  if (dictionaryGroup === "Inflammation / Infection") return "infxPerfusion";
   if (dictionaryGroup === "ABG / VBG") return "gas";
   if (dictionaryGroup === "Cardiac") return "cardiac";
   return "other";
@@ -336,9 +339,14 @@ function visualItemFromParsed(item: ParsedLabItem, sourceIndex = 0, chronicRenal
   const previous = previousValue ? `(${displayLabValue(label, previousValue)})` : "";
   const text = `${label} ${displayValue}${direction}${previous}`;
   const groupId = trusted ? groupIdForItem(item) : "other";
-  const tone = trusted ? toneForText(label, value, item, chronicRenal) : item.important || item.isImportant ? "important" : "plain";
+  const tone = trusted
+    ? toneForText(label, value, item, chronicRenal)
+    : item.important || item.isImportant || noteDirection(item) || /\babnormal\b/i.test(String(item.note ?? ""))
+      ? "important"
+      : "plain";
 
   return {
+    sourceId: item.id ?? "",
     key: label.toLowerCase(),
     label,
     value,
@@ -405,6 +413,11 @@ function dedupeVisualItems(items: LabVisualItem[]) {
 function buildGroupsFromVisualItems(items: LabVisualItem[], options: LabVisualSummaryOptions) {
   const maxGroups = options.maxGroups ?? Number.POSITIVE_INFINITY;
   const groups = new Map<LabVisualGroupId, LabVisualItem[]>();
+  const preferredItemIds = new Set((options.preferredItemIds ?? []).map((value) => String(value).trim()).filter(Boolean));
+  const preferredLabels = new Set((options.preferredLabels ?? []).map(canonicalLabSelectionKey).filter(Boolean));
+  const hasAiSelection = preferredItemIds.size > 0 || preferredLabels.size > 0;
+  const isPreferred = (item: LabVisualItem) =>
+    Boolean(item.sourceId && preferredItemIds.has(item.sourceId)) || preferredLabels.has(canonicalLabSelectionKey(item.label));
 
   items.forEach((item) => {
     const parsedLikeItem = { label: item.label, name: item.label, value: item.value } satisfies ParsedLabItem;
@@ -418,6 +431,8 @@ function buildGroupsFromVisualItems(items: LabVisualItem[], options: LabVisualSu
       const coreOrder = new Map(coreDisplayKeys[group.id].map((key, index) => [key, index]));
       const orderedItems = dedupeVisualItems(groups.get(group.id) ?? [])
         .sort((left, right) => {
+          const preferredDifference = Number(isPreferred(right)) - Number(isPreferred(left));
+          if (preferredDifference) return preferredDifference;
           const leftCore = coreOrder.get(left.label);
           const rightCore = coreOrder.get(right.label);
           if (leftCore !== undefined || rightCore !== undefined) {
@@ -432,10 +447,15 @@ function buildGroupsFromVisualItems(items: LabVisualItem[], options: LabVisualSu
           const rightOrder = displayOrder.get(`${group.id}|${right.label}`) ?? 99;
           return leftOrder - rightOrder || right.score - left.score || left.label.localeCompare(right.label);
         });
-      const focusedItems = group.id === "other"
-        ? orderedItems
-        : orderedItems.filter((item) => coreOrder.has(item.label) || item.tone !== "plain");
-      const sourceItems = (focusedItems.length > 0 ? focusedItems : orderedItems).slice(0, maxItems);
+      const focusedItems = orderedItems.filter((item) =>
+        isPreferred(item) ||
+        item.tone !== "plain" ||
+        (!hasAiSelection && (
+          (group.id !== "other" && coreOrder.has(item.label)) ||
+          (group.id === "other" && item.label !== "Other")
+        )),
+      );
+      const sourceItems = focusedItems.slice(0, maxItems);
       if (sourceItems.length === 0) return null;
       const tone: LabVisualTone = sourceItems.some((item) => item.tone === "critical")
         ? "critical"
@@ -467,25 +487,39 @@ export function buildLabVisualSummaryFromItems(items: ParsedLabItem[], options: 
 
 export function buildLabVisualSummaryFromText(value: string, options: LabVisualSummaryOptions = {}) {
   const chronicRenal = hasChronicRenalContext(options.patient);
-  const normalizedSource = normalizeLabTableSourceText(value);
-  const sourceLines = splitInputLines(normalizedSource.text)
+  const dataset = buildCanonicalLabDataset(value);
+  const sourceLines = splitInputLines(dataset.normalizedText)
     .map((line) => labSourceLineFrom(line, false))
     .filter((line): line is LabSourceLine => Boolean(line));
   const visualItems: LabVisualItem[] = markedVisualItemsFromText(sourceLines.map((line) => line.body).join("\n"));
+  sourceLines.forEach((source, sourceIndex) => {
+    if (!/\b(?:(?:blood|urine|sputum|csf)\s*(?:culture|cx)|(?:b|u|s)\/?c|(?:bc|uc|sc)x|stool\s+(?:o&p|occult|fobt)|c\.?\s*difficile)\b/i.test(source.body)) return;
+    visualItems.push({
+      sourceId: "",
+      key: `micro|${sourceIndex}|${source.body.toLowerCase()}`,
+      label: "Microbiology",
+      value: source.body,
+      previousValue: "",
+      text: source.body,
+      tone: "important",
+      score: scoreForItem("infxPerfusion", "Microbiology", "important", sourceIndex),
+      sourceIndex,
+      explicitMark: false,
+    });
+  });
+
+  dataset.latestItems.forEach((item, sourceIndex) => {
+    const visualItem = visualItemFromParsed(item, sourceIndex, chronicRenal);
+    if (visualItem && ((options.includePlain ?? true) || visualItem.tone !== "plain")) visualItems.push(visualItem);
+  });
 
   sourceLines.forEach((source, sourceIndex) => {
-    // Untrusted (non-dictionary) items are itemized too — they land in the
-    // Other group instead of vanishing — so the leftover-text blob is only
-    // needed when nothing on the line parsed at all.
-    source.items.forEach((item) => {
-      const visualItem = visualItemFromParsed(item, sourceIndex, chronicRenal);
-      if (visualItem && ((options.includePlain ?? true) || visualItem.tone !== "plain")) visualItems.push(visualItem);
-    });
-
+    // Preserve genuinely unparsed source text only; parsed values come from the canonical dataset above.
     if (source.items.length === 0) {
       const text = cleanOtherText(source);
       if (text) {
         visualItems.push({
+          sourceId: "",
           key: `other|${sourceIndex}|${text.toLowerCase()}`,
           label: "Other",
           value: text,

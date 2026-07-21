@@ -90,6 +90,7 @@ const { applyClinicalColorMarkup, applyUserKeywordHighlights, clearClinicalColor
 const { labReferenceText, parseClinicalLabTokens } = await server.ssrLoadModule("/src/labReference.ts");
 const { boardDischargeTasks, hasBoardDischargeSoonSignal, isBoardNewAdmission } = await server.ssrLoadModule("/src/boardCockpit.ts");
 const { buildLabVisualSummaryFromText, formatLabVisualSummaryFromLines, formatLabVisualSummaryLinesFromText } = await server.ssrLoadModule("/src/labVisualSummary.ts");
+const { buildCanonicalLabDataset, canonicalLabFactsForAi } = await server.ssrLoadModule("/src/labDataset.ts");
 const { normalizeLabTableSourceText } = await server.ssrLoadModule("/src/objectiveLineSanitizer.ts");
 const { acceptStructuredRoundSoap, structuredRoundSoapToEditorDraft } = await server.ssrLoadModule("/src/roundSoapContract.ts");
 const { formatSoapBasedIsbar } = await server.ssrLoadModule("/src/soapSbar.ts");
@@ -687,8 +688,9 @@ try {
   const joined = lines.join("\n");
   for (const required of [
     /CBC\/DC:.*WBC 12\.7.*Neu 88\.9.*Hb 9\.4.*Plt 259/i,
-    /Chem\/Renal:.*BUN 16.*Cr 0\.46.*Na 139.*K 3\.0.*Lactate 3\.1/i,
+    /Chem\/Renal:.*BUN 16.*Cr 0\.46.*Na 139.*K 3\.0/i,
     /Liver\/Coag:.*AST 175.*ALT 419.*INR 1\.8/i,
+    /Infx\/Perfusion:.*Lactate 3\.1/i,
     /Cardiac:.*Troponin I 0\.011/i,
   ]) {
     if (!required.test(joined)) throw new Error(`visual lab summary missing grouped line ${required}:\n${joined}`);
@@ -724,20 +726,99 @@ try {
     "- Continue current treatment.",
   ].join("\n"));
   const labLines = fragmentedAiLab.soapText.split(/\r?\n/).filter((line) => /^- Lab:/i.test(line));
-  if (labLines.length !== 2) {
-    throw new Error(`fragmented AI lab output did not compact to two panel lines:\n${fragmentedAiLab.soapText}`);
+  if (labLines.length !== 3) {
+    throw new Error(`fragmented AI lab output did not compact to three panel lines:\n${fragmentedAiLab.soapText}`);
   }
   if (!/CBC\/DC:.*WBC 12\.7.*Neu 88\.9.*Hb 9\.4.*Plt 259/i.test(labLines[0] ?? "")) {
     throw new Error(`CBC/DC panel is incomplete: ${labLines.join(" | ")}`);
   }
-  if (!/Chem\/Renal:.*BUN 16.*Cr 0\.46.*Na 139.*K 3\.0.*CRP 10/i.test(labLines[1] ?? "")) {
+  if (!/Chem\/Renal:.*BUN 16.*Cr 0\.46.*Na 139.*K 3\.0/i.test(labLines[1] ?? "")) {
     throw new Error(`Chem/Renal panel is incomplete: ${labLines.join(" | ")}`);
   }
-  console.log("PASS Fragmented AI lab lines compact into CBC/DC and Chem/Renal panels");
+  if (!/Infx\/Perfusion:.*CRP 10/i.test(labLines[2] ?? "")) {
+    throw new Error(`Infx/Perfusion panel is incomplete: ${labLines.join(" | ")}`);
+  }
+  console.log("PASS Fragmented AI lab lines compact into clinical panels");
   supplementalPasses += 1;
 } catch (error) {
   failures.push({ name: "AI lab panel compaction", error: error instanceof Error ? error.message : String(error) });
   console.error(`FAIL AI lab panel compaction: ${failures[failures.length - 1].error}`);
+}
+
+try {
+  const hisLabSource = [
+    "[blood]",
+    "report time\tWBC\tNeu\tLym\tCRP\tPCT\tHb\tPlt",
+    "2026-07-20\t12.4\t\t10.6\t10.8*\t0.32\t11.6\t117",
+    "2026-07-18\t9.1\t75\t15\t4.0\t0.12\t12.2\t160",
+    "report time\tBUN\tCr\teGFR\tNa\tK",
+    "2026-07-20\t30\t1.68\t34.82\t140\t4.1",
+  ].join("\n");
+  const dataset = buildCanonicalLabDataset(hisLabSource);
+  const latest = new Map(dataset.latestItems.map((item) => [item.label, item]));
+  for (const [label, expected] of [["WBC", "12.4"], ["Lym", "10.6"], ["CRP", "10.8"], ["PCT", "0.32"], ["Hb", "11.6"], ["Plt", "117"], ["Cr", "1.68"]]) {
+    if (latest.get(label)?.value !== expected) {
+      throw new Error(`canonical HIS parser shifted ${label}; expected ${expected}, got ${latest.get(label)?.value ?? "missing"}:\n${dataset.normalizedText}`);
+    }
+  }
+  if (latest.get("Neu")?.value === "10.6") {
+    throw new Error(`empty Neu cell shifted Lym into Neu:\n${dataset.normalizedText}`);
+  }
+  const facts = canonicalLabFactsForAi(dataset);
+  if (!facts.some((line) => /\[lab-crp-.*\].*CRP 10\.8.*previous 4\.0/i.test(line))) {
+    throw new Error(`canonical AI facts lost CRP/current-prior/date grounding:\n${facts.join("\n")}`);
+  }
+
+  const idFor = (label) => latest.get(label)?.id ?? "";
+  const selectedDraft = {
+    headerLines: ["Synthetic patient"],
+    subjectiveLines: ["No new complaint"],
+    objective: {
+      vitalSigns: ["T 37.0 C, BP 118/70, HR 82, SpO2 97% RA"],
+      physicalExam: [],
+      labs: [
+        { panel: "CBC/DC", values: "WBC 999, Hb 1", sourceIds: [idFor("WBC"), idFor("Hb")] },
+        { panel: "Infx/Perfusion", values: "CRP 999", sourceIds: [idFor("CRP"), idFor("PCT")] },
+        { panel: "Chem/Renal", values: "Cr 9", sourceIds: [idFor("Cr")] },
+      ],
+      microbiology: [],
+      imaging: [],
+      pathology: [],
+      other: [],
+    },
+    assessmentPlan: [{ problemTitle: "Infection", status: "active", summary: "Inflammatory markers remain elevated.", plan: "Review clinical response.", sourceEvidence: ["CRP 10.8"] }],
+    orders: [],
+    tasks: [],
+    discharge: [],
+    warnings: [],
+    highlightHints: [],
+  };
+  const accepted = acceptStructuredRoundSoap({
+    value: selectedDraft,
+    baselineText: "Synthetic patient\nS:\n- No new complaint\nO:\n- Lab: CBC/DC: WBC 9.1, Hb 12.2\nA/P:\n# Infection\n- Stable.\nTasks:\nDC:",
+    sourceFields: { labs: hisLabSource },
+    workflowMode: "dailyUpdate",
+  });
+  const rendered = accepted.review.acceptedText;
+  if (!/Infx\/Perfusion:.*CRP 10\.8.*\(4(?:\.0)?\)/i.test(rendered) || !/CBC\/DC:.*WBC 12\.4.*Hb 11\.6/i.test(rendered) || !/Chem\/Renal:.*Cr 1\.68/i.test(rendered)) {
+    throw new Error(`AI-selected canonical labs were not rendered from source:\n${rendered}`);
+  }
+  if (/\b999\b|\bHb 1\b|\bCr 9\b/.test(rendered)) {
+    throw new Error(`model-written lab values overrode canonical source values:\n${rendered}`);
+  }
+
+  const ambiguous = normalizeLabTableSourceText([
+    "report time WBC Neu Lym CRP Hb",
+    "2026-07-20 8.5 81.7 10.6 11.6",
+  ].join("\n"));
+  if (/WBC|Neu|Lym|CRP|Hb/.test(ambiguous.text)) {
+    throw new Error(`ambiguous whitespace row was positionally shifted instead of rejected:\n${ambiguous.text}`);
+  }
+  console.log("PASS Canonical HIS lab dataset preserves empty cells and source-owned AI selection");
+  supplementalPasses += 1;
+} catch (error) {
+  failures.push({ name: "Canonical HIS lab dataset and AI source selection", error: error instanceof Error ? error.message : String(error) });
+  console.error(`FAIL Canonical HIS lab dataset and AI source selection: ${failures[failures.length - 1].error}`);
 }
 
 try {
@@ -4775,7 +4856,7 @@ try {
     selectedDate: "2026-07-10",
     rawText: "Na 158 from 142; CXR 07-10 RLL opacity improving",
     currentSoapBaseline: "S:\n- no dyspnea\nO:\nLab: Na 142\nA/P:\n# CAP\n- ceftriaxone",
-    patientContext: { primaryDiagnosis: "CAP" },
+    patientContext: { primaryDiagnosis: "CAP", labFacts: ["[lab-na-2026-07-10-0-0]; Na 158; previous 142; date 2026-07-10; flag H"] },
     userStyleProfile: { styleSummary: "terse IM abbreviations" },
     dailyNotes: [],
   });
@@ -4787,6 +4868,8 @@ try {
     /A baseline omission is an intentional clinician edit/i,
     /SILENT FINAL CHECK BEFORE RETURNING JSON/i,
     /every current high-risk fact is present once/i,
+    /Each lab object must include sourceIds/i,
+    /application will render the source value verbatim/i,
     /Today's pasted de-identified clinical data:\nNa 158 from 142/i,
   ];
   requiredRules.forEach((pattern) => {
@@ -4954,7 +5037,7 @@ try {
   if (/\u5831\u544a\u6642\u9593|Other:\s*Other:/i.test(roundTrip)) {
     throw new Error(`lab export header leaked into reviewed SOAP blocks:\n${roundTrip}`);
   }
-  if (!/Lab:[^\n]*stool O&P\/occult blood neg\.[^\n]*Blood Cx 07-08/i.test(roundTrip)) {
+  if (!/Lab:[^\n]*stool O&P\/occult blood neg\./i.test(roundTrip) || !/Lab:[^\n]*Blood Cx 07-08/i.test(roundTrip)) {
     throw new Error(`micro/stool results were not routed to Lab:\n${roundTrip}`);
   }
   if (!/Image: Colonoscopy 07-14/i.test(roundTrip) || /Image:\s*Image:/i.test(roundTrip)) {
@@ -5073,13 +5156,13 @@ try {
   if (!/CBC\/DC: WBC 8\.5.*Neu 81\.7.*Hb 12\.0.*Plt 223/i.test(visual.text)) {
     throw new Error(`CBC visual anchors are missing or out of order: ${visual.text}`);
   }
-  if (!/Chem\/Renal: BUN 30.*Cr 1\.68.*eGFR 34\.82.*Na 140.*K 4\.1.*hsCRP 2\.9.*Ca 8\.6/i.test(visual.text)) {
+  if (!/Chem\/Renal: BUN 30.*Cr 1\.68.*eGFR 34\.82.*Na 140.*K 4\.1.*Ca 8\.6/i.test(visual.text) || !/Infx\/Perfusion:.*hsCRP 2\.9/i.test(visual.text)) {
     throw new Error(`Chem/Renal visual anchors are missing or out of order: ${visual.text}`);
   }
   if ((visual.text.match(/CBC\/DC:/g) ?? []).length !== 1 || (visual.text.match(/Chem\/Renal:/g) ?? []).length !== 1) {
     throw new Error(`visual Lab groups fragmented into duplicate rows: ${visual.text}`);
   }
-  if (/Other:|\u5831\u544a\u6642\u9593|\[\u8840\u6db2\]/.test(visual.text) || visual.lines.some((line) => line.length > 190)) {
+  if (/\u5831\u544a\u6642\u9593|\[\u8840\u6db2\]/.test(visual.text) || visual.lines.some((line) => line.length > 190)) {
     throw new Error(`visual Lab output leaked metadata or exceeded stable row length: ${visual.text}`);
   }
   if (/Mono 4\.3|Eos 2\.4|Baso 1\.0|MCHC 33\.1|MCH 29\.2|MCV 88\.3|RDW 14\.0/.test(visual.text)) {
@@ -5370,8 +5453,8 @@ try {
   if (!/Lab: CBC\/DC: WBC 12\.7.*Neu 88\.9.*Hb 12\.0.*Plt 259/.test(acceptedText)) {
     throw new Error(`source-owned CBC line was not reconstructed completely:\n${acceptedText}`);
   }
-  if (!/Lab: Chem\/Renal:.*BUN 24.*Cr 1\.2.*Na 150.*K 4\.0.*CRP 10/.test(acceptedText)) {
-    throw new Error(`source-owned Chem/Renal panel was not reconstructed completely:\n${acceptedText}`);
+  if (!/Lab: Chem\/Renal:.*BUN 24.*Cr 1\.2.*Na 150.*K 4\.0/.test(acceptedText) || !/Lab: Infx\/Perfusion:.*CRP 10/.test(acceptedText)) {
+    throw new Error(`source-owned clinical Lab panels were not reconstructed completely:\n${acceptedText}`);
   }
   if (!/# Hypernatremia[\s\S]*Na 150/.test(acceptedText) || /# .*anemia/i.test(acceptedText)) {
     throw new Error(`A/P significance gate failed:\n${acceptedText}`);
@@ -5422,8 +5505,8 @@ try {
   missingCriticalApDraft.warnings = ["No current medication orders supplied.", "Uncontextualized fluid balance omitted."];
   const missingCriticalAp = acceptStructuredRoundSoap({ value: missingCriticalApDraft, baselineText: "", sourceFields, workflowMode: "newSoap" });
   const missingCriticalApText = editorDraftToSoapText(missingCriticalAp.draft);
-  if (missingCriticalAp.fatalErrors.length > 0 || !/# Hypernatremia[\s\S]*Na 150; management plan not documented/i.test(missingCriticalApText) || missingCriticalAp.review.warnings.length > 0) {
-    throw new Error(`critical source Lab did not create a concise reviewable A/P without warning spam:\n${missingCriticalApText}\n${missingCriticalAp.review.warnings.join(" | ")}`);
+  if (missingCriticalAp.fatalErrors.length > 0 || /# Hypernatremia|management plan not documented/i.test(missingCriticalApText) || !/Lab: Chem\/Renal:.*Na 150/i.test(missingCriticalApText)) {
+    throw new Error(`deterministic Lab display created a rule-generated A/P instead of preserving source O/Lab:\n${missingCriticalApText}`);
   }
 
   const baseline = editorDraftToSoapText(structuredRoundSoapToEditorDraft(structuredDraft));

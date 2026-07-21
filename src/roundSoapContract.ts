@@ -1,5 +1,6 @@
 import { extractActiveAntibioticNames } from "./antibioticPlan";
 import { classifyClinicalLine, type ClinicalLineKind } from "./clinicalLineClassifier";
+import { buildCanonicalLabDataset, labSelectionKeysFromText } from "./labDataset";
 import { formatLabVisualSummaryLinesFromText } from "./labVisualSummary";
 import { normalizeObjectiveLabExportLines, objectiveKindFromLine } from "./objectiveLineSanitizer";
 import {
@@ -132,8 +133,25 @@ function looksLikeImage(value: string) {
   return /\b(?:CXR|CT|MRI|X-?ray|Echo|Sono|Ultrasound|US|PET|ERCP|EGD|Colonoscopy)\b/i.test(value);
 }
 
-function sourceLabEditorLines(fields: RoundSoapSourceFields) {
-  return formatLabVisualSummaryLinesFromText(String(fields.labs ?? ""), { includePlain: true })
+function sourceLabEditorLines(
+  fields: RoundSoapSourceFields,
+  selectedLabs: StructuredRoundSoapDraft["objective"]["labs"] = [],
+) {
+  const dataset = buildCanonicalLabDataset(String(fields.labs ?? ""));
+  const validIds = new Set(dataset.latestItems.map((item) => item.id).filter(Boolean));
+  const preferredItemIds = selectedLabs
+    .flatMap((item) => item.sourceIds ?? [])
+    .filter((id) => validIds.has(id));
+  // Older deployed functions do not return sourceIds. Label selection keeps
+  // those responses useful while exact values still come only from source.
+  const preferredLabels = selectedLabs
+    .filter((item) => !(item.sourceIds ?? []).some((id) => validIds.has(id)))
+    .flatMap((item) => labSelectionKeysFromText(item.values));
+  return formatLabVisualSummaryLinesFromText(String(fields.labs ?? ""), {
+    includePlain: true,
+    preferredItemIds,
+    preferredLabels,
+  })
     .map((text) => editorLine(text.replace(/^Lab\s*:\s*/i, ""), "lab"))
     .filter((line) => line.text);
 }
@@ -346,37 +364,6 @@ function attachSourceAntibioticsToAp(problems: SoapEditorProblem[], orderLines: 
   return next;
 }
 
-function addCriticalLabProblems(problems: SoapEditorProblem[], labText: string) {
-  const next = [...problems];
-  const definitions: Array<{
-    label: string;
-    pattern: RegExp;
-    isCritical: (value: number) => boolean;
-    apPattern: RegExp;
-    title: (value: number) => string;
-  }> = [
-    { label: "Na", pattern: /\bNa\s*[:=]?\s*(-?\d+(?:\.\d+)?)/i, isCritical: (value) => value <= 125 || value >= 150, apPattern: /\b(?:Na|sodium|hypernat|hyponat|free[- ]?water)\b/i, title: (value) => value >= 150 ? "Hypernatremia" : "Hyponatremia" },
-    { label: "K", pattern: /\bK\s*[:=]?\s*(-?\d+(?:\.\d+)?)/i, isCritical: (value) => value <= 2.8 || value >= 6, apPattern: /\b(?:K|potassium|hyperkal|hypokal)\b/i, title: (value) => value >= 6 ? "Hyperkalemia" : "Hypokalemia" },
-    { label: "Hb", pattern: /\b(?:Hb|Hgb)\s*[:=]?\s*(\d+(?:\.\d+)?)/i, isCritical: (value) => value < 7, apPattern: /\b(?:Hb|Hgb|anemia|bleed|transfus)\b/i, title: () => "Severe anemia" },
-    { label: "lactate", pattern: /\blactate\s*[:=]?\s*(\d+(?:\.\d+)?)/i, isCritical: (value) => value >= 4, apPattern: /\b(?:lactate|shock|sepsis|hypoperfusion)\b/i, title: () => "Lactic acidosis / hypoperfusion" },
-    { label: "INR", pattern: /\bINR\s*[:=]?\s*(\d+(?:\.\d+)?)/i, isCritical: (value) => value >= 5, apPattern: /\b(?:INR|coagul|warfarin|bleed)\b/i, title: () => "Marked coagulopathy" },
-  ];
-  definitions.forEach((definition) => {
-    const match = labText.match(definition.pattern);
-    if (!match) return;
-    const value = Number(match[1]);
-    const apText = next.map((problem) => `${problem.title} ${problem.lines.map((line) => line.text).join(" ")}`).join(" ");
-    if (!definition.isCritical(value) || definition.apPattern.test(apText)) return;
-    next.push({
-      id: createId("soap-ap"),
-      title: definition.title(value),
-      tone: "critical",
-      lines: [{ ...editorLine(`${definition.label} ${match[1]}; management plan not documented.`, "ap"), tone: "critical" }],
-    });
-  });
-  return next;
-}
-
 function actionableModelWarnings(values: string[]) {
   return [...new Set(values.map(clean).filter(Boolean))].filter((warning) =>
     /\b(?:critical|unstable|active bleeding|shock|code status|allergy|cannot verify|conflicting)\b/i.test(warning) &&
@@ -470,7 +457,7 @@ export function acceptStructuredRoundSoap(params: {
   const sourceHasImages = hasText(params.sourceFields.images) || looksLikeImage(source);
   const sourceHasOther = hasText(params.sourceFields.other);
   const sourceHasOrders = hasText(params.sourceFields.orders);
-  const sourceOwnedLabs = sourceHasLabs ? sourceLabEditorLines(params.sourceFields) : [];
+  const sourceOwnedLabs = sourceHasLabs ? sourceLabEditorLines(params.sourceFields, params.value.objective.labs) : [];
   const sourceOwnedVitals = sourceHasVitals ? sourceVitalLines(params.sourceFields.vitals) : [];
   const sourceOwnedImages = sourceHasImages ? sourceImageEditorLines(params.sourceFields) : [];
   const sourceOwnedPathology = looksLikePathology(source) ? sourcePathologyEditorLines(params.sourceFields) : [];
@@ -500,7 +487,7 @@ export function acceptStructuredRoundSoap(params: {
       ...(sourceOwnedImages.length > 0 ? sourceOwnedImages : generatedO.image),
       ...uniqueEditorLines([...generatedO.other, ...sourceOwnedPathology]),
     ],
-    apProblems: addCriticalLabProblems(sanitizeRepeatedApContent(attachSourceAntibioticsToAp(groundedProblems, sourceOwnedOrders)), sourceOwnedLabText),
+    apProblems: sanitizeRepeatedApContent(attachSourceAntibioticsToAp(groundedProblems, sourceOwnedOrders)),
     taskLines: uniqueEditorLines([...sourceOwnedOrders, ...generatedTasks.orderLines, ...generatedTasks.taskOnlyLines]),
   };
   let accepted = repairedGenerated;
@@ -522,7 +509,7 @@ export function acceptStructuredRoundSoap(params: {
         ...(sourceHasImages ? mergeDailyImages(priorO.image, nextO.image) : priorO.image),
         ...(sourceHasOther && nextO.other.length > 0 ? uniqueEditorLines([...priorO.other, ...nextO.other]) : priorO.other),
       ],
-      apProblems: addCriticalLabProblems(sanitizeRepeatedApContent(attachSourceAntibioticsToAp(mergedProblems, sourceOwnedOrders)), sourceOwnedLabText),
+      apProblems: sanitizeRepeatedApContent(attachSourceAntibioticsToAp(mergedProblems, sourceOwnedOrders)),
       taskLines: [
         ...(sourceHasOrders ? uniqueEditorLines([...priorTasks.orderLines, ...nextTasks.orderLines]) : priorTasks.orderLines),
         ...(sourceHasOther ? nextTasks.taskOnlyLines : priorTasks.taskOnlyLines),

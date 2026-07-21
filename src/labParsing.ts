@@ -63,6 +63,10 @@ function shouldSkipGenericLabLabel(value: string) {
   return /^(bp|hr|rr|bt|temp|spo2|sat|fio2|ef|pasp|pco|hco|day|date|age|bed|room|rm|pt|patient|code|dose|qd|bid|tid|qid|mg|kg|cm|min|hour|hr|afebrile|febrile|fever)$/i.test(compact);
 }
 
+function looksLikeMicrobiologyLabel(value: string) {
+  return /^(?:(?:blood|urine|sputum|csf)\s*(?:culture|cx)|(?:b|u|s)\/?c|(?:bc|uc|sc)x)$/i.test(value.trim());
+}
+
 function parsedLabItem(
   label: string,
   value: string,
@@ -197,7 +201,7 @@ function parseLabItemsFromLine(line: string, important: boolean, groupHint = "")
 
   Array.from(line.matchAll(genericDirectionalPattern)).forEach((match) => {
     const label = normalizeGenericLabLabel(match[1]);
-    if (shouldSkipGenericLabLabel(label) || findLabDictionaryItem(label)) return;
+    if (shouldSkipGenericLabLabel(label) || findLabDictionaryItem(label) || looksLikeMicrobiologyLabel(label)) return;
     directionalKeys.add(canonicalLabKey(label));
     items.push(parsedLabItem(label, match[3], match[2], important, groupHint || "Other labs", normalizeLabNote(match[4], match[5], match[6]) || "trend", unitAfterMatch(line, match.index, match[3])));
   });
@@ -237,7 +241,7 @@ function parseLabItemsFromLine(line: string, important: boolean, groupHint = "")
 
   Array.from(line.matchAll(genericPattern)).forEach((match) => {
     const label = normalizeGenericLabLabel(match[1]);
-    if (directionalKeys.has(canonicalLabKey(label)) || shouldSkipGenericLabLabel(label) || findLabDictionaryItem(label)) return;
+    if (directionalKeys.has(canonicalLabKey(label)) || shouldSkipGenericLabLabel(label) || findLabDictionaryItem(label) || looksLikeMicrobiologyLabel(label)) return;
     const note = normalizeLabNote(match[5], match[6], match[7]);
     const hasContext = Boolean(groupHint) || /\b(lab|cbc|chem|renal|electrolyte|coag|tumou?r|marker|level|culture|serum|plasma|urine)\b/i.test(line);
     const hasSignal = Boolean(note || match[3] || match[4]);

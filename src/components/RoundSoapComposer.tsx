@@ -66,6 +66,7 @@ import {
   suggestedRoundSoapWorkflow,
   type RoundSoapWorkflowMode,
 } from "../roundSoapWorkflow";
+import { buildCanonicalLabDataset, canonicalLabFactsForAi } from "../labDataset";
 
 interface RoundSoapComposerProps {
   patient: Patient;
@@ -644,6 +645,7 @@ function RoundSoapComposer({
       source: canonical.source,
     });
     const requestSourceFields = currentSourceFields(requestWorkflowMode);
+    const canonicalLabFacts = canonicalLabFactsForAi(buildCanonicalLabDataset(String(requestSourceFields.labs ?? "")));
     setError("");
     setStatus("");
     setWarnings([]);
@@ -696,7 +698,10 @@ function RoundSoapComposer({
             currentSoapBaseline: requestBaseline,
             deidentifiedConfirmed: true,
             qualityMode: requestQualityMode,
-            patientContext: patientContext(patient),
+            patientContext: {
+              ...patientContext(patient),
+              ...(canonicalLabFacts.length > 0 ? { labFacts: canonicalLabFacts } : {}),
+            },
             userStyleProfile: aiStyleProfile,
           });
 

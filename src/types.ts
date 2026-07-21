@@ -201,6 +201,7 @@ export interface GenerateRoundSoapInput {
     sex?: string;
     pmh?: string[] | string;
     activeProblems?: string[] | string;
+    labFacts?: string[];
   };
 }
 
@@ -234,7 +235,7 @@ export interface StructuredRoundSoapDraft {
   objective: {
     vitalSigns: string[];
     physicalExam: string[];
-    labs: Array<{ panel: RoundSoapLabPanel; values: string }>;
+    labs: Array<{ panel: RoundSoapLabPanel; values: string; sourceIds?: string[] }>;
     microbiology: string[];
     imaging: Array<{ study: string; date: string; finding: string }>;
     pathology: Array<{ date: string; specimen: string; result: string }>;

@@ -51,6 +51,7 @@ export interface CallableInput {
     sex?: unknown;
     pmh?: unknown;
     activeProblems?: unknown;
+    labFacts?: unknown;
   };
 }
 

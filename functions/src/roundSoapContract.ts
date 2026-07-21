@@ -13,7 +13,7 @@ export interface StructuredRoundSoapDraft {
   objective: {
     vitalSigns: string[];
     physicalExam: string[];
-    labs: Array<{ panel: RoundSoapObjectivePanel; values: string }>;
+    labs: Array<{ panel: RoundSoapObjectivePanel; values: string; sourceIds: string[] }>;
     microbiology: string[];
     imaging: Array<{ study: string; date: string; finding: string }>;
     pathology: Array<{ date: string; specimen: string; result: string }>;
@@ -80,6 +80,7 @@ export function parseStructuredRoundSoapDraft(value: unknown): StructuredRoundSo
             return {
               panel: objectivePanels.has(panel) ? panel : "Other" as const,
               values: text(lab.values),
+              sourceIds: lines(lab.sourceIds, 20),
             };
           }).filter((item) => item.values).slice(0, 8)
         : [],

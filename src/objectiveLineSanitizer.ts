@@ -13,7 +13,7 @@ const objectivePrefixPattern = /^(?:O|Objective|Other|V\/S|VS|Vitals?|PE|Physica
 const explicitObjectivePrefixPattern = /^(V\/S|VS|Vitals?|PE|Physical exam|Labs?|Image|Img)\s*[:\uFF1A]\s*/i;
 const labLabelPattern = /\b(?:WBC|Neu|Neut|Lym|Mono|Eos|Baso|NRBC|RBC|Hb|Hgb|Hct|MCV|MCH|MCHC|RDW|Plt|Platelet|MPV|MDW|BUN|Cr|CRE|Creatinine|e?GFR|Na|K|Cl|Ca|Mg|Phos|P|Osm|AST|ALT|ALP|GGT|T-?Bil|D-?Bil|Alb|PT|INR|aPTT|CRP|hsCRP|PCT|Lactate)\b/gi;
 const labResultPattern = /\b(?:WBC|Neu|Neut|Lym|Mono|Eos|Baso|NRBC|RBC|Hb|Hgb|Hct|MCV|MCH|MCHC|RDW|Plt|Platelet|MPV|MDW|BUN|Cr|CRE|Creatinine|e?GFR|Na|K|Cl|Ca|Mg|Phos|P|Osm|AST|ALT|ALP|GGT|T-?Bil|D-?Bil|Alb|PT|INR|aPTT|CRP|hsCRP|PCT|Lactate)\s*(?:[:=]\s*)?[<>]?\s*-?\d+(?:\.\d+)?/i;
-const positionalLabValuePattern = /^[<>]?-?\d+(?:,\d{3})*(?:\.\d+)?%?(?:\*+|[HL])?$/i;
+const positionalLabValuePattern = /^[<>]?-?\d+(?:,\d{3})*(?:\.\d+)?%?(?:\*+|[HL]|[\u2191\u2193\u2197\u2198])?$/i;
 
 const canonicalLabLabels: Record<string, string> = {
   neut: "Neu",
@@ -131,10 +131,10 @@ function positionalLabHeaderTokens(value: string) {
   const withoutCue = body
     .replace(/^.*?(?:\u5831\u544a\u6642\u9593|\u6aa2\u9a57\u9805\u76ee|report\s*time|reported\s*at|test\s*name|analyte)\s*[:\uFF1A]?\s*/i, "")
     .trim();
-  const tokens = withoutCue
-    .split(/\s+/)
+  const tokens = (withoutCue.includes("\t") ? withoutCue.split("\t") : withoutCue.split(/\s+/))
     .map((token) => token.replace(/^[,;:]+|[,;:]+$/g, "").trim())
-    .filter(Boolean);
+    // Empty tab cells are real table columns and must retain their position.
+    .filter((token) => withoutCue.includes("\t") || Boolean(token));
   while (/^(?:CBC(?:\/DC)?|DC|hematology|chemistry|biochemistry|renal|electrolytes?|coagulation|\u8840\u6db2|\u751f\u5316|\u8840\u6e05|\u51dd\u8840|\u5c3f\u6db2)$/i.test(tokens[0] ?? "")) {
     tokens.shift();
   }
@@ -143,29 +143,45 @@ function positionalLabHeaderTokens(value: string) {
 
 function positionalLabColumns(value: string): PositionalLabColumn[] {
   return positionalLabHeaderTokens(value).map((raw) => {
+    if (!raw || /^(?:flag|abn|abnormal|unit|units?|ref|reference|range|status|comment|note|\u55ae\u4f4d|\u53c3\u8003\u503c|\u7570\u5e38|\u5099\u8a3b)$/i.test(raw)) {
+      return { raw, label: "" };
+    }
     const dictionary = findLabDictionaryItem(raw);
     const fallback = canonicalLabLabels[raw.toLowerCase()] ?? "";
-    return { raw, label: dictionary?.displayName ?? fallback };
+    const generic = /^[A-Za-z][A-Za-z0-9.+/%_-]{0,23}$/.test(raw) ? raw.replace(/\.$/, "") : "";
+    return { raw, label: dictionary?.displayName || fallback || generic };
   });
 }
 
 function positionalLabRow(value: string, columns: PositionalLabColumn[]) {
   const body = plainObjectiveBody(value);
   const date = body.match(/^\s*(20\d{2}[-/]\d{1,2}[-/]\d{1,2}|\d{1,2}\/\d{1,2})\b/)?.[1] ?? "";
-  const withoutDate = date
-    ? body.slice(body.indexOf(date) + date.length).replace(/^\s+\d{1,2}:\d{2}(?::\d{2})?\s*/, "").trim()
-    : body;
-  const rawTokens = withoutDate.split(/\s+/).filter(Boolean);
+  const tabDelimited = body.includes("\t");
+  const afterDate = date ? body.slice(body.indexOf(date) + date.length) : body;
+  // Remove the date-column delimiter, but preserve an immediately following
+  // empty tab cell because it represents a missing result for column 1.
+  let withoutDate = tabDelimited
+    ? afterDate.replace(/^[ ]+/, "").replace(/^\t/, "")
+    : afterDate.replace(/^\s+\d{1,2}:\d{2}(?::\d{2})?\s*/, "").trim();
+  let rawTokens = tabDelimited
+    ? withoutDate.split("\t").map((token) => token.trim())
+    : withoutDate.split(/\s+/).filter(Boolean);
+  if (tabDelimited && /^\d{1,2}:\d{2}(?::\d{2})?$/.test(rawTokens[0] ?? "")) rawTokens = rawTokens.slice(1);
   const tokens: string[] = [];
   rawTokens.forEach((token) => {
-    if (/^(?:\*+|[HL]|[\u2191\u2193\u2197\u2198])$/i.test(token) && tokens.length > 0) {
+    if (!tabDelimited && /^(?:\*+|[HL]|[\u2191\u2193\u2197\u2198])$/i.test(token) && tokens.length > 0) {
       tokens[tokens.length - 1] += token;
       return;
     }
     tokens.push(token);
   });
   const numericCount = tokens.filter((token) => positionalLabValuePattern.test(token)).length;
-  if (columns.length < 2 || numericCount < 2 || numericCount < Math.min(columns.length, tokens.length) * 0.5) return "";
+  if (columns.length < 2 || numericCount < (tabDelimited ? 1 : 2)) return "";
+  if (!tabDelimited && numericCount < Math.min(columns.length, tokens.length) * 0.5) return "";
+  // Space-delimited exports cannot represent empty cells. If the counts do
+  // not match, positional assignment would silently shift every later value.
+  // Reject that ambiguous row rather than display a confidently wrong lab.
+  if (!tabDelimited && tokens.length !== columns.length) return "";
 
   const items = columns.flatMap((column, index) => {
     const label = column.label;
@@ -175,7 +191,7 @@ function positionalLabRow(value: string, columns: PositionalLabColumn[]) {
     const cleanValue = rawValue.replace(/\*+|[HL\u2191\u2193\u2197\u2198]$/gi, "");
     return cleanValue ? [`${label} ${cleanValue}${markedAbnormal ? "*" : ""}`] : [];
   });
-  if (items.length < 2) return "";
+  if (items.length < (tabDelimited ? 1 : 2)) return "";
   return `${date ? `${date} ` : ""}${items.join(", ")}`.trim();
 }
 
