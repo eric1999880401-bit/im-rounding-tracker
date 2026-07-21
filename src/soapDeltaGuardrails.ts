@@ -35,6 +35,8 @@ export interface RoundSoapSourceFields {
   other?: string;
   admission?: string;
   lastSoap?: string;
+  // Validator-only copy of the paste before table routing/sanitization.
+  rawSource?: string;
 }
 
 export interface SoapDeltaChangedSection {

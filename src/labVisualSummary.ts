@@ -26,6 +26,8 @@ export interface LabVisualItem {
   text: string;
   tone: LabVisualTone;
   score: number;
+  sourceIndex: number;
+  explicitMark: boolean;
 }
 
 export interface LabVisualGroup {
@@ -165,6 +167,8 @@ function markedVisualItemsFromText(value: string): LabVisualItem[] {
         text: segment.markup,
         tone,
         score: scoreForItem(groupId, label, tone, sourceIndex) + 500,
+        sourceIndex,
+        explicitMark: true,
       });
     });
   });
@@ -313,6 +317,8 @@ function visualItemFromParsed(item: ParsedLabItem, sourceIndex = 0, chronicRenal
     text,
     tone,
     score: scoreForItem(groupId, label, tone, sourceIndex),
+    sourceIndex,
+    explicitMark: false,
   };
 }
 
@@ -328,11 +334,41 @@ function cleanOtherText(source: LabSourceLine) {
     .replace(/^[,;]+\s*|[,;]+$/g, "");
 }
 
+function withPreviousVisualValue(current: LabVisualItem, previous: LabVisualItem) {
+  if (current.explicitMark || current.previousValue || current.value === previous.value) return current;
+  const direction = trendDirection(current.label, current.value, previous.value);
+  if (!direction) return current;
+  const tone: LabVisualTone = current.tone === "plain" ? "important" : current.tone;
+  return {
+    ...current,
+    previousValue: previous.value,
+    text: `${current.label} ${displayLabValue(current.label, current.value)}${direction}(${displayLabValue(current.label, previous.value)})`,
+    tone,
+    score: current.score + (tone !== current.tone ? 200 : 0),
+  };
+}
+
 function dedupeVisualItems(items: LabVisualItem[]) {
   const byKey = new Map<string, LabVisualItem>();
   items.forEach((item) => {
     const existing = byKey.get(item.key);
-    if (!existing || item.score >= existing.score) byKey.set(item.key, item);
+    if (!existing) {
+      byKey.set(item.key, item);
+      return;
+    }
+    if (item.explicitMark !== existing.explicitMark) {
+      if (item.explicitMark) byKey.set(item.key, item);
+      return;
+    }
+    if (item.sourceIndex < existing.sourceIndex) {
+      byKey.set(item.key, withPreviousVisualValue(item, existing));
+      return;
+    }
+    if (item.sourceIndex > existing.sourceIndex) {
+      byKey.set(item.key, withPreviousVisualValue(existing, item));
+      return;
+    }
+    if (item.score >= existing.score) byKey.set(item.key, item);
   });
   return [...byKey.values()];
 }
@@ -414,6 +450,8 @@ export function buildLabVisualSummaryFromText(value: string, options: LabVisualS
           text,
           tone: source.important ? "important" : "plain",
           score: scoreForItem("other", "Other", source.important ? "important" : "plain", sourceIndex),
+          sourceIndex,
+          explicitMark: false,
         });
       }
     }

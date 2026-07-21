@@ -14,7 +14,9 @@ function todayDate() {
 }
 
 const labValuePattern = "([<>]?[0-9]+(?:\\.[0-9]+)?%?\\+?)";
-const labFlagPattern = "(?:\\s*(?:\\[?([HL])\\]?|([↑↓↗↘])|\\b(high|low|elevated|decreased|positive|negative|pos|neg|reactive|nonreactive|detected|not detected)\\b))?";
+// H/L flags must be standalone. Without the trailing guard, `Neu 88.9 Hb 12`
+// consumes the H in Hb as a high flag and silently drops the Hb result.
+const labFlagPattern = "(?:\\s*(?:\\[?([HL])\\]?(?![A-Za-z])|([↑↓↗↘])|\\b(high|low|elevated|decreased|positive|negative|pos|neg|reactive|nonreactive|detected|not detected)\\b))?";
 const labUnitPattern = "(ng\\/mL|ng\\/L|pg\\/mL|ug\\/mL|µg\\/mL|mcg\\/mL|mg\\/dL|g\\/dL|k\\/uL|10\\^3\\/uL|mmol\\/L|mEq\\/L|U\\/L|IU\\/L|%)";
 
 function escapeRegExp(value: string) {
@@ -120,11 +122,11 @@ function parseLabItemsFromLine(line: string, important: boolean, groupHint = "")
     "gi",
   );
   const pattern = new RegExp(
-    `(?:^|\\b)(${labAliasPattern()})\\.?\\s*(?:[:=]\\s*)?${labValuePattern}(?:\\s*(?:\\(\\s*${labValuePattern}\\s*\\)|from(?:\\s+baseline)?\\s*${labValuePattern}))?${labFlagPattern}`,
+    `(?:^|\\b)(${labAliasPattern()})\\.?\\s*(?:[:=]\\s*)?${labValuePattern}(?:\\s*(?:\\(\\s*${labValuePattern}\\s*\\)|(?:from(?:\\s+baseline)?|prior(?:\\s+value)?|previous(?:\\s+value)?)\\s*${labValuePattern}))?${labFlagPattern}`,
     "gi",
   );
   const genericPattern = new RegExp(
-    `(?:^|[,;])\\s*([A-Za-z][A-Za-z0-9+./() -]{1,28}?)\\s*(?:[:=])?\\s*${labValuePattern}(?:\\s*(?:\\(\\s*${labValuePattern}\\s*\\)|from(?:\\s+baseline)?\\s*${labValuePattern}))?${labFlagPattern}`,
+    `(?:^|[,;])\\s*([A-Za-z][A-Za-z0-9+./() -]{1,28}?)\\s*(?:[:=])?\\s*${labValuePattern}(?:\\s*(?:\\(\\s*${labValuePattern}\\s*\\)|(?:from(?:\\s+baseline)?|prior(?:\\s+value)?|previous(?:\\s+value)?)\\s*${labValuePattern}))?${labFlagPattern}`,
     "gi",
   );
   const qualitativePattern = new RegExp(

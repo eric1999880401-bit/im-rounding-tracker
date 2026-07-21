@@ -5257,6 +5257,10 @@ try {
     orders: "continue meropenem 1 g IV q8h",
     other: "B/C 07-20 pending; dyspnea improved",
   };
+  const sourceLabVisual = formatLabVisualSummaryFromLines(sourceFields.labs, { includeLabPrefix: true }).text;
+  if (!/CBC\/DC: WBC 12\.7.*Neu 88\.9.*Hb 12\.0.*Plt 259/i.test(sourceLabVisual)) {
+    throw new Error(`adjacent H-prefixed lab label was swallowed by the prior value flag parser: ${sourceLabVisual}`);
+  }
   const accepted = acceptStructuredRoundSoap({
     value: structuredDraft,
     baselineText: "",
@@ -5265,11 +5269,11 @@ try {
   });
   const acceptedText = editorDraftToSoapText(accepted.draft);
   if (accepted.fatalErrors.length > 0) throw new Error(`valid structured draft was rejected: ${accepted.fatalErrors.join(" | ")}`);
-  if (!/Lab: CBC\/DC: WBC 12\.7, Neu 88\.9%, Hb 12\.0, Plt 259/.test(acceptedText)) {
-    throw new Error(`structured CBC line was rewritten or lost:\n${acceptedText}`);
+  if (!/Lab: CBC\/DC: WBC 12\.7.*Neu 88\.9.*Hb 12\.0.*Plt 259/.test(acceptedText)) {
+    throw new Error(`source-owned CBC line was not reconstructed completely:\n${acceptedText}`);
   }
-  if (!/Lab: Infx\/Perfusion: CRP 10\(4\) up/.test(acceptedText) || /Chem\/Renal:[^\n]*CRP/i.test(acceptedText)) {
-    throw new Error(`structured lab panels were regrouped incorrectly:\n${acceptedText}`);
+  if (!/Lab: Chem\/Renal:.*BUN 24.*Cr 1\.2.*Na 150.*K 4\.0.*CRP 10/.test(acceptedText)) {
+    throw new Error(`source-owned Chem/Renal panel was not reconstructed completely:\n${acceptedText}`);
   }
   if (!/# Hypernatremia[\s\S]*Na 150/.test(acceptedText) || /# .*anemia/i.test(acceptedText)) {
     throw new Error(`A/P significance gate failed:\n${acceptedText}`);
@@ -5278,30 +5282,50 @@ try {
   const equivalentFormattingDraft = structuredClone(structuredDraft);
   equivalentFormattingDraft.objective.labs[0].values = "WBC 12.7, Neu 88.9%, Hb 12, Plt 259";
   const equivalentFormatting = acceptStructuredRoundSoap({ value: equivalentFormattingDraft, baselineText: "", sourceFields, workflowMode: "newSoap" });
-  if (equivalentFormatting.fatalErrors.some((line) => /invented Lab value/i.test(line))) {
+  if (equivalentFormatting.fatalErrors.length > 0) {
     throw new Error(`equivalent Lab formatting 12 vs 12.0 was rejected: ${equivalentFormatting.fatalErrors.join(" | ")}`);
   }
 
   const inventedLabDraft = structuredClone(structuredDraft);
   inventedLabDraft.objective.labs[1].values = "BUN 24, Cr 15.4, Na 150, K 4.0";
   const invented = acceptStructuredRoundSoap({ value: inventedLabDraft, baselineText: "S:\n- baseline", sourceFields, workflowMode: "newSoap" });
-  if (!invented.fatalErrors.some((line) => /invented Lab value/i.test(line))) {
-    throw new Error(`invented lab value was not blocked: ${invented.fatalErrors.join(" | ")}`);
+  const inventedText = editorDraftToSoapText(invented.draft);
+  if (invented.fatalErrors.length > 0 || /Cr 15\.4/.test(inventedText) || !/Cr 1\.2/.test(inventedText)) {
+    throw new Error(`invented model Lab was not replaced by source-owned O/Lab:\n${inventedText}`);
   }
 
   const missingAbxDraft = structuredClone(structuredDraft);
   missingAbxDraft.assessmentPlan[0].plan = "f/u B/C and O2 need";
   missingAbxDraft.orders = [];
   const missingAbx = acceptStructuredRoundSoap({ value: missingAbxDraft, baselineText: "", sourceFields, workflowMode: "newSoap" });
-  if (!missingAbx.fatalErrors.some((line) => /omitted current antimicrobial 'meropenem'/i.test(line))) {
-    throw new Error(`omitted current antibiotic was not blocked: ${missingAbx.fatalErrors.join(" | ")}`);
+  const missingAbxText = editorDraftToSoapText(missingAbx.draft);
+  if (missingAbx.fatalErrors.length > 0 || !/Order: (?:continue )?meropenem 1 g IV q8h/i.test(missingAbxText) || !/# PNA \/ sepsis, improving[\s\S]*meropenem 1 g IV q8h/i.test(missingAbxText)) {
+    throw new Error(`source antimicrobial was not restored without blocking the draft:\n${missingAbxText}`);
   }
 
   const repeatedAbxDraft = structuredClone(structuredDraft);
   repeatedAbxDraft.assessmentPlan[1].plan = "Continue meropenem 1 g IV q8h and repeat Na.";
   const repeatedAbx = acceptStructuredRoundSoap({ value: repeatedAbxDraft, baselineText: "", sourceFields, workflowMode: "newSoap" });
-  if (!repeatedAbx.fatalErrors.some((line) => /repeated meropenem under multiple A\/P/i.test(line))) {
-    throw new Error(`duplicated antibiotic ownership was not blocked: ${repeatedAbx.fatalErrors.join(" | ")}`);
+  const repeatedApText = repeatedAbx.draft.apProblems.map((problem) => `${problem.title} ${problem.lines.map((line) => line.text).join(" ")}`).join("\n");
+  if (repeatedAbx.fatalErrors.length > 0 || (repeatedApText.match(/meropenem/gi) ?? []).length !== 1) {
+    throw new Error(`antibiotic duplication was not repaired inside A/P:\n${repeatedApText}`);
+  }
+
+  const omittedImageDraft = structuredClone(structuredDraft);
+  omittedImageDraft.objective.imaging = [];
+  const omittedImage = acceptStructuredRoundSoap({ value: omittedImageDraft, baselineText: "", sourceFields, workflowMode: "newSoap" });
+  const omittedImageText = editorDraftToSoapText(omittedImage.draft);
+  if (omittedImage.fatalErrors.length > 0 || !/Image: CXR 07-20 RLL opacity/i.test(omittedImageText)) {
+    throw new Error(`source imaging was not restored without blocking the draft:\n${omittedImageText}`);
+  }
+
+  const missingCriticalApDraft = structuredClone(structuredDraft);
+  missingCriticalApDraft.assessmentPlan = missingCriticalApDraft.assessmentPlan.filter((problem) => !/hypernatremia/i.test(problem.problemTitle));
+  missingCriticalApDraft.warnings = ["No current medication orders supplied.", "Uncontextualized fluid balance omitted."];
+  const missingCriticalAp = acceptStructuredRoundSoap({ value: missingCriticalApDraft, baselineText: "", sourceFields, workflowMode: "newSoap" });
+  const missingCriticalApText = editorDraftToSoapText(missingCriticalAp.draft);
+  if (missingCriticalAp.fatalErrors.length > 0 || !/# Hypernatremia[\s\S]*Na 150; management plan not documented/i.test(missingCriticalApText) || missingCriticalAp.review.warnings.length > 0) {
+    throw new Error(`critical source Lab did not create a concise reviewable A/P without warning spam:\n${missingCriticalApText}\n${missingCriticalAp.review.warnings.join(" | ")}`);
   }
 
   const baseline = editorDraftToSoapText(structuredRoundSoapToEditorDraft(structuredDraft));
@@ -5315,8 +5339,64 @@ try {
     workflowMode: "dailyUpdate",
   });
   const dailyText = editorDraftToSoapText(daily.draft);
-  if (!/Dyspnea improved/.test(dailyText) || !/# PNA \/ sepsis, improving/.test(dailyText) || !/Na 148\(150\) down/.test(dailyText)) {
+  if (!/Dyspnea improved/.test(dailyText) || !/# PNA \/ sepsis, improving/.test(dailyText) || !/Na 148.*150/.test(dailyText)) {
     throw new Error(`structured daily update did not preserve unrelated reviewed SOAP:\n${dailyText}`);
+  }
+
+  const noisyHisLabPaste = [
+    "\u5831\u544a\u6642\u9593 BUN CRE GFR Na K",
+    "\u55ae\u4f4d mg/dL mg/dL mL/min mmol/L mmol/L",
+    "2026-07-17 32 1.91 29.90 134 4.3",
+    "2026-07-18 30 1.68 34.82 140 4.1",
+  ].join("\n");
+  const normalizedNoisyHisLabs = normalizeLabTableSourceText(noisyHisLabPaste);
+  if (!/2026-07-17 BUN 32, Cr 1\.91, eGFR 29\.90, Na 134, K 4\.3/i.test(normalizedNoisyHisLabs.text) ||
+      !/2026-07-18 BUN 30, Cr 1\.68, eGFR 34\.82, Na 140, K 4\.1/i.test(normalizedNoisyHisLabs.text)) {
+    throw new Error(`HIS parser did not reconstruct unit-separated multi-date rows: ${normalizedNoisyHisLabs.text}`);
+  }
+  const routedNoisyHisLabs = splitGuidedSoapSource(noisyHisLabPaste);
+  if (!/BUN 32.*Cr 1\.91/is.test(routedNoisyHisLabs.labs) || !/BUN 30.*Cr 1\.68/is.test(routedNoisyHisLabs.labs)) {
+    throw new Error(`Daily source router did not retain reconstructed HIS labs: ${JSON.stringify(routedNoisyHisLabs)}`);
+  }
+  const noisyHisVisual = formatLabVisualSummaryFromLines(routedNoisyHisLabs.labs, { includeLabPrefix: true }).text;
+  if (!/Chem\/Renal:.*BUN 30.*32.*Cr 1\.68.*1\.91.*eGFR 34\.82.*29\.90.*Na 140.*134.*K 4\.1.*4\.3/i.test(noisyHisVisual) || /BUN 32[^)]/.test(noisyHisVisual)) {
+    throw new Error(`Lab visual summary did not select latest values with prior-value trends: ${noisyHisVisual}`);
+  }
+  const noisyHisDraft = structuredClone(structuredDraft);
+  noisyHisDraft.objective.labs[1].values = "07-18 BUN 30, Cr 1.68(1.91) down, eGFR 34.82, Na 140(134), K 4.1";
+  const noisyHisAcceptance = acceptStructuredRoundSoap({
+    value: noisyHisDraft,
+    baselineText: baseline,
+    sourceFields: {
+      labs: routedNoisyHisLabs.labs,
+      other: routedNoisyHisLabs.other,
+      rawSource: noisyHisLabPaste,
+    },
+    workflowMode: "dailyUpdate",
+  });
+  if (noisyHisAcceptance.fatalErrors.some((line) => /Lab (?:value|verification)|invented Lab/i.test(line))) {
+    throw new Error(`raw HIS values were falsely rejected after table routing: ${noisyHisAcceptance.fatalErrors.join(" | ")}`);
+  }
+  const noisyHisText = editorDraftToSoapText(noisyHisAcceptance.draft);
+  if (!/Lab: Chem\/Renal: BUN 30.*32.*Cr 1\.68.*1\.91.*eGFR 34\.82.*29\.90.*Na 140.*134.*K 4\.1.*4\.3/i.test(noisyHisText) || /07-18 BUN 30/.test(noisyHisText)) {
+    throw new Error(`source-owned HIS renal values did not replace the model-formatted lab line:\n${noisyHisText}`);
+  }
+
+  const omittedNoisyHisDraft = structuredClone(noisyHisDraft);
+  omittedNoisyHisDraft.objective.labs = [];
+  const omittedNoisyHisAcceptance = acceptStructuredRoundSoap({
+    value: omittedNoisyHisDraft,
+    baselineText: baseline,
+    sourceFields: {
+      labs: routedNoisyHisLabs.labs,
+      rawSource: noisyHisLabPaste,
+    },
+    workflowMode: "dailyUpdate",
+  });
+  const omittedNoisyHisText = editorDraftToSoapText(omittedNoisyHisAcceptance.draft);
+  if (omittedNoisyHisAcceptance.fatalErrors.length > 0 ||
+      !/Lab: Chem\/Renal: BUN 30.*32.*Cr 1\.68.*1\.91.*eGFR 34\.82.*29\.90.*Na 140.*134.*K 4\.1.*4\.3/i.test(omittedNoisyHisText)) {
+    throw new Error(`deterministic O/Lab fallback did not recover AI-omitted HIS values: ${omittedNoisyHisAcceptance.fatalErrors.join(" | ")}\n${omittedNoisyHisText}`);
   }
 
   const unsafeVitalsOnlyDraft = structuredClone(structuredDraft);
@@ -5378,10 +5458,11 @@ try {
     sourceFields: { labs: "BUN 24 Cr 1.2 Na 148 prior 150 K 4.0" },
     workflowMode: "dailyUpdate",
   });
-  if (!staleProblem.fatalErrors.some((line) => /not grounded in the pasted source/i.test(line))) {
-    throw new Error(`daily update accepted a new A/P problem supported only by old baseline: ${staleProblem.fatalErrors.join(" | ")}`);
+  const staleProblemText = editorDraftToSoapText(staleProblem.draft);
+  if (staleProblem.fatalErrors.length > 0 || /# Copied old imaging issue/i.test(staleProblemText) || !/# PNA \/ sepsis, improving/i.test(staleProblemText)) {
+    throw new Error(`unsupported new A/P was not removed while reviewed problems were preserved:\n${staleProblemText}`);
   }
-  console.log("PASS Structured AI SOAP contract keeps Lab literal, blocks unsupported values/Abx duplication, and preserves Daily baseline");
+  console.log("PASS Structured AI SOAP contract repairs Lab/Image/A&P/Abx issues without rejecting the full draft");
   supplementalPasses += 1;
 } catch (error) {
   failures.push({ name: "Structured AI SOAP contract", error: error instanceof Error ? error.message : String(error) });

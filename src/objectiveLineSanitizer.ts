@@ -154,6 +154,25 @@ function positionalLabRow(value: string, labels: string[]) {
   return `${items.some((item) => /\*$/.test(item)) ? "! " : ""}${date ? `${date} ` : ""}${items.join(", ")}`.trim();
 }
 
+function isLabTableMetadataRow(value: string) {
+  const body = plainObjectiveBody(value);
+  if (/^(?:\u55ae\u4f4d|units?|reference(?:\s+range)?|normal\s+range|ref\.?)(?:\s|:|\uFF1A|$)/i.test(body)) return true;
+  const tokens = body.split(/\s+/).filter(Boolean);
+  const unitLike = tokens.filter((token) =>
+    /^(?:%|(?:10\^?\d+|x10\^?\d+)\/\S+|(?:mL|min|sec|s|U|IU|g|mg|ug|ng|pg|mmol|umol|mEq)(?:\/\S+)+)$/i.test(token),
+  ).length;
+  return tokens.length >= 2 && unitLike >= 2 && unitLike >= Math.ceil(tokens.length * 0.6);
+}
+
+function datedLabRowSortKey(value: string) {
+  const match = plainObjectiveBody(value).match(/^\s*(?:(20\d{2})[-/])?(\d{1,2})[-/](\d{1,2})\b/);
+  if (!match) return Number.NEGATIVE_INFINITY;
+  const year = Number(match[1] ?? 0);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  return year * 10000 + month * 100 + day;
+}
+
 export function isLabReportValueRowNoise(value: string) {
   const body = plainObjectiveBody(value);
   if (!/^\s*(?:20\d{2}[-/]\d{1,2}[-/]\d{1,2}|\d{1,2}\/\d{1,2})\b/.test(body)) return false;
@@ -166,22 +185,38 @@ export function normalizeLabTableSourceText(value: string) {
   const accepted: string[] = [];
   const rejected: string[] = [];
   let pendingLabels: string[] = [];
+  let pendingRows: string[] = [];
+
+  const flushPendingRows = () => {
+    accepted.push(...pendingRows.sort((left, right) => datedLabRowSortKey(right) - datedLabRowSortKey(left)));
+    pendingRows = [];
+  };
 
   String(value ?? "").split(/\r?\n/).forEach((rawLine) => {
     const line = rawLine.trim();
     if (!line) return;
     if (isLabReportHeaderNoise(line)) {
+      flushPendingRows();
       pendingLabels = positionalLabLabels(line);
       rejected.push(line);
       return;
     }
     if (pendingLabels.length > 0) {
-      const reconstructed = positionalLabRow(line, pendingLabels);
-      pendingLabels = [];
-      if (reconstructed) {
-        accepted.push(reconstructed);
+      if (isLabTableMetadataRow(line)) {
+        rejected.push(line);
         return;
       }
+      const reconstructed = positionalLabRow(line, pendingLabels);
+      if (reconstructed) {
+        pendingRows.push(reconstructed);
+        return;
+      }
+      if (isLabReportValueRowNoise(line)) {
+        rejected.push(line);
+        return;
+      }
+      flushPendingRows();
+      pendingLabels = [];
     }
     if (isLabReportValueRowNoise(line)) {
       rejected.push(line);
@@ -189,6 +224,8 @@ export function normalizeLabTableSourceText(value: string) {
     }
     accepted.push(line);
   });
+
+  flushPendingRows();
 
   return { text: accepted.join("\n"), lines: accepted, rejected };
 }

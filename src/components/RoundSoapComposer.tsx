@@ -536,7 +536,7 @@ function RoundSoapComposer({
   }
 
   function currentSourceFields(mode: WorkflowMode = workflowMode): SoapSourceFields {
-    if (mode === "repairSoap") return { other: mixedSourceText.trim() };
+    if (mode === "repairSoap") return { other: mixedSourceText.trim(), rawSource: mixedSourceText.trim() };
     if (mixedSourceText.trim()) {
       const routed = splitGuidedSoapSource(mixedSourceText);
       if (mode === "dailyUpdate") {
@@ -546,6 +546,7 @@ function RoundSoapComposer({
           images: routed.images,
           orders: routed.orders,
           other: [routed.admission, routed.other].filter(Boolean).join("\n"),
+          rawSource: mixedSourceText,
         };
       }
       if (mode === "newSoap") {
@@ -556,6 +557,7 @@ function RoundSoapComposer({
           images: routed.images,
           orders: routed.orders,
           other: routed.other,
+          rawSource: mixedSourceText,
         };
       }
       if (mode === "transferHandoff") {
@@ -567,12 +569,20 @@ function RoundSoapComposer({
           images: routed.images,
           orders: routed.orders,
           other: routed.other,
+          rawSource: mixedSourceText,
         };
       }
     }
     if (mode === "newSoap") return { ...newSoapFields };
     if (mode === "transferHandoff") return { ...transferFields };
     return { ...dailyFields };
+  }
+
+  function updateMixedSourceText(value: string) {
+    setMixedSourceText(value);
+    setError("");
+    setWarnings([]);
+    setDeltaReview(null);
   }
 
   function currentOrderSourceText() {
@@ -962,7 +972,7 @@ function RoundSoapComposer({
           {workflowMode === "repairSoap" ? "Optional new facts for repair" : `Paste all source data for ${workflow.label}`}
           <textarea
             value={mixedSourceText}
-            onChange={(event) => setMixedSourceText(event.target.value)}
+            onChange={(event) => updateMixedSourceText(event.target.value)}
             onCompositionStart={() => { isComposingRef.current = true; }}
             onCompositionEnd={() => { isComposingRef.current = false; }}
             placeholder={workflowMode === "repairSoap"
@@ -1063,7 +1073,7 @@ function RoundSoapComposer({
         {workflowMode === "repairSoap" ? "Optional new facts for repair" : `Paste all source data for ${workflow.label}`}
         <textarea
           value={mixedSourceText}
-          onChange={(event) => setMixedSourceText(event.target.value)}
+          onChange={(event) => updateMixedSourceText(event.target.value)}
           onCompositionStart={() => { isComposingRef.current = true; }}
           onCompositionEnd={() => { isComposingRef.current = false; }}
           placeholder={workflowMode === "repairSoap"
