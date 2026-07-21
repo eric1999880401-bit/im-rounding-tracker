@@ -16,7 +16,7 @@ function todayDate() {
 const labValuePattern = "([<>]?[0-9]+(?:\\.[0-9]+)?%?\\+?)";
 // H/L flags must be standalone. Without the trailing guard, `Neu 88.9 Hb 12`
 // consumes the H in Hb as a high flag and silently drops the Hb result.
-const labFlagPattern = "(?:\\s*(?:\\[?([HL])\\]?(?![A-Za-z])|([↑↓↗↘])|\\b(high|low|elevated|decreased|positive|negative|pos|neg|reactive|nonreactive|detected|not detected)\\b))?";
+const labFlagPattern = "(?:\\s*(?:\\[?([HL])\\]?(?![A-Za-z])|([↑↓↗↘])|\\b(high|low|elevated|decreased|abnormal|positive|negative|pos|neg|reactive|nonreactive|detected|not detected)\\b))?";
 const labUnitPattern = "(ng\\/mL|ng\\/L|pg\\/mL|ug\\/mL|µg\\/mL|mcg\\/mL|mg\\/dL|g\\/dL|k\\/uL|10\\^3\\/uL|mmol\\/L|mEq\\/L|U\\/L|IU\\/L|%)";
 
 function escapeRegExp(value: string) {
@@ -94,6 +94,10 @@ function parsedLabItem(
 }
 
 function parseLabItemsFromLine(line: string, important: boolean, groupHint = "") {
+  // HIS/LIS exports commonly mark an out-of-range cell with a trailing `*`.
+  // Convert that cell-local flag to text understood by the regular parser;
+  // never promote the entire table row to Important because one cell is abnormal.
+  line = line.replace(/([<>]?-?\d+(?:\.\d+)?%?)\*+(?=\s|[,;]|$)/g, "$1 abnormal");
   if (/^\s*(?:U\/?A|urine|urinalysis)\s*$/i.test(groupHint)) groupHint = "Urinalysis";
   const items: ParsedLabItem[] = [];
   const directionalKeys = new Set<string>();
@@ -203,7 +207,7 @@ function parseLabItemsFromLine(line: string, important: boolean, groupHint = "")
     const normalizedLabel = normalizeLabDisplayName(match[1]);
     if (dictionaryItem?.valueType === "culture") return;
     const matchedText = line.slice(match.index ?? 0);
-    if (normalizedLabel === "Ca" && /^ca\s*\d/i.test(matchedText)) return;
+    if (normalizedLabel === "Ca" && /^ca\s*(?:19[-\s]?9|125|15[-\s]?3)\b/i.test(matchedText)) return;
     if (directionalKeys.has(canonicalLabKey(normalizedLabel))) return;
     const dictionaryGroup = dictionaryItem?.group ?? labGroupFor(normalizedLabel);
     const group = groupHint || dictionaryGroup;

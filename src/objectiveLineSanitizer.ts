@@ -1,4 +1,5 @@
 import { stripClinicalMarkup } from "./clinicalLineClassifier";
+import { findLabDictionaryItem } from "./data/labDictionary";
 
 export type ObjectiveLineKind = "vs" | "pe" | "lab" | "image" | "other";
 
@@ -114,18 +115,41 @@ export function isLabReportHeaderNoise(value: string) {
   const resultCount = [...body.matchAll(new RegExp(labResultPattern.source, "gi"))].length;
   const hasHeaderCue = /(?:\u5831\u544a\u6642\u9593|\u6aa2\u9a57\u9805\u76ee|report\s*time|reported\s*at|test\s*name|analyte|reference\s*range)/i.test(body);
   if (resultCount >= Math.max(2, Math.ceil(labels.size * 0.5))) return false;
-  return (hasHeaderCue && labels.size >= 3) || (labels.size >= 8 && resultCount < Math.ceil(labels.size * 0.5));
+  const positionalColumns = hasHeaderCue ? positionalLabColumns(body) : [];
+  const recognizedColumns = positionalColumns.filter((column) => column.label).length;
+  const analyteTokens = positionalColumns.filter((column) => /[A-Za-z]/.test(column.raw) && !/^20\d{2}[-/]/.test(column.raw)).length;
+  return (hasHeaderCue && recognizedColumns >= 2 && analyteTokens >= 2) || (labels.size >= 8 && resultCount < Math.ceil(labels.size * 0.5));
 }
 
-function positionalLabLabels(value: string) {
+interface PositionalLabColumn {
+  raw: string;
+  label: string;
+}
+
+function positionalLabHeaderTokens(value: string) {
   const body = plainObjectiveBody(value);
-  return [...body.matchAll(new RegExp(labLabelPattern.source, "gi"))].map((match) => {
-    const raw = match[0];
-    return canonicalLabLabels[raw.toLowerCase()] ?? raw;
+  const withoutCue = body
+    .replace(/^.*?(?:\u5831\u544a\u6642\u9593|\u6aa2\u9a57\u9805\u76ee|report\s*time|reported\s*at|test\s*name|analyte)\s*[:\uFF1A]?\s*/i, "")
+    .trim();
+  const tokens = withoutCue
+    .split(/\s+/)
+    .map((token) => token.replace(/^[,;:]+|[,;:]+$/g, "").trim())
+    .filter(Boolean);
+  while (/^(?:CBC(?:\/DC)?|DC|hematology|chemistry|biochemistry|renal|electrolytes?|coagulation|\u8840\u6db2|\u751f\u5316|\u8840\u6e05|\u51dd\u8840|\u5c3f\u6db2)$/i.test(tokens[0] ?? "")) {
+    tokens.shift();
+  }
+  return tokens;
+}
+
+function positionalLabColumns(value: string): PositionalLabColumn[] {
+  return positionalLabHeaderTokens(value).map((raw) => {
+    const dictionary = findLabDictionaryItem(raw);
+    const fallback = canonicalLabLabels[raw.toLowerCase()] ?? "";
+    return { raw, label: dictionary?.displayName ?? fallback };
   });
 }
 
-function positionalLabRow(value: string, labels: string[]) {
+function positionalLabRow(value: string, columns: PositionalLabColumn[]) {
   const body = plainObjectiveBody(value);
   const date = body.match(/^\s*(20\d{2}[-/]\d{1,2}[-/]\d{1,2}|\d{1,2}\/\d{1,2})\b/)?.[1] ?? "";
   const withoutDate = date
@@ -134,24 +158,32 @@ function positionalLabRow(value: string, labels: string[]) {
   const rawTokens = withoutDate.split(/\s+/).filter(Boolean);
   const tokens: string[] = [];
   rawTokens.forEach((token) => {
-    if (/^\*+$/.test(token) && tokens.length > 0) {
+    if (/^(?:\*+|[HL]|[\u2191\u2193\u2197\u2198])$/i.test(token) && tokens.length > 0) {
       tokens[tokens.length - 1] += token;
       return;
     }
     tokens.push(token);
   });
   const numericCount = tokens.filter((token) => positionalLabValuePattern.test(token)).length;
-  if (labels.length < 2 || numericCount < 2 || numericCount < Math.min(labels.length, tokens.length) * 0.5) return "";
+  if (columns.length < 2 || numericCount < 2 || numericCount < Math.min(columns.length, tokens.length) * 0.5) return "";
 
-  const items = labels.flatMap((label, index) => {
+  const items = columns.flatMap((column, index) => {
+    const label = column.label;
     const rawValue = tokens[index] ?? "";
-    if (!positionalLabValuePattern.test(rawValue)) return [];
-    const markedAbnormal = /\*|[HL]$/i.test(rawValue);
-    const cleanValue = rawValue.replace(/\*+/g, "");
+    if (!label || !positionalLabValuePattern.test(rawValue)) return [];
+    const markedAbnormal = /\*|[HL\u2191\u2193\u2197\u2198]$/i.test(rawValue);
+    const cleanValue = rawValue.replace(/\*+|[HL\u2191\u2193\u2197\u2198]$/gi, "");
     return cleanValue ? [`${label} ${cleanValue}${markedAbnormal ? "*" : ""}`] : [];
   });
   if (items.length < 2) return "";
-  return `${items.some((item) => /\*$/.test(item)) ? "! " : ""}${date ? `${date} ` : ""}${items.join(", ")}`.trim();
+  return `${date ? `${date} ` : ""}${items.join(", ")}`.trim();
+}
+
+function isLabTableSectionHeading(value: string) {
+  const body = plainObjectiveBody(value);
+  const match = body.match(/^\[([^\]]{1,32})\]$/);
+  if (!match) return false;
+  return /(?:\u8840\u6db2|\u751f\u5316|\u8840\u6e05|\u51dd\u8840|\u5c3f\u6db2|\u514d\u75ab|CBC|hematology|chemistry|coagulation|urine|immunology|lab)/i.test(match[1]);
 }
 
 function isLabTableMetadataRow(value: string) {
@@ -184,7 +216,7 @@ export function isLabReportValueRowNoise(value: string) {
 export function normalizeLabTableSourceText(value: string) {
   const accepted: string[] = [];
   const rejected: string[] = [];
-  let pendingLabels: string[] = [];
+  let pendingColumns: PositionalLabColumn[] = [];
   let pendingRows: string[] = [];
 
   const flushPendingRows = () => {
@@ -195,18 +227,22 @@ export function normalizeLabTableSourceText(value: string) {
   String(value ?? "").split(/\r?\n/).forEach((rawLine) => {
     const line = rawLine.trim();
     if (!line) return;
-    if (isLabReportHeaderNoise(line)) {
-      flushPendingRows();
-      pendingLabels = positionalLabLabels(line);
+    if (isLabTableSectionHeading(line)) {
       rejected.push(line);
       return;
     }
-    if (pendingLabels.length > 0) {
+    if (isLabReportHeaderNoise(line)) {
+      flushPendingRows();
+      pendingColumns = positionalLabColumns(line);
+      rejected.push(line);
+      return;
+    }
+    if (pendingColumns.length > 0) {
       if (isLabTableMetadataRow(line)) {
         rejected.push(line);
         return;
       }
-      const reconstructed = positionalLabRow(line, pendingLabels);
+      const reconstructed = positionalLabRow(line, pendingColumns);
       if (reconstructed) {
         pendingRows.push(reconstructed);
         return;
@@ -216,7 +252,7 @@ export function normalizeLabTableSourceText(value: string) {
         return;
       }
       flushPendingRows();
-      pendingLabels = [];
+      pendingColumns = [];
     }
     if (isLabReportValueRowNoise(line)) {
       rejected.push(line);

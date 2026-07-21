@@ -214,7 +214,6 @@ export function normalizeAiSoapDraft(draft: SoapDraft): SoapDraft {
   const oLines = normalizeLines(
     formatObjectiveLabVisualSummaryLines(sanitizedObjective.accepted.map(prefixedObjectiveLine), {
       maxGroups: 7,
-      maxItemsPerGroup: 12,
       maxCharsPerGroup: 240,
     }),
     12,

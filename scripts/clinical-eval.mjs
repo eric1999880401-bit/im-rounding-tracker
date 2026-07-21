@@ -5045,6 +5045,54 @@ try {
 }
 
 try {
+  const offsetSensitiveHisPaste = [
+    "[\u8840\u6db2]",
+    "\u5831\u544a\u6642\u9593 WBC Neu Lym Mono Eos Baso E.S.R MDW",
+    "2026-07-18 8.5 81.7* 10.6* 4.3 2.4 1.0 97* 20.80*",
+    "\u5831\u544a\u6642\u9593 NRBC MCHC MCH MCV PLT PDW RDW Hct Hb",
+    "2026-07-18 0 33.1 29.2 88.3 223 12.1 14.0 36.1 12.0",
+    "\u5831\u544a\u6642\u9593 BUN CRE GFR Ca P Na K T-Bil hsCRP ALT Mg Osm",
+    "2026-07-18 30 1.68 34.82 8.6 3.4 140 4.1 0.65 2.9 34 2.0 290",
+  ].join("\n");
+  const normalized = normalizeLabTableSourceText(offsetSensitiveHisPaste);
+  if (/\[\u8840\u6db2\]|\u5831\u544a\u6642\u9593/.test(normalized.text)) {
+    throw new Error(`HIS metadata leaked into normalized Lab text: ${normalized.text}`);
+  }
+  if (!/WBC 8\.5.*Neu 81\.7\*.*ESR 97\*/i.test(normalized.text) || /MDW 97\*/i.test(normalized.text)) {
+    throw new Error(`unknown/intermediate CBC columns shifted subsequent values: ${normalized.text}`);
+  }
+  if (!/MCHC 33\.1.*MCV 88\.3.*Plt 223.*RDW 14\.0.*Hct 36\.1.*Hb 12\.0/i.test(normalized.text)) {
+    throw new Error(`PDW placeholder did not preserve CBC positional alignment: ${normalized.text}`);
+  }
+  if (!/BUN 30.*Cr 1\.68.*eGFR 34\.82.*Ca 8\.6.*P 3\.4.*Na 140.*K 4\.1.*T-Bil 0\.65.*hsCRP 2\.9.*ALT 34.*Mg 2\.0.*Osm 290/i.test(normalized.text)) {
+    throw new Error(`chemistry table values were not labeled positionally: ${normalized.text}`);
+  }
+
+  const routed = splitGuidedSoapSource(offsetSensitiveHisPaste);
+  const visual = formatLabVisualSummaryFromLines(routed.labs, { includeLabPrefix: true });
+  if (!/CBC\/DC: WBC 8\.5.*Neu 81\.7.*Hb 12\.0.*Plt 223/i.test(visual.text)) {
+    throw new Error(`CBC visual anchors are missing or out of order: ${visual.text}`);
+  }
+  if (!/Chem\/Renal: BUN 30.*Cr 1\.68.*eGFR 34\.82.*Na 140.*K 4\.1.*hsCRP 2\.9.*Ca 8\.6/i.test(visual.text)) {
+    throw new Error(`Chem/Renal visual anchors are missing or out of order: ${visual.text}`);
+  }
+  if ((visual.text.match(/CBC\/DC:/g) ?? []).length !== 1 || (visual.text.match(/Chem\/Renal:/g) ?? []).length !== 1) {
+    throw new Error(`visual Lab groups fragmented into duplicate rows: ${visual.text}`);
+  }
+  if (/Other:|\u5831\u544a\u6642\u9593|\[\u8840\u6db2\]/.test(visual.text) || visual.lines.some((line) => line.length > 190)) {
+    throw new Error(`visual Lab output leaked metadata or exceeded stable row length: ${visual.text}`);
+  }
+  if (/Mono 4\.3|Eos 2\.4|Baso 1\.0|MCHC 33\.1|MCH 29\.2|MCV 88\.3|RDW 14\.0/.test(visual.text)) {
+    throw new Error(`low-yield normal CBC values crowded the rounding Lab row: ${visual.text}`);
+  }
+  console.log("PASS HIS table parser preserves unknown-column offsets and renders compact high-yield Lab groups");
+  supplementalPasses += 1;
+} catch (error) {
+  failures.push({ name: "HIS positional Lab alignment", error: error instanceof Error ? error.message : String(error) });
+  console.error(`FAIL HIS positional Lab alignment: ${failures[failures.length - 1].error}`);
+}
+
+try {
   const baseline = [
     "S:",
     "- stable overnight",

@@ -62,13 +62,41 @@ interface LabSourceLine {
 
 const labGroupOrder: Array<{ id: LabVisualGroupId; label: string; keys: string[] }> = [
   { id: "cbc", label: "CBC/DC", keys: ["WBC", "Neu", "Hb", "Hct", "Plt", "RBC", "MCV", "RDW", "Lym", "Mono", "Eos", "Baso", "Band"] },
-  { id: "renalLyte", label: "Chem/Renal", keys: ["BUN", "Cr", "eGFR", "Na", "K", "Cl", "Ca", "Mg", "P", "Uric acid", "Osm", "CRP", "PCT", "Lactate", "ESR"] },
+  { id: "renalLyte", label: "Chem/Renal", keys: ["BUN", "Cr", "eGFR", "Na", "K", "CRP", "hsCRP", "PCT", "Lactate", "Cl", "Ca", "Mg", "P", "Uric acid", "Osm", "ESR"] },
   { id: "liverCoag", label: "Liver/Coag", keys: ["AST", "ALT", "ALP", "GGT", "T-Bil", "D-Bil", "Alb", "PT", "INR", "aPTT", "D-dimer", "Fibrinogen", "FDP"] },
   { id: "infxPerfusion", label: "Micro", keys: ["Blood culture", "Sputum culture", "Urine culture"] },
   { id: "gas", label: "ABG/VBG", keys: ["pH", "pCO2", "pO2", "HCO3", "BE", "SaO2", "SpO2"] },
   { id: "cardiac", label: "Cardiac", keys: ["Troponin I", "Troponin T", "Troponin", "CK", "CK-MB", "BNP", "NT-proBNP"] },
   { id: "other", label: "Other", keys: [] },
 ];
+
+const coreDisplayKeys: Record<LabVisualGroupId, string[]> = {
+  cbc: ["WBC", "Neu", "Hb", "Plt", "Hct"],
+  renalLyte: ["BUN", "Cr", "eGFR", "Na", "K", "CRP", "hsCRP", "PCT", "Lactate", "Mg", "Ca", "P"],
+  liverCoag: ["AST", "ALT", "ALP", "T-Bil", "Alb", "PT", "INR", "aPTT"],
+  infxPerfusion: ["Blood culture", "Sputum culture", "Urine culture"],
+  gas: ["pH", "pCO2", "pO2", "HCO3", "BE", "SaO2", "SpO2"],
+  cardiac: ["Troponin I", "Troponin T", "Troponin", "BNP", "NT-proBNP", "CK-MB"],
+  other: [],
+};
+
+const defaultGroupItemLimits: Record<LabVisualGroupId, number> = {
+  cbc: 7,
+  renalLyte: 11,
+  liverCoag: 8,
+  infxPerfusion: 4,
+  gas: 7,
+  cardiac: 6,
+  other: 4,
+};
+
+const trendEligibleLabels = new Set([
+  "WBC", "Neu", "Hb", "Hct", "Plt",
+  "BUN", "Cr", "eGFR", "Na", "K", "CRP", "hsCRP", "PCT", "Lactate",
+  "AST", "ALT", "T-Bil", "Alb", "PT", "INR", "aPTT",
+  "pH", "pCO2", "pO2", "HCO3", "BE",
+  "Troponin I", "Troponin T", "BNP", "NT-proBNP",
+]);
 
 const groupOrderIndex = new Map(labGroupOrder.map((group, index) => [group.id, index]));
 const displayOrder = new Map(labGroupOrder.flatMap((group) => group.keys.map((key, index) => [`${group.id}|${key}`, index])));
@@ -277,6 +305,7 @@ function toneForText(label: string, value: string, item: ParsedLabItem, chronicR
     if (label === "INR" && numeric >= 3) return "critical";
     if (label === "Lactate" && numeric >= 4) return "critical";
   }
+  if (/\babnormal\b/i.test(String(item.note ?? ""))) return "important";
   if (item.important || item.isImportant) return "important";
   if (previousValue && trendDirection(label, value, previousValue)) return "important";
   if (noteDirection(item) || referenceDirection(label, value)) return "important";
@@ -335,7 +364,7 @@ function cleanOtherText(source: LabSourceLine) {
 }
 
 function withPreviousVisualValue(current: LabVisualItem, previous: LabVisualItem) {
-  if (current.explicitMark || current.previousValue || current.value === previous.value) return current;
+  if (current.explicitMark || current.previousValue || current.value === previous.value || !trendEligibleLabels.has(current.label)) return current;
   const direction = trendDirection(current.label, current.value, previous.value);
   if (!direction) return current;
   const tone: LabVisualTone = current.tone === "plain" ? "important" : current.tone;
@@ -374,7 +403,6 @@ function dedupeVisualItems(items: LabVisualItem[]) {
 }
 
 function buildGroupsFromVisualItems(items: LabVisualItem[], options: LabVisualSummaryOptions) {
-  const maxItems = options.maxItemsPerGroup ?? Number.POSITIVE_INFINITY;
   const maxGroups = options.maxGroups ?? Number.POSITIVE_INFINITY;
   const groups = new Map<LabVisualGroupId, LabVisualItem[]>();
 
@@ -386,13 +414,28 @@ function buildGroupsFromVisualItems(items: LabVisualItem[], options: LabVisualSu
 
   return labGroupOrder
     .map((group) => {
-      const sourceItems = dedupeVisualItems(groups.get(group.id) ?? [])
+      const maxItems = options.maxItemsPerGroup ?? defaultGroupItemLimits[group.id];
+      const coreOrder = new Map(coreDisplayKeys[group.id].map((key, index) => [key, index]));
+      const orderedItems = dedupeVisualItems(groups.get(group.id) ?? [])
         .sort((left, right) => {
+          const leftCore = coreOrder.get(left.label);
+          const rightCore = coreOrder.get(right.label);
+          if (leftCore !== undefined || rightCore !== undefined) {
+            if (leftCore === undefined) return 1;
+            if (rightCore === undefined) return -1;
+            return leftCore - rightCore;
+          }
+          const toneRank = (tone: LabVisualTone) => tone === "critical" ? 2 : tone === "important" ? 1 : 0;
+          const toneDifference = toneRank(right.tone) - toneRank(left.tone);
+          if (toneDifference) return toneDifference;
           const leftOrder = displayOrder.get(`${group.id}|${left.label}`) ?? 99;
           const rightOrder = displayOrder.get(`${group.id}|${right.label}`) ?? 99;
           return leftOrder - rightOrder || right.score - left.score || left.label.localeCompare(right.label);
-        })
-        .slice(0, maxItems);
+        });
+      const focusedItems = group.id === "other"
+        ? orderedItems
+        : orderedItems.filter((item) => coreOrder.has(item.label) || item.tone !== "plain");
+      const sourceItems = (focusedItems.length > 0 ? focusedItems : orderedItems).slice(0, maxItems);
       if (sourceItems.length === 0) return null;
       const tone: LabVisualTone = sourceItems.some((item) => item.tone === "critical")
         ? "critical"
