@@ -5319,6 +5319,51 @@ try {
     throw new Error(`structured daily update did not preserve unrelated reviewed SOAP:\n${dailyText}`);
   }
 
+  const unsafeVitalsOnlyDraft = structuredClone(structuredDraft);
+  unsafeVitalsOnlyDraft.objective.vitalSigns = ["T 35.9 C, BP 117/65, HR 65, RR 20, SpO2 96%"];
+  unsafeVitalsOnlyDraft.assessmentPlan = [
+    {
+      problemTitle: "PNA / infection",
+      status: "active",
+      summary: "Stable oxygenation.",
+      plan: "Continue cefepime.",
+      sourceEvidence: [],
+    },
+    {
+      problemTitle: "E. coli meningitis",
+      status: "active",
+      summary: "Prior infection.",
+      plan: "Continue cefepime.",
+      sourceEvidence: [],
+    },
+    {
+      problemTitle: "Anemia",
+      status: "active",
+      summary: "Hb 12.0.",
+      plan: "Trend CBC.",
+      sourceEvidence: [],
+    },
+  ];
+  const vitalsOnly = acceptStructuredRoundSoap({
+    value: unsafeVitalsOnlyDraft,
+    baselineText: baseline,
+    sourceFields: { vitals: "(2026-07-21) Vital signs: Temperature 35.9 C, BP 117/65 mmHg, Pulse 65/min, RR 20/min, SpO2 96%" },
+    workflowMode: "dailyUpdate",
+  });
+  const vitalsOnlyText = editorDraftToSoapText(vitalsOnly.draft);
+  if (vitalsOnly.fatalErrors.length > 0) {
+    throw new Error(`V/S-only Daily update was blocked by unrelated AI errors: ${vitalsOnly.fatalErrors.join(" | ")}`);
+  }
+  if (!/V\/S: \(2026-07-21\).*BP 117\/65.*SpO2 96%/i.test(vitalsOnlyText) || /BP 112\/68/.test(vitalsOnlyText)) {
+    throw new Error(`V/S-only Daily update did not replace the prior vitals exactly:\n${vitalsOnlyText}`);
+  }
+  if (!/Dyspnea improved/.test(vitalsOnlyText) || !/Lab: CBC\/DC: WBC 12\.7/.test(vitalsOnlyText) || !/# PNA \/ sepsis, improving/.test(vitalsOnlyText)) {
+    throw new Error(`V/S-only Daily update removed unrelated reviewed SOAP:\n${vitalsOnlyText}`);
+  }
+  if (/cefepime|# Anemia/i.test(vitalsOnlyText) || vitalsOnly.review.changedSections.some((section) => section.id !== "vs")) {
+    throw new Error(`V/S-only Daily update allowed unrelated AI A/P changes:\n${vitalsOnlyText}`);
+  }
+
   const staleProblemDraft = structuredClone(dailyDraft);
   staleProblemDraft.assessmentPlan.push({
     problemTitle: "Copied old imaging issue",

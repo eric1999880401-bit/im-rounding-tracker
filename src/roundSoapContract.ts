@@ -86,6 +86,27 @@ function looksLikeVitals(value: string) {
   return /\b(?:BP|HR|RR|SpO2|SaO2|Temp(?:erature)?|Pulse)\s*[:=]?\s*\d|\bT\s*[:=]?\s*\d{2}(?:\.\d+)?/i.test(value);
 }
 
+function sourceVitalLines(value: unknown) {
+  const lines = String(value ?? "")
+    .split(/\r?\n/)
+    .map(clean)
+    .filter((line) => line && looksLikeVitals(line));
+  const seen = new Set<string>();
+  return lines.flatMap((line) => {
+    const text = line
+      .replace(/^(\(?\d{4}[-/]\d{1,2}[-/]\d{1,2}\)?\s*)?(?:Vital signs|Vitals?|V\/S|VS)\s*:\s*/i, "$1")
+      .trim();
+    const key = text.toLowerCase();
+    if (!text || seen.has(key)) return [];
+    seen.add(key);
+    return [editorLine(text, "vs")];
+  });
+}
+
+export function isVitalsOnlyDailySource(fields: RoundSoapSourceFields) {
+  return hasText(fields.vitals) && ![fields.labs, fields.images, fields.orders, fields.other, fields.admission, fields.lastSoap].some(hasText);
+}
+
 function looksLikeLabs(value: string) {
   const labels = value.match(/\b(?:WBC|Neu|Hb|Hgb|Hct|Plt|BUN|Cr|eGFR|Na|K|Cl|Ca|Mg|Phos|AST|ALT|ALP|T-?Bil|Alb|PT|INR|CRP|PCT|lactate|pH|pCO2|HCO3|troponin|BNP)\b/gi) ?? [];
   const numbers = value.match(/(?:^|\s|[:=])([<>]?-?\d+(?:\.\d+)?)(?=\s|[,;/%)]|$)/gm) ?? [];
@@ -274,12 +295,65 @@ function changedSections(before: SoapEditorDraft, after: SoapEditorDraft): SoapD
   return sections.filter(([, a, b]) => JSON.stringify(a) !== JSON.stringify(b)).map(([section]) => section);
 }
 
+export function applyVitalsOnlyDailyUpdate(
+  baselineText: string,
+  sourceFields: RoundSoapSourceFields,
+): StructuredRoundSoapAcceptance {
+  const baseline = parseCanonicalSoapTextToEditorDraft(baselineText);
+  const nextVitals = sourceVitalLines(sourceFields.vitals);
+  if (nextVitals.length === 0) {
+    const message = "No valid V/S values were found. The reviewed SOAP was left unchanged.";
+    return {
+      draft: baseline,
+      fatalErrors: [message],
+      review: {
+        workflowMode: "dailyUpdate",
+        baselineText,
+        candidateText: baselineText,
+        acceptedText: baselineText,
+        changedSections: [],
+        warnings: [],
+        highRiskWarnings: [message],
+      },
+    };
+  }
+
+  const priorO = objectiveGroups(baseline.oLines);
+  const accepted: SoapEditorDraft = {
+    ...baseline,
+    oLines: [...nextVitals, ...priorO.pe, ...priorO.lab, ...priorO.image, ...priorO.other],
+  };
+  const acceptedText = editorDraftToSoapText(accepted);
+  return {
+    draft: accepted,
+    fatalErrors: [],
+    review: {
+      workflowMode: "dailyUpdate",
+      baselineText,
+      candidateText: acceptedText,
+      acceptedText,
+      changedSections: changedSections(baseline, accepted).map((id) => ({
+        id,
+        label: id.toUpperCase(),
+        risk: "normal",
+        reason: "V/S replaced directly from the pasted source; unrelated reviewed SOAP was preserved.",
+        blocked: false,
+      })),
+      warnings: [],
+      highRiskWarnings: [],
+    },
+  };
+}
+
 export function acceptStructuredRoundSoap(params: {
   value: StructuredRoundSoapDraft;
   baselineText: string;
   sourceFields: RoundSoapSourceFields;
   workflowMode: RoundSoapWorkflowMode;
 }): StructuredRoundSoapAcceptance {
+  if (params.workflowMode === "dailyUpdate" && isVitalsOnlyDailySource(params.sourceFields)) {
+    return applyVitalsOnlyDailyUpdate(params.baselineText, params.sourceFields);
+  }
   const baseline = parseCanonicalSoapTextToEditorDraft(params.baselineText);
   const generated = structuredRoundSoapToEditorDraft(params.value);
   const source = sourceText(params.sourceFields);

@@ -33,7 +33,11 @@ import {
   type SoapDeltaReview,
   type SoapDeltaSection,
 } from "../soapDeltaGuardrails";
-import { acceptStructuredRoundSoap } from "../roundSoapContract";
+import {
+  acceptStructuredRoundSoap,
+  applyVitalsOnlyDailyUpdate,
+  isVitalsOnlyDailySource,
+} from "../roundSoapContract";
 import { appendSoapEditTrace, buildSoapEditTrace, nextSoapVersion, type SoapEditOrigin } from "../soapEditTrace";
 import {
   canRedo,
@@ -629,6 +633,7 @@ function RoundSoapComposer({
       text: currentSoapText || canonical.text,
       source: canonical.source,
     });
+    const requestSourceFields = currentSourceFields(requestWorkflowMode);
     setError("");
     setStatus("");
     setWarnings([]);
@@ -641,6 +646,23 @@ function RoundSoapComposer({
 
     if (rawText.length > MAX_ROUND_SOAP_RAW_CHARS) {
       setError(`The pasted record exceeds ${MAX_ROUND_SOAP_RAW_CHARS.toLocaleString()} characters. Split only the raw export; do not manually summarize or remove clinical details.`);
+      return;
+    }
+
+    if (requestWorkflowMode === "dailyUpdate" && requestBaseline.trim() && isVitalsOnlyDailySource(requestSourceFields)) {
+      const accepted = applyVitalsOnlyDailyUpdate(requestBaseline, requestSourceFields);
+      if (accepted.fatalErrors.length > 0) {
+        setError(accepted.fatalErrors.join(" "));
+        return;
+      }
+      editOriginRef.current = {
+        source: "manual",
+        beforeText: requestBaseline,
+        workflowMode: requestWorkflowMode,
+      };
+      updateEditorDraft(accepted.draft);
+      setDeltaReview(accepted.review);
+      setStatus("V/S updated directly from the pasted source. S, Lab, Image, A/P, 藥囑, Tasks, and DC were preserved. Review, then Save reviewed SOAP.");
       return;
     }
 
@@ -672,7 +694,7 @@ function RoundSoapComposer({
         ? acceptStructuredRoundSoap({
             value: result.structuredDraft,
             baselineText: requestBaseline,
-            sourceFields: currentSourceFields(requestWorkflowMode),
+            sourceFields: requestSourceFields,
             workflowMode: requestWorkflowMode,
           })
         : {
