@@ -67,6 +67,7 @@ import {
   type RoundSoapWorkflowMode,
 } from "../roundSoapWorkflow";
 import { buildCanonicalLabDataset, canonicalLabFactsForAi } from "../labDataset";
+import { buildCanonicalImageDataset, canonicalImageFactsForAi } from "../imageDataset";
 
 interface RoundSoapComposerProps {
   patient: Patient;
@@ -646,6 +647,9 @@ function RoundSoapComposer({
     });
     const requestSourceFields = currentSourceFields(requestWorkflowMode);
     const canonicalLabFacts = canonicalLabFactsForAi(buildCanonicalLabDataset(String(requestSourceFields.labs ?? "")));
+    const canonicalImageFacts = canonicalImageFactsForAi(buildCanonicalImageDataset(
+      [requestSourceFields.images, requestSourceFields.rawSource].filter(Boolean).join("\n"),
+    ));
     setError("");
     setStatus("");
     setWarnings([]);
@@ -701,6 +705,7 @@ function RoundSoapComposer({
             patientContext: {
               ...patientContext(patient),
               ...(canonicalLabFacts.length > 0 ? { labFacts: canonicalLabFacts } : {}),
+              ...(canonicalImageFacts.length > 0 ? { imageFacts: canonicalImageFacts } : {}),
             },
             userStyleProfile: aiStyleProfile,
           });

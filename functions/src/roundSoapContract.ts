@@ -68,11 +68,11 @@ export function parseStructuredRoundSoapDraft(value: unknown): StructuredRoundSo
   const draft = record(value);
   const objective = record(draft.objective);
   return {
-    headerLines: lines(draft.headerLines, 8),
-    subjectiveLines: lines(draft.subjectiveLines, 8),
+    headerLines: lines(draft.headerLines, 4),
+    subjectiveLines: lines(draft.subjectiveLines, 4),
     objective: {
-      vitalSigns: lines(objective.vitalSigns, 4),
-      physicalExam: lines(objective.physicalExam, 6),
+      vitalSigns: lines(objective.vitalSigns, 2),
+      physicalExam: lines(objective.physicalExam, 3),
       labs: Array.isArray(objective.labs)
         ? objective.labs.map((item) => {
             const lab = record(item);
@@ -82,22 +82,22 @@ export function parseStructuredRoundSoapDraft(value: unknown): StructuredRoundSo
               values: text(lab.values),
               sourceIds: lines(lab.sourceIds, 20),
             };
-          }).filter((item) => item.values).slice(0, 8)
+          }).filter((item) => item.values).slice(0, 6)
         : [],
-      microbiology: lines(objective.microbiology, 6),
+      microbiology: lines(objective.microbiology, 4),
       imaging: Array.isArray(objective.imaging)
         ? objective.imaging.map((item) => {
             const image = record(item);
-            return { study: text(image.study), date: text(image.date), finding: text(image.finding) };
-          }).filter((item) => item.study && item.finding).slice(0, 8)
+            return { study: text(image.study), date: text(image.date), finding: text(image.finding), sourceIds: lines(image.sourceIds, 12) };
+          }).filter((item) => item.study && item.finding).slice(0, 4)
         : [],
       pathology: Array.isArray(objective.pathology)
         ? objective.pathology.map((item) => {
             const pathology = record(item);
             return { date: text(pathology.date), specimen: text(pathology.specimen), result: text(pathology.result) };
-          }).filter((item) => item.result).slice(0, 6)
+          }).filter((item) => item.result).slice(0, 3)
         : [],
-      other: lines(objective.other, 6),
+      other: lines(objective.other, 4),
     },
     assessmentPlan: Array.isArray(draft.assessmentPlan)
       ? draft.assessmentPlan.map((item) => {
@@ -110,13 +110,13 @@ export function parseStructuredRoundSoapDraft(value: unknown): StructuredRoundSo
             plan: text(problem.plan),
             sourceEvidence: lines(problem.sourceEvidence, 5),
           };
-        }).filter((item) => item.problemTitle).slice(0, 8)
+        }).filter((item) => item.problemTitle).slice(0, 6)
       : [],
-    orders: lines(draft.orders, 10),
-    tasks: lines(draft.tasks, 8),
-    discharge: lines(draft.discharge, 6),
-    warnings: lines(draft.warnings, 10),
-    highlightHints: lines(draft.highlightHints, 12),
+    orders: lines(draft.orders, 6),
+    tasks: lines(draft.tasks, 6),
+    discharge: lines(draft.discharge, 4),
+    warnings: lines(draft.warnings, 4),
+    highlightHints: lines(draft.highlightHints, 8),
   };
 }
 

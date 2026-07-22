@@ -195,6 +195,7 @@ export interface GenerateRoundSoapInput {
   deidentifiedConfirmed: boolean;
   qualityMode?: "fast" | "balanced" | "highAccuracy";
   supportsBackgroundPolling?: boolean;
+  retryAttempt?: number;
   userStyleProfile?: UserAiStyleProfile;
   patientContext?: {
     age?: string | number;
@@ -202,6 +203,7 @@ export interface GenerateRoundSoapInput {
     pmh?: string[] | string;
     activeProblems?: string[] | string;
     labFacts?: string[];
+    imageFacts?: string[];
   };
 }
 
@@ -237,7 +239,7 @@ export interface StructuredRoundSoapDraft {
     physicalExam: string[];
     labs: Array<{ panel: RoundSoapLabPanel; values: string; sourceIds?: string[] }>;
     microbiology: string[];
-    imaging: Array<{ study: string; date: string; finding: string }>;
+    imaging: Array<{ study: string; date: string; finding: string; sourceIds?: string[] }>;
     pathology: Array<{ date: string; specimen: string; result: string }>;
     other: string[];
   };

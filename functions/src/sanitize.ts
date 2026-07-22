@@ -17,6 +17,7 @@ export function sanitizePatientContext(input: CallableInput["patientContext"]) {
     pmh: asStringArray(input.pmh),
     activeProblems: asStringArray(input.activeProblems),
     labFacts: asStringArray(input.labFacts).slice(0, 100).map((value) => value.slice(0, 240)),
+    imageFacts: asStringArray(input.imageFacts).slice(0, 40).map((value) => value.slice(0, 420)),
   };
 }
 

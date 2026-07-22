@@ -1,6 +1,6 @@
 import { compactLabKey, findLabDictionaryItem } from "./data/labDictionary";
 import { parseLabReports } from "./labParsing";
-import { normalizeLabTableSourceText } from "./objectiveLineSanitizer";
+import { normalizeCompactBloodGasLine, normalizeLabTableSourceText } from "./objectiveLineSanitizer";
 import type { ParsedLabItem } from "./types";
 
 export interface CanonicalLabItem extends ParsedLabItem {
@@ -31,7 +31,9 @@ function safeIdPart(value: string) {
 }
 
 function withStableIds(value: string) {
-  const normalized = normalizeLabTableSourceText(value);
+  const normalized = normalizeLabTableSourceText(
+    String(value ?? "").split(/\r?\n/).map(normalizeCompactBloodGasLine).join("\n"),
+  );
   const seen = new Set<string>();
   const allItems: CanonicalLabItem[] = [];
 

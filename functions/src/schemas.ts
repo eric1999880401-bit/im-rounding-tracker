@@ -303,8 +303,13 @@ export const roundSoapDraftSchema = {
           items: {
             type: "object",
             additionalProperties: false,
-            required: ["study", "date", "finding"],
-            properties: { study: stringSchema, date: stringSchema, finding: stringSchema },
+            required: ["study", "date", "finding", "sourceIds"],
+            properties: {
+              study: stringSchema,
+              date: stringSchema,
+              finding: stringSchema,
+              sourceIds: { type: "array", items: stringSchema },
+            },
           },
         },
         pathology: {

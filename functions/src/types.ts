@@ -52,6 +52,7 @@ export interface CallableInput {
     pmh?: unknown;
     activeProblems?: unknown;
     labFacts?: unknown;
+    imageFacts?: unknown;
   };
 }
 
@@ -65,6 +66,7 @@ export interface RoundSoapCallableInput {
   deidentifiedConfirmed?: unknown;
   qualityMode?: unknown;
   supportsBackgroundPolling?: unknown;
+  retryAttempt?: unknown;
   userStyleProfile?: unknown;
   patientContext?: CallableInput["patientContext"];
 }

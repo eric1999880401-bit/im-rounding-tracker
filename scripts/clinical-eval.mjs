@@ -91,7 +91,8 @@ const { labReferenceText, parseClinicalLabTokens } = await server.ssrLoadModule(
 const { boardDischargeTasks, hasBoardDischargeSoonSignal, isBoardNewAdmission } = await server.ssrLoadModule("/src/boardCockpit.ts");
 const { buildLabVisualSummaryFromText, formatLabVisualSummaryFromLines, formatLabVisualSummaryLinesFromText } = await server.ssrLoadModule("/src/labVisualSummary.ts");
 const { buildCanonicalLabDataset, canonicalLabFactsForAi } = await server.ssrLoadModule("/src/labDataset.ts");
-const { normalizeLabTableSourceText } = await server.ssrLoadModule("/src/objectiveLineSanitizer.ts");
+const { buildCanonicalImageDataset, canonicalImageFactsForAi } = await server.ssrLoadModule("/src/imageDataset.ts");
+const { normalizeCompactBloodGasLine, normalizeLabTableSourceText } = await server.ssrLoadModule("/src/objectiveLineSanitizer.ts");
 const { acceptStructuredRoundSoap, structuredRoundSoapToEditorDraft } = await server.ssrLoadModule("/src/roundSoapContract.ts");
 const { formatSoapBasedIsbar } = await server.ssrLoadModule("/src/soapSbar.ts");
 const { AI_SOAP_OUTPUT_CONTRACT_VERSION, normalizeAiSoapText } = await server.ssrLoadModule("/src/aiSoapContract.ts");
@@ -819,6 +820,113 @@ try {
 } catch (error) {
   failures.push({ name: "Canonical HIS lab dataset and AI source selection", error: error instanceof Error ? error.message : String(error) });
   console.error(`FAIL Canonical HIS lab dataset and AI source selection: ${failures[failures.length - 1].error}`);
+}
+
+try {
+  const mixedNewAdmissionSource = [
+    "This study is compared with the prior examinations dated 2024-09-24 (CT).",
+    "Abdomen CT 2026-07-19 有/無造影劑",
+    "CT of abdomen and pelvis survey with pre and post IV contrast enhancement showed:",
+    "Findings:",
+    "1. Irregular rectal mass with invasion to adjacent organs.",
+    "Impression:",
+    "Rectal cancer with adjacent organ invasion, cT4bN0M0.",
+    "VBG 7.39/41/27/24.8.",
+  ].join("\n");
+  const routed = splitGuidedSoapSource(mixedNewAdmissionSource);
+  if (!/VBG:\s*pH 7\.39, pCO2 41, pO2 27, HCO3 24\.8/i.test(routed.labs) || /VBG/i.test(routed.other)) {
+    throw new Error(`compact VBG was not routed to Lab/ABG-VBG:\n${JSON.stringify(routed)}`);
+  }
+  if (normalizeCompactBloodGasLine("VBG 7.39/41/27/24.8") !== "VBG: pH 7.39, pCO2 41, pO2 27, HCO3 24.8") {
+    throw new Error("compact VBG normalization changed source values or ordering");
+  }
+  const gasDataset = buildCanonicalLabDataset(routed.labs);
+  const gasValues = new Map(gasDataset.latestItems.map((item) => [item.label, item.value]));
+  for (const [label, expected] of [["pH", "7.39"], ["pCO2", "41"], ["pO2", "27"], ["HCO3", "24.8"]]) {
+    if (gasValues.get(label) !== expected) throw new Error(`VBG ${label} shifted: ${JSON.stringify([...gasValues])}`);
+  }
+
+  const imageDataset = buildCanonicalImageDataset(mixedNewAdmissionSource);
+  const imageFacts = canonicalImageFactsForAi(imageDataset);
+  if (imageFacts.some((line) => /compared with|survey with|showed:\s*$/i.test(line))) {
+    throw new Error(`image boilerplate entered canonical evidence:\n${imageFacts.join("\n")}`);
+  }
+  const cancerFact = imageDataset.facts.find((fact) => /cT4bN0M0/i.test(fact.evidence));
+  if (!cancerFact || cancerFact.study !== "CT A/P" || cancerFact.date !== "2026-07-19") {
+    throw new Error(`current CT study/date/finding was not preserved: ${JSON.stringify(imageDataset)}`);
+  }
+
+  const labId = (label) => gasDataset.latestItems.find((item) => item.label === label)?.id ?? "";
+  const candidate = {
+    headerLines: ["Synthetic new admission"],
+    subjectiveLines: ["Abdominal discomfort"],
+    objective: {
+      vitalSigns: [],
+      physicalExam: [],
+      labs: [{ panel: "ABG/VBG", values: "VBG values rewritten by model", sourceIds: [labId("pH"), labId("pCO2"), labId("pO2"), labId("HCO3")] }],
+      microbiology: [],
+      imaging: [{ study: "CT A/P", date: "2026-07-19", finding: "Rectal cancer with adjacent organ invasion, cT4bN0M0", sourceIds: [cancerFact.id] }],
+      pathology: [],
+      other: [],
+    },
+    assessmentPlan: [{ problemTitle: "Rectal cancer", status: "active", summary: "Locally advanced disease.", plan: "Oncology review.", sourceEvidence: ["cT4bN0M0"] }],
+    orders: [],
+    tasks: [],
+    discharge: [],
+    warnings: [],
+    highlightHints: [],
+  };
+  const accepted = acceptStructuredRoundSoap({
+    value: candidate,
+    baselineText: "",
+    sourceFields: { labs: routed.labs, images: routed.images, rawSource: mixedNewAdmissionSource },
+    workflowMode: "newSoap",
+  });
+  if (!/Lab: ABG\/VBG:.*pH 7\.39.*pCO2 41.*pO2 27.*HCO3 24\.8/i.test(accepted.review.acceptedText)) {
+    throw new Error(`VBG did not render as one source-owned Lab panel:\n${accepted.review.acceptedText}`);
+  }
+  if (!/Image: CT A\/P 2026-07-19: Rectal cancer with adjacent organ invasion, cT4bN0M0/i.test(accepted.review.acceptedText)) {
+    throw new Error(`AI-selected CT evidence did not render as one concise study:\n${accepted.review.acceptedText}`);
+  }
+  if (/compared with|有\/無造影劑|survey with|showed:\s*$/im.test(accepted.review.acceptedText) || /Other:.*VBG/i.test(accepted.review.acceptedText)) {
+    throw new Error(`raw image boilerplate or misrouted VBG reached the editor:\n${accepted.review.acceptedText}`);
+  }
+
+  const multiStudySource = [
+    "CXR 2026-07-20: RLL opacity compatible with pneumonia.",
+    "Chest CT 2026-07-21: small right pleural effusion without pneumothorax.",
+    "CC: cough for 3 days",
+    "PNA clinically suspected after aspiration.",
+  ].join("\n");
+  const multiStudyDataset = buildCanonicalImageDataset(multiStudySource);
+  if (multiStudyDataset.facts.some((fact) => /clinically suspected|cough for/i.test(fact.evidence))) {
+    throw new Error(`non-image CC/HPI leaked into canonical image evidence: ${JSON.stringify(multiStudyDataset)}`);
+  }
+  const cxrFact = multiStudyDataset.facts.find((fact) => fact.study === "CXR");
+  const multiStudyCandidate = structuredClone(candidate);
+  multiStudyCandidate.objective.labs = [];
+  multiStudyCandidate.objective.imaging = [{
+    study: "CXR",
+    date: "2026-07-20",
+    finding: "RLL opacity compatible with pneumonia",
+    sourceIds: [cxrFact?.id ?? ""],
+  }];
+  multiStudyCandidate.assessmentPlan = [];
+  const multiStudyAccepted = acceptStructuredRoundSoap({
+    value: multiStudyCandidate,
+    baselineText: "",
+    sourceFields: { images: multiStudySource, rawSource: multiStudySource },
+    workflowMode: "newSoap",
+  });
+  const multiStudyText = multiStudyAccepted.review.acceptedText;
+  if ((multiStudyText.match(/Image: CXR/gi) ?? []).length !== 1 || !/Image: Chest CT 2026-07-21:\s*small right pleural effusion/i.test(multiStudyText)) {
+    throw new Error(`AI-selected imaging did not retain one concise line per source-backed study:\n${multiStudyText}`);
+  }
+  console.log("PASS Canonical objective evidence keeps VBG in Lab and renders one grounded image finding");
+  supplementalPasses += 1;
+} catch (error) {
+  failures.push({ name: "Canonical VBG and image evidence", error: error instanceof Error ? error.message : String(error) });
+  console.error(`FAIL Canonical VBG and image evidence: ${failures[failures.length - 1].error}`);
 }
 
 try {
@@ -4646,7 +4754,7 @@ try {
   if (balancedDailyTuning.reasoning.effort !== "low") {
     throw new Error("daily SOAP should reserve output headroom instead of spending it on hidden reasoning");
   }
-  if (balancedDailyTuning.max_output_tokens !== 4500 || balancedFullTuning.max_output_tokens !== 4500) {
+  if (balancedDailyTuning.max_output_tokens !== 8_000 || balancedFullTuning.max_output_tokens !== 12_000) {
     throw new Error(`balanced SOAP output budgets no longer reserve enough visible daily JSON: daily=${balancedDailyTuning.max_output_tokens}, full=${balancedFullTuning.max_output_tokens}`);
   }
   if (getResponseTuning("highAccuracy", "roundSoapFull").reasoning.effort !== "high") {
@@ -4672,6 +4780,12 @@ try {
   }
   if (getRoundSoapMaxOutputTokens("highAccuracy", "repairSoap", 100, 9_000) < 24_000) {
     throw new Error("high-quality old SOAP repair lacks enough strict-JSON output headroom");
+  }
+  if (getRoundSoapMaxOutputTokens("highAccuracy", "newSoap", 10_235, 0) < 24_000) {
+    throw new Error("high-quality first SOAP can still exhaust hidden reasoning before strict JSON output");
+  }
+  if (getRoundSoapMaxOutputTokens("highAccuracy", "newSoap", 10_235, 0, 1) < 32_000) {
+    throw new Error("automatic completion retry does not increase the first-SOAP output budget");
   }
   if (resolveRoundSoapQuality("fast", "repairSoap", "baseline repair", "S:\n- stable") !== "balanced") {
     throw new Error("old SOAP repair was allowed to use the low-fidelity fast model");
@@ -4856,7 +4970,11 @@ try {
     selectedDate: "2026-07-10",
     rawText: "Na 158 from 142; CXR 07-10 RLL opacity improving",
     currentSoapBaseline: "S:\n- no dyspnea\nO:\nLab: Na 142\nA/P:\n# CAP\n- ceftriaxone",
-    patientContext: { primaryDiagnosis: "CAP", labFacts: ["[lab-na-2026-07-10-0-0]; Na 158; previous 142; date 2026-07-10; flag H"] },
+    patientContext: {
+      primaryDiagnosis: "CAP",
+      labFacts: ["[lab-na-2026-07-10-0-0]; Na 158; previous 142; date 2026-07-10; flag H"],
+      imageFacts: ["[img-cxr-07-10-0]; CXR; date 07-10; RLL opacity improving"],
+    },
     userStyleProfile: { styleSummary: "terse IM abbreviations" },
     dailyNotes: [],
   });
@@ -4870,6 +4988,9 @@ try {
     /every current high-risk fact is present once/i,
     /Each lab object must include sourceIds/i,
     /application will render the source value verbatim/i,
+    /Each imaging object must cite sourceIds/i,
+    /Comparison statements, technique\/protocol text, study titles without findings/i,
+    /Canonical image evidence is listed in patientContext\.imageFacts/i,
     /Today's pasted de-identified clinical data:\nNa 158 from 142/i,
   ];
   requiredRules.forEach((pattern) => {
@@ -5496,7 +5617,7 @@ try {
   omittedImageDraft.objective.imaging = [];
   const omittedImage = acceptStructuredRoundSoap({ value: omittedImageDraft, baselineText: "", sourceFields, workflowMode: "newSoap" });
   const omittedImageText = editorDraftToSoapText(omittedImage.draft);
-  if (omittedImage.fatalErrors.length > 0 || !/Image: CXR 07-20 RLL opacity/i.test(omittedImageText)) {
+  if (omittedImage.fatalErrors.length > 0 || !/Image: CXR 07-20:\s*RLL opacity/i.test(omittedImageText)) {
     throw new Error(`source imaging was not restored without blocking the draft:\n${omittedImageText}`);
   }
 

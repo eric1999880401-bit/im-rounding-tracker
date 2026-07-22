@@ -1,6 +1,11 @@
 import { extractActiveAntibioticNames } from "./antibioticPlan";
 import { classifyClinicalLine, type ClinicalLineKind } from "./clinicalLineClassifier";
 import { buildCanonicalLabDataset, labSelectionKeysFromText } from "./labDataset";
+import {
+  buildCanonicalImageDataset,
+  canonicalImageFallbackLines,
+  imageOutputUsesOnlySourceNumbers,
+} from "./imageDataset";
 import { formatLabVisualSummaryLinesFromText } from "./labVisualSummary";
 import { normalizeObjectiveLabExportLines, objectiveKindFromLine } from "./objectiveLineSanitizer";
 import {
@@ -124,7 +129,7 @@ export function isVitalsOnlyDailySource(fields: RoundSoapSourceFields) {
 }
 
 function looksLikeLabs(value: string) {
-  const labels = value.match(/\b(?:WBC|Neu|Hb|Hgb|Hct|Plt|BUN|Cr|eGFR|Na|K|Cl|Ca|Mg|Phos|AST|ALT|ALP|T-?Bil|Alb|PT|INR|CRP|PCT|lactate|pH|pCO2|HCO3|troponin|BNP)\b/gi) ?? [];
+  const labels = value.match(/\b(?:WBC|Neu|Hb|Hgb|Hct|Plt|BUN|Cr|eGFR|Na|K|Cl|Ca|Mg|Phos|AST|ALT|ALP|T-?Bil|Alb|PT|INR|CRP|PCT|lactate|ABG|VBG|pH|pCO2|pO2|HCO3|BE|troponin|BNP)\b/gi) ?? [];
   const numbers = value.match(/(?:^|\s|[:=])([<>]?-?\d+(?:\.\d+)?)(?=\s|[,;/%)]|$)/gm) ?? [];
   return labels.length >= 2 && numbers.length >= 2;
 }
@@ -177,11 +182,35 @@ function sourceLines(value: unknown) {
     .filter(Boolean);
 }
 
-function sourceImageEditorLines(fields: RoundSoapSourceFields) {
-  const candidates = hasText(fields.images)
-    ? sourceLines(fields.images)
-    : sourceLines(fields.rawSource).filter(looksLikeImage);
-  return uniqueEditorLines(candidates.map((text) => editorLine(text.replace(/^(?:Image|Img|Imaging)\s*:\s*/i, ""), "image")));
+function sourceImageEditorLines(
+  fields: RoundSoapSourceFields,
+  selectedImages: StructuredRoundSoapDraft["objective"]["imaging"] = [],
+) {
+  const dataset = buildCanonicalImageDataset([fields.images, fields.rawSource].filter(Boolean).join("\n"));
+  const factsById = new Map(dataset.facts.map((fact) => [fact.id, fact]));
+  const selectedReportKeys = new Set<string>();
+  const selectedLines = selectedImages.flatMap((image) => {
+    const selectedFacts = (image.sourceIds ?? [])
+      .map((id) => factsById.get(id))
+      .filter((fact): fact is NonNullable<typeof fact> => Boolean(fact));
+    const evidenceFacts = selectedFacts.length > 0 ? selectedFacts : dataset.facts;
+    if (evidenceFacts.length === 0) return [];
+    const display = `${image.study}${image.date ? ` ${image.date}` : ""}: ${image.finding}`.trim();
+    if (!imageOutputUsesOnlySourceNumbers(display, evidenceFacts)) return [];
+    if (selectedFacts.length > 0) {
+      selectedFacts.forEach((fact) => selectedReportKeys.add(fact.reportKey));
+    } else {
+      const selectedStudy = imageStudyKey(display);
+      dataset.facts
+        .filter((fact) => imageStudyKey(`${fact.study} ${fact.date}: ${fact.evidence}`) === selectedStudy)
+        .forEach((fact) => selectedReportKeys.add(fact.reportKey));
+    }
+    return [editorLine(display, "image")];
+  });
+  const remainingSlots = Math.max(0, 4 - selectedLines.length);
+  const sourceFallback = canonicalImageFallbackLines(dataset, remainingSlots, selectedReportKeys)
+    .map((line) => editorLine(line, "image"));
+  return uniqueEditorLines([...selectedLines, ...sourceFallback]);
 }
 
 function sourcePathologyEditorLines(fields: RoundSoapSourceFields) {
@@ -454,12 +483,13 @@ export function acceptStructuredRoundSoap(params: {
   const source = sourceText(params.sourceFields);
   const sourceHasVitals = hasText(params.sourceFields.vitals) || looksLikeVitals(source);
   const sourceHasLabs = hasText(params.sourceFields.labs) || looksLikeLabs(source);
-  const sourceHasImages = hasText(params.sourceFields.images) || looksLikeImage(source);
+  const sourceImageDataset = buildCanonicalImageDataset([params.sourceFields.images, params.sourceFields.rawSource].filter(Boolean).join("\n"));
+  const sourceHasImages = sourceImageDataset.facts.length > 0 || hasText(params.sourceFields.images) || looksLikeImage(source);
   const sourceHasOther = hasText(params.sourceFields.other);
   const sourceHasOrders = hasText(params.sourceFields.orders);
   const sourceOwnedLabs = sourceHasLabs ? sourceLabEditorLines(params.sourceFields, params.value.objective.labs) : [];
   const sourceOwnedVitals = sourceHasVitals ? sourceVitalLines(params.sourceFields.vitals) : [];
-  const sourceOwnedImages = sourceHasImages ? sourceImageEditorLines(params.sourceFields) : [];
+  const sourceOwnedImages = sourceHasImages ? sourceImageEditorLines(params.sourceFields, params.value.objective.imaging) : [];
   const sourceOwnedPathology = looksLikePathology(source) ? sourcePathologyEditorLines(params.sourceFields) : [];
   const sourceOwnedOrders = sourceHasOrders ? sourceOrderEditorLines(params.sourceFields) : [];
   const sourceOwnedLabText = sourceOwnedLabs.map((line) => line.text).join(" ");

@@ -3,7 +3,7 @@ import { ensureAntibioticApInDraft } from "./antibioticPlan";
 import { normalizeApProblems } from "./apProblemNormalizer";
 import { imageStudyKey } from "./clinicalFieldRouter";
 import { dedupeDiseaseItems, dedupeDiseaseText } from "./aiPostprocess/diseaseDedupe";
-import { normalizeLabTableSourceText } from "./objectiveLineSanitizer";
+import { normalizeLabTableSourceText, objectiveKindFromLine } from "./objectiveLineSanitizer";
 import type { AiSoapDraft, AssessmentPlanItem, DailyNote, Patient, PatientTask, TaskCategory, TaskPriority } from "./types";
 import {
   createId,
@@ -366,6 +366,19 @@ function routeUnguidedSoapSourceFragment(
     buckets.admission.push(trimmed);
     return;
   }
+  const objectiveKind = objectiveKindFromLine(trimmed, "other");
+  if (objectiveKind === "lab") {
+    buckets.labs.push(trimmed.replace(/^labs?\s*:\s*/i, ""));
+    return;
+  }
+  if (objectiveKind === "image") {
+    buckets.images.push(trimmed.replace(/^(?:image|img)\s*:\s*/i, ""));
+    return;
+  }
+  if (objectiveKind === "vs") {
+    buckets.vitals.push(trimmed.replace(/^(?:v\/s|vs|vitals?)\s*:\s*/i, ""));
+    return;
+  }
   if (/^(?:image|img)\s*:/i.test(trimmed) || /\b(?:CXR|CT\b|MRI|echo|sono|ultrasound|impression)\b/i.test(trimmed)) {
     buckets.images.push(trimmed.replace(/^(?:image|img)\s*:\s*/i, ""));
     return;
@@ -378,7 +391,7 @@ function routeUnguidedSoapSourceFragment(
     buckets.orders.push(trimmed.replace(/^(?:orders?|meds?|medication)\s*:\s*/i, ""));
     return;
   }
-  if (/^labs?\s*:/i.test(trimmed) || /\b(?:WBC|Hb|Hgb|Plt|Cr|BUN|Na|K\b|AST|ALT|INR|lactate|CRP|culture|B\/C|BCx)\b/i.test(trimmed)) {
+  if (/^labs?\s*:/i.test(trimmed) || /\b(?:WBC|Hb|Hgb|Plt|Cr|BUN|Na|K\b|AST|ALT|INR|lactate|CRP|culture|B\/C|BCx|ABG|VBG|pH|pCO2|HCO3)\b/i.test(trimmed)) {
     buckets.labs.push(trimmed.replace(/^labs?\s*:\s*/i, ""));
     return;
   }

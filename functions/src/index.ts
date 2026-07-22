@@ -263,6 +263,7 @@ export const generateRoundSoap = onCall(
       ? "Efficient mode was automatically raised to Recommended for this complex existing SOAP to protect clinical fidelity."
       : "";
     const supportsBackgroundPolling = data.supportsBackgroundPolling === true;
+    const retryAttempt = Math.max(0, Math.min(1, Number(data.retryAttempt) || 0));
     const requestStartedAt = Date.now();
 
     if (!patientId) {
@@ -311,7 +312,7 @@ export const generateRoundSoap = onCall(
     const requestedModel = getModelForQuality(qualityMode);
     const tuning = getResponseTuning(qualityMode, workflowMode === "dailyUpdate" ? "roundSoapDaily" : "roundSoapFull");
     const background = shouldUseBackgroundRoundSoap(qualityMode, workflowMode, preparedSource.promptChars, currentSoapBaseline.length);
-    const maxOutputTokens = getRoundSoapMaxOutputTokens(qualityMode, workflowMode, preparedSource.promptChars, currentSoapBaseline.length);
+    const maxOutputTokens = getRoundSoapMaxOutputTokens(qualityMode, workflowMode, preparedSource.promptChars, currentSoapBaseline.length, retryAttempt);
     logger.info("generateRoundSoap request prepared", {
       workflowMode,
       sourceType,
@@ -326,6 +327,7 @@ export const generateRoundSoap = onCall(
       maxOutputTokens,
       background,
       supportsBackgroundPolling,
+      retryAttempt,
     });
     const { response: openAiResponse, body: responseBody, model, pendingResponseId } = await postOpenAiResponse({
       apiKey,
@@ -335,7 +337,9 @@ export const generateRoundSoap = onCall(
       background,
       deferBackground: background && supportsBackgroundPolling,
       payload: {
-        reasoning: workflowMode === "repairSoap" && qualityMode === "highAccuracy"
+        reasoning: retryAttempt > 0
+          ? { effort: "low" }
+          : workflowMode === "repairSoap" && qualityMode === "highAccuracy"
           ? { effort: "medium" }
           : tuning.reasoning,
         max_output_tokens: maxOutputTokens,

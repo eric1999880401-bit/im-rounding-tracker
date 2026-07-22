@@ -78,8 +78,8 @@ export function getResponseTuning(qualityMode: AiQualityMode, workload: AiWorklo
     : workload === "document"
       ? 8000
       : workload === "roundSoapFull"
-        ? qualityMode === "highAccuracy" ? 6000 : qualityMode === "balanced" ? 4500 : 3500
-        : qualityMode === "highAccuracy" ? 7500 : qualityMode === "balanced" ? 4500 : 3000;
+        ? qualityMode === "highAccuracy" ? 24_000 : qualityMode === "balanced" ? 12_000 : 8_000
+        : qualityMode === "highAccuracy" ? 12_000 : qualityMode === "balanced" ? 8_000 : 6_000;
   return {
     reasoning: { effort: reasoningEffort },
     max_output_tokens: maxOutputTokens,
@@ -93,9 +93,15 @@ export function getRoundSoapMaxOutputTokens(
   workflowMode: string,
   promptSourceChars: number,
   baselineChars = 0,
+  retryAttempt = 0,
 ) {
   const workload = workflowMode === "dailyUpdate" ? "roundSoapDaily" : "roundSoapFull";
   const base = getResponseTuning(qualityMode, workload).max_output_tokens;
+  if (retryAttempt > 0) {
+    if (qualityMode === "highAccuracy") return Math.max(base, 32_000);
+    if (qualityMode === "balanced") return Math.max(base, 18_000);
+    return Math.max(base, 12_000);
+  }
   if (workflowMode === "dailyUpdate") {
     const complexBaseline = baselineChars > 3_500 || promptSourceChars + baselineChars > 9_000;
     if (!complexBaseline) return base;
@@ -110,9 +116,9 @@ export function getRoundSoapMaxOutputTokens(
 
   // Responses API max_output_tokens includes hidden reasoning tokens. Long transfer
   // records need enough headroom to finish reasoning and still emit strict JSON.
-  if (qualityMode === "highAccuracy") return Math.max(base, workflowMode === "repairSoap" ? 24_000 : 18_000);
-  if (qualityMode === "balanced") return Math.max(base, 9_000);
-  return Math.max(base, 6_000);
+  if (qualityMode === "highAccuracy") return Math.max(base, 32_000);
+  if (qualityMode === "balanced") return Math.max(base, 18_000);
+  return Math.max(base, 10_000);
 }
 
 export function resolveRoundSoapQuality(requested: AiQualityMode, workflowMode: string, rawText: string, baselineText = ""): AiQualityMode {
