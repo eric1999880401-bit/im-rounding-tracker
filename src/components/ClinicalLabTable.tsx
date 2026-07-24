@@ -1,5 +1,11 @@
-import { useMemo } from "react";
-import { formatLabVisualSummaryFromLines, type LabVisualGroup } from "../labVisualSummary";
+import { useMemo, useState } from "react";
+import type { KeyboardEvent } from "react";
+import {
+  formatLabVisualSummaryFromLines,
+  type LabVisualGroup,
+  type LabVisualItem,
+} from "../labVisualSummary";
+import { labReferenceText } from "../labReference";
 import type { KeywordHighlightRule } from "../types";
 import type { RoundNoteLineView } from "../roundNoteViewModel";
 import { ClinicalInlineText, type LabReferenceDisplayMode } from "./ClinicalText";
@@ -29,6 +35,99 @@ function visibleGroups(groups: LabVisualGroup[], density: ClinicalLabTableDensit
   return groups.filter((group) => selected.has(group.id));
 }
 
+const compactGroupLabels: Record<LabVisualGroup["id"], string> = {
+  cbc: "CBC",
+  renalLyte: "Renal/Lyte",
+  liverCoag: "Liver/Coag",
+  infxPerfusion: "Infx",
+  gas: "Gas",
+  cardiac: "Cardiac",
+  other: "Other",
+};
+
+function groupDisplayLabel(group: LabVisualGroup, density: ClinicalLabTableDensity) {
+  return density === "detail" ? group.label : compactGroupLabels[group.id];
+}
+
+function labItemDisplayParts(item: LabVisualItem) {
+  const source = item.text.trim();
+  const label = item.label.trim();
+  const narrative = item.explicitMark || label === "Microbiology" || label === "Other";
+  if (narrative) return { label: "", value: source, previous: "" };
+
+  const startsWithLabel =
+    source.slice(0, label.length).toLocaleLowerCase() === label.toLocaleLowerCase() &&
+    (!source[label.length] || /[\s:]/.test(source[label.length]));
+  const value = (startsWithLabel ? source.slice(label.length).replace(/^\s*:\s*|\s+/, "") : source).trim();
+  const previousMatch = value.match(/^([\s\S]*?)(\([^()\r\n]{1,32}\))$/);
+  if (!previousMatch) return { label, value, previous: "" };
+  return {
+    label,
+    value: previousMatch[1].trim(),
+    previous: previousMatch[2],
+  };
+}
+
+function LabItemContent({
+  item,
+  keywordRules,
+  labReferenceDisplay,
+}: {
+  item: LabVisualItem;
+  keywordRules: KeywordHighlightRule[];
+  labReferenceDisplay: LabReferenceDisplayMode;
+}) {
+  const [referenceOpen, setReferenceOpen] = useState(false);
+  const display = labItemDisplayParts(item);
+  const reference = display.label ? labReferenceText(display.label) : "";
+  const canExpandReference = labReferenceDisplay === "detail" && Boolean(reference);
+  const toggleReference = () => {
+    if (canExpandReference) setReferenceOpen((open) => !open);
+  };
+  const onKeyDown = (event: KeyboardEvent<HTMLSpanElement>) => {
+    if (!canExpandReference) return;
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      toggleReference();
+    } else if (event.key === "Escape") {
+      setReferenceOpen(false);
+    }
+  };
+
+  return (
+    <>
+      {display.label && <span className="clinical-lab-item-name">{display.label}</span>}
+      <span
+        className={`clinical-lab-item-value${canExpandReference ? " clinical-lab-item-value-clickable" : ""}`}
+        onClick={toggleReference}
+        onKeyDown={onKeyDown}
+        role={canExpandReference ? "button" : undefined}
+        tabIndex={canExpandReference ? 0 : undefined}
+        title={labReferenceDisplay === "tooltip" && reference ? reference : undefined}
+      >
+        <ClinicalInlineText
+          value={display.value}
+          keywordRules={keywordRules}
+          labReferenceDisplay="none"
+        />
+      </span>
+      {display.previous && (
+        <span className="clinical-lab-item-previous" aria-label={`previous ${display.previous.slice(1, -1)}`}>
+          {display.previous}
+        </span>
+      )}
+      {labReferenceDisplay === "inline" && reference && (
+        <span className="clinical-lab-ref-inline">({reference})</span>
+      )}
+      {referenceOpen && reference && (
+        <span className="clinical-lab-ref-detail">
+          Ref: {display.label} {reference.replace(/^ref\s*/i, "")}
+        </span>
+      )}
+    </>
+  );
+}
+
 export function ClinicalLabTable({
   lines,
   density = "detail",
@@ -55,7 +154,7 @@ export function ClinicalLabTable({
         <tbody>
           {groups.map((group) => (
             <tr className={`clinical-lab-group clinical-lab-group-${group.tone}`} key={group.id}>
-              <th scope="row">{group.label}</th>
+              <th scope="row" title={group.label}>{groupDisplayLabel(group, density)}</th>
               <td>
                 <div className="clinical-lab-items">
                   {group.items.map((item) => (
@@ -63,8 +162,8 @@ export function ClinicalLabTable({
                       className={`clinical-lab-item clinical-lab-item-${item.tone}${item.label === "Microbiology" || item.text.length > 42 ? " clinical-lab-item-long" : ""}`}
                       key={`${group.id}-${item.key}-${item.sourceId || item.sourceIndex}`}
                     >
-                      <ClinicalInlineText
-                        value={item.text}
+                      <LabItemContent
+                        item={item}
                         keywordRules={keywordRules}
                         labReferenceDisplay={labReferenceDisplay}
                       />

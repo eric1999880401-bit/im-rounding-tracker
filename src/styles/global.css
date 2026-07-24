@@ -2345,9 +2345,6 @@ tbody tr:last-child td {
 }
 
 .clinical-lab-table-wrap {
-  border: 1px solid var(--border);
-  border-left: 3px solid var(--warning-text);
-  border-radius: var(--radius-sm);
   min-width: 0;
   overflow: hidden;
   width: 100%;
@@ -2361,10 +2358,10 @@ tbody tr:last-child td {
 
 .clinical-lab-table th,
 .clinical-lab-table td {
-  border-bottom: 1px solid var(--border);
-  padding: 4px 7px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  padding: 4px 5px;
   text-align: left;
-  vertical-align: top;
+  vertical-align: baseline;
 }
 
 .clinical-lab-table tr:last-child th,
@@ -2373,71 +2370,97 @@ tbody tr:last-child td {
 }
 
 .clinical-lab-table th {
-  background: var(--surface-muted);
   color: var(--text-subtle);
-  font-size: 9.5px;
-  font-weight: 850;
-  letter-spacing: 0.03em;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0;
   line-height: 1.2;
-  width: 92px;
+  padding-left: 0;
+  text-transform: none;
+  white-space: nowrap;
+  width: 86px;
 }
 
 .clinical-lab-table td {
-  background: var(--surface);
   color: var(--text);
   min-width: 0;
+  padding-right: 0;
 }
 
 .clinical-lab-items {
   align-items: baseline;
   display: flex;
   flex-wrap: wrap;
-  gap: 2px 0;
+  gap: 3px 12px;
   min-width: 0;
 }
 
 .clinical-lab-item {
-  border-right: 1px solid var(--border);
-  display: inline-block;
-  font-size: 11.5px;
+  align-items: baseline;
+  column-gap: 3px;
+  display: inline-flex;
+  flex-wrap: wrap;
+  font-size: 11.4px;
   font-variant-numeric: tabular-nums;
-  font-weight: 680;
   line-height: 1.25;
-  margin-right: 7px;
   max-width: 100%;
   overflow-wrap: break-word;
-  padding-right: 7px;
   white-space: nowrap;
 }
 
-.clinical-lab-item:last-child {
-  border-right: 0;
-  margin-right: 0;
-  padding-right: 0;
+.clinical-lab-item-name {
+  color: var(--text-subtle);
+  font-size: 0.82em;
+  font-weight: 760;
+}
+
+.clinical-lab-item-value {
+  color: var(--text);
+  font-weight: 780;
+}
+
+.clinical-lab-item-value-clickable {
+  border-bottom: 1px dotted currentColor;
+  cursor: pointer;
+}
+
+.clinical-lab-item-value-clickable:focus {
+  border-radius: 2px;
+  outline: 2px solid var(--accent-soft-border);
+  outline-offset: 2px;
+}
+
+.clinical-lab-item-previous {
+  color: var(--text-muted);
+  font-size: 0.78em;
+  font-weight: 650;
 }
 
 .clinical-lab-item-long {
-  border-right: 0;
   flex-basis: 100%;
   white-space: normal;
 }
 
-.clinical-lab-item-important {
+.clinical-lab-item-long .clinical-lab-item-value {
+  font-weight: 680;
+}
+
+.clinical-lab-item-important .clinical-lab-item-value {
   color: var(--warning-text);
   font-weight: 800;
 }
 
-.clinical-lab-item-critical {
+.clinical-lab-item-critical .clinical-lab-item-value {
   color: var(--danger-text);
   font-weight: 850;
 }
 
-.clinical-lab-group-important th {
-  color: var(--warning-text);
-}
-
-.clinical-lab-group-critical th {
-  color: var(--danger-text);
+.clinical-lab-item .clinical-lab-ref-detail {
+  border-left-width: 2px;
+  flex-basis: 100%;
+  font-size: 10px;
+  margin-top: 2px;
+  padding: 2px 5px;
 }
 
 .clinical-lab-table-empty {
@@ -2446,32 +2469,43 @@ tbody tr:last-child td {
 }
 
 .clinical-lab-table-board th {
-  width: 72px;
+  color: var(--text-muted);
+  font-size: 9px;
+  width: 64px;
 }
 
 .clinical-lab-table-board .clinical-lab-table th,
 .clinical-lab-table-board .clinical-lab-table td {
-  padding: 3px 6px;
+  padding-bottom: 3px;
+  padding-top: 3px;
 }
 
 .clinical-lab-table-board .clinical-lab-item {
-  font-size: 11.2px;
+  font-size: 11.3px;
+}
+
+.clinical-lab-table-board .clinical-lab-item-name {
+  font-size: 0.86em;
 }
 
 .clinical-lab-table-print th {
-  width: 68px;
+  font-size: 8px;
+  width: 54px;
 }
 
 .clinical-lab-table-print .clinical-lab-table th,
 .clinical-lab-table-print .clinical-lab-table td {
-  padding: 2px 4px;
+  padding-bottom: 2px;
+  padding-top: 2px;
 }
 
 .clinical-lab-table-print .clinical-lab-item {
   font-size: 10px;
   line-height: 1.15;
-  margin-right: 5px;
-  padding-right: 5px;
+}
+
+.clinical-lab-table-print .clinical-lab-items {
+  gap: 2px 8px;
 }
 
 .board-visual-line-s {

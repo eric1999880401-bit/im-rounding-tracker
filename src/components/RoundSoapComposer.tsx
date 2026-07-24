@@ -30,6 +30,7 @@ import {
   acceptSoapDeltaSection,
   restoreSoapDeltaSection,
   soapPatchMatchesBaseline,
+  type RoundSoapSourceFields,
   type SoapDeltaReview,
   type SoapDeltaSection,
 } from "../soapDeltaGuardrails";
@@ -37,6 +38,7 @@ import {
   acceptStructuredRoundSoap,
   applyVitalsOnlyDailyUpdate,
   isVitalsOnlyDailySource,
+  normalizeRoundSoapSourceFields,
 } from "../roundSoapContract";
 import { appendSoapEditTrace, buildSoapEditTrace, nextSoapVersion, type SoapEditOrigin } from "../soapEditTrace";
 import {
@@ -537,47 +539,49 @@ function RoundSoapComposer({
     return composeDailyUpdateText();
   }
 
-  function currentSourceFields(mode: WorkflowMode = workflowMode): SoapSourceFields {
-    if (mode === "repairSoap") return { other: mixedSourceText.trim(), rawSource: mixedSourceText.trim() };
+  function currentSourceFields(mode: WorkflowMode = workflowMode): RoundSoapSourceFields & SoapSourceFields {
+    if (mode === "repairSoap") {
+      return normalizeRoundSoapSourceFields({ other: mixedSourceText.trim(), rawSource: mixedSourceText.trim() });
+    }
     if (mixedSourceText.trim()) {
       const routed = splitGuidedSoapSource(mixedSourceText);
       if (mode === "dailyUpdate") {
-        return {
+        return normalizeRoundSoapSourceFields({
           vitals: routed.vitals,
           labs: routed.labs,
           images: routed.images,
           orders: routed.orders,
           other: [routed.admission, routed.other].filter(Boolean).join("\n"),
           rawSource: mixedSourceText,
-        };
+        });
       }
       if (mode === "newSoap") {
-        return {
-          admission: mixedSourceText,
+        return normalizeRoundSoapSourceFields({
+          admission: routed.admission,
           vitals: routed.vitals,
           labs: routed.labs,
           images: routed.images,
           orders: routed.orders,
           other: routed.other,
           rawSource: mixedSourceText,
-        };
+        });
       }
       if (mode === "transferHandoff") {
-        return {
-          admission: mixedSourceText,
-          lastSoap: mixedSourceText,
+        return normalizeRoundSoapSourceFields({
+          admission: routed.admission,
+          lastSoap: routed.lastSoap,
           vitals: routed.vitals,
           labs: routed.labs,
           images: routed.images,
           orders: routed.orders,
           other: routed.other,
           rawSource: mixedSourceText,
-        };
+        });
       }
     }
-    if (mode === "newSoap") return { ...newSoapFields };
-    if (mode === "transferHandoff") return { ...transferFields };
-    return { ...dailyFields };
+    if (mode === "newSoap") return normalizeRoundSoapSourceFields({ ...newSoapFields });
+    if (mode === "transferHandoff") return normalizeRoundSoapSourceFields({ ...transferFields });
+    return normalizeRoundSoapSourceFields({ ...dailyFields });
   }
 
   function updateMixedSourceText(value: string) {

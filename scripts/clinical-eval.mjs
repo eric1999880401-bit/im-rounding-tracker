@@ -93,7 +93,11 @@ const { buildLabVisualSummaryFromText, formatLabVisualSummaryFromLines, formatLa
 const { buildCanonicalLabDataset, canonicalLabFactsForAi } = await server.ssrLoadModule("/src/labDataset.ts");
 const { buildCanonicalImageDataset, canonicalImageFactsForAi } = await server.ssrLoadModule("/src/imageDataset.ts");
 const { normalizeCompactBloodGasLine, normalizeLabTableSourceText } = await server.ssrLoadModule("/src/objectiveLineSanitizer.ts");
-const { acceptStructuredRoundSoap, structuredRoundSoapToEditorDraft } = await server.ssrLoadModule("/src/roundSoapContract.ts");
+const {
+  acceptStructuredRoundSoap,
+  normalizeRoundSoapSourceFields,
+  structuredRoundSoapToEditorDraft,
+} = await server.ssrLoadModule("/src/roundSoapContract.ts");
 const { formatSoapBasedIsbar } = await server.ssrLoadModule("/src/soapSbar.ts");
 const { AI_SOAP_OUTPUT_CONTRACT_VERSION, normalizeAiSoapText } = await server.ssrLoadModule("/src/aiSoapContract.ts");
 const {
@@ -734,17 +738,23 @@ try {
   const tableHtml = renderToStaticMarkup(React.createElement(ClinicalLabTable, {
     lines: [
       "Lab: CBC/DC: WBC 32.4↑(31.8), Neu 88.9↑, Hb 9.4↓, Plt 259",
-      "Lab: Infx/Perfusion: CRP 11↑(10)",
+      "Lab: Infx/Perfusion: CRP 11↑(10), Blood culture no growth",
     ],
     density: "print",
   }));
   if (!/<table[^>]+aria-label="Key laboratory results"/.test(tableHtml) ||
-      !/<th scope="row">CBC\/DC<\/th>/.test(tableHtml) ||
-      !/WBC 32\.4/.test(tableHtml) ||
-      !/CRP 11/.test(tableHtml)) {
+      !/<th scope="row" title="CBC\/DC">CBC<\/th>/.test(tableHtml) ||
+      !/clinical-lab-item-name">WBC</.test(tableHtml) ||
+      !/clinical-lab-item-value[^>]*>.*32\.4/.test(tableHtml) ||
+      !/clinical-lab-item-previous[^>]*>.*31\.8/.test(tableHtml) ||
+      !/clinical-lab-item-name">CRP</.test(tableHtml) ||
+      !/clinical-lab-item-value[^>]*>.*11/.test(tableHtml) ||
+      (tableHtml.match(/Blood culture no growth/g) ?? []).length !== 1) {
     throw new Error(`shared compact Lab table did not render grouped values: ${tableHtml}`);
   }
-  if ((tableHtml.match(/>CBC\/DC</g) ?? []).length !== 1 || /routine hidden/i.test(tableHtml)) {
+  if ((tableHtml.match(/title="CBC\/DC">CBC</g) ?? []).length !== 1 ||
+      /routine hidden/i.test(tableHtml) ||
+      /clinical-lab-table-wrap[^>]*style=/.test(tableHtml)) {
     throw new Error(`Lab table repeated panel labels or leaked hidden placeholders: ${tableHtml}`);
   }
   console.log("PASS Compact Lab table preserves critical values, trends, and deterministic same-day updates");
@@ -5780,7 +5790,7 @@ try {
   if (vitalsOnly.fatalErrors.length > 0) {
     throw new Error(`V/S-only Daily update was blocked by unrelated AI errors: ${vitalsOnly.fatalErrors.join(" | ")}`);
   }
-  if (!/V\/S: \(2026-07-21\).*BP 117\/65.*SpO2 96%/i.test(vitalsOnlyText) || /BP 112\/68/.test(vitalsOnlyText)) {
+  if (!/V\/S: 07-21.*BP 117\/65.*SpO2 96%/i.test(vitalsOnlyText) || /BP 112\/68/.test(vitalsOnlyText)) {
     throw new Error(`V/S-only Daily update did not replace the prior vitals exactly:\n${vitalsOnlyText}`);
   }
   if (!/Dyspnea improved/.test(vitalsOnlyText) || !/Lab: CBC\/DC: WBC 12\.7/.test(vitalsOnlyText) || !/# PNA \/ sepsis, improving/.test(vitalsOnlyText)) {
@@ -5813,6 +5823,103 @@ try {
 } catch (error) {
   failures.push({ name: "Structured AI SOAP contract", error: error instanceof Error ? error.message : String(error) });
   console.error(`FAIL Structured AI SOAP contract: ${failures[failures.length - 1].error}`);
+}
+
+try {
+  const mixedSource = [
+    "Admission:",
+    "Dx: sepsis / infection. PMH: remote stroke, DM, HTN.",
+    "Consult: ID recommends cefepime pending cultures; pulmonary agrees likely RLL PNA.",
+    "(2026-07-22) Vital signs: Temperature 37.8 C, BP 108/64 mmHg, Pulse 96/min, RR 20/min",
+    "SpO2: 94% on NC 2 L",
+    "Lab:",
+    "report time WBC Neu Hb Plt CRP",
+    "2026-07-21 11.2 82.0 10.4 210 6.0",
+    "2026-07-22 28.6 91.0 10.1 198 14.2",
+    "Image:",
+    "CXR 2026-07-22: new RLL opacity compatible with PNA.",
+    "Orders:",
+    "cefepime 2 g IV q8h",
+  ].join("\n");
+  const routed = normalizeRoundSoapSourceFields({
+    admission: mixedSource,
+    rawSource: mixedSource,
+  });
+  if (/Consult|CXR|WBC|SpO2/i.test(routed.admission ?? "")) {
+    throw new Error(`objective/consult data leaked into admission routing: ${JSON.stringify(routed)}`);
+  }
+  if (!/WBC 28\.6/i.test(routed.labs ?? "") ||
+      !/CXR 2026-07-22/i.test(routed.images ?? "") ||
+      !/ID recommends cefepime/i.test(routed.other ?? "")) {
+    throw new Error(`mixed admission router lost Lab/Image/Consult ownership: ${JSON.stringify(routed)}`);
+  }
+
+  const unstableCandidate = {
+    headerLines: ["Dx: sepsis / infection PMH: remote stroke, DM, HTN. Lab: WBC 28.6. Image: CXR RLL opacity."],
+    subjectiveLines: ["Cough"],
+    objective: {
+      vitalSigns: ["BP 108/64, HR 96, RR 20", "SpO2 94% NC 2 L"],
+      physicalExam: ["RLL crackles"],
+      labs: [{ panel: "Infx/Perfusion", values: "CRP 14.2" }],
+      microbiology: [],
+      imaging: [],
+      pathology: [],
+      other: ["Diagnosis: sepsis / infection", "Consult: continue cefepime"],
+    },
+    assessmentPlan: [{
+      problemTitle: "Sepsis / infection",
+      status: "active",
+      summary: "Inflammatory markers elevated.",
+      plan: "Continue cefepime 2 g IV q8h.",
+      sourceEvidence: ["likely RLL PNA", "cefepime 2 g IV q8h"],
+    }],
+    orders: ["cefepime 2 g IV q8h"],
+    tasks: ["f/u cultures"],
+    discharge: [],
+    warnings: [],
+    highlightHints: [],
+  };
+  const first = acceptStructuredRoundSoap({
+    value: unstableCandidate,
+    baselineText: "",
+    sourceFields: { admission: mixedSource, rawSource: mixedSource },
+    workflowMode: "newSoap",
+  });
+  const second = acceptStructuredRoundSoap({
+    value: structuredClone(unstableCandidate),
+    baselineText: "",
+    sourceFields: { admission: mixedSource, rawSource: mixedSource },
+    workflowMode: "newSoap",
+  });
+  const firstText = editorDraftToSoapText(first.draft);
+  const secondText = editorDraftToSoapText(second.draft);
+  if (firstText !== secondText) {
+    throw new Error(`identical source produced non-deterministic accepted SOAP:\n${firstText}\n---\n${secondText}`);
+  }
+  if ((firstText.match(/V\/S:/g) ?? []).length !== 1 ||
+      !/V\/S: 07-22 T 37\.8 C, BP 108\/64, HR 96, RR 20, SpO2 94% NC 2 L/i.test(firstText)) {
+    throw new Error(`V/S and oxygen were not consolidated into one current line:\n${firstText}`);
+  }
+  if (!/Lab: CBC\/DC: WBC 28\.6.*Neu 91\.0.*Hb 10\.1.*Plt 198/i.test(firstText) ||
+      !/Lab: Infx\/Perfusion: CRP 14\.2/i.test(firstText)) {
+    throw new Error(`source-owned Lab did not preserve current WBC/core CBC/CRP:\n${firstText}`);
+  }
+  if (!/Image: CXR 2026-07-22:.*RLL opacity/i.test(firstText) ||
+      /O:[\s\S]*Consult: continue cefepime[\s\S]*A\/P:/i.test(firstText) ||
+      /O:[\s\S]*Diagnosis: sepsis[\s\S]*A\/P:/i.test(firstText)) {
+    throw new Error(`Image/Consult/diagnosis objective routing was unstable:\n${firstText}`);
+  }
+  if (!/# Sepsis \/ infection[\s\S]*Source: RLL PNA[\s\S]*cefepime 2 g IV q8h/i.test(firstText)) {
+    throw new Error(`generic infection A/P omitted supported source or antimicrobial:\n${firstText}`);
+  }
+  if (/^Dx:.*PMH:|^Dx:.*Lab:|^Dx:.*Image:/im.test(firstText)) {
+    throw new Error(`header repeated admission/objective transcript:\n${firstText}`);
+  }
+  console.log("PASS Deterministic O keeps one V/S line, source-owned WBC/Image, consult routing, and infection source");
+  supplementalPasses += 1;
+} catch (error) {
+  failures.push({ name: "Deterministic objective and infection source contract", error: error instanceof Error ? error.message : String(error) });
+  console.error(`FAIL Deterministic objective and infection source contract: ${failures[failures.length - 1].error}`);
 }
 
 try {

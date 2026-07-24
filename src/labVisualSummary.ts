@@ -501,9 +501,10 @@ export function buildLabVisualSummaryFromText(value: string, options: LabVisualS
   const visualItems: LabVisualItem[] = markedVisualItemsFromText(sourceLines.map((line) => line.body).join("\n"));
   sourceLines.forEach((source, sourceIndex) => {
     if (!/\b(?:(?:blood|urine|sputum|csf)\s*(?:culture|cx)|(?:b|u|s)\/?c|(?:bc|uc|sc)x|stool\s+(?:o&p|occult|fobt)|c\.?\s*difficile)\b/i.test(source.body)) return;
+    if (source.items.some((item) => /(?:Microbiology|Stool studies|culture|(?:B|U|S)\/?C|(?:BC|UC|SC)x)/i.test(String(item.name || item.label || "")))) return;
     visualItems.push({
       sourceId: "",
-      key: `micro|${sourceIndex}|${source.body.toLowerCase()}`,
+      key: `micro|${source.body.toLowerCase().replace(/\s+/g, " ").trim()}`,
       label: "Microbiology",
       value: source.body,
       previousValue: "",

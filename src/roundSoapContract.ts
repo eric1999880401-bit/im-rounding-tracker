@@ -4,10 +4,10 @@ import { buildCanonicalLabDataset, labSelectionKeysFromText } from "./labDataset
 import {
   buildCanonicalImageDataset,
   canonicalImageFallbackLines,
-  imageOutputUsesOnlySourceNumbers,
 } from "./imageDataset";
 import { formatLabVisualSummaryLinesFromText, formatLabVisualTimelineLines } from "./labVisualSummary";
 import { normalizeObjectiveLabExportLines, objectiveKindFromLine } from "./objectiveLineSanitizer";
+import { splitGuidedSoapSource } from "./soapDraft";
 import {
   editorDraftToSoapText,
   parseCanonicalSoapTextToEditorDraft,
@@ -103,8 +103,69 @@ function hasText(value: unknown) {
   return clean(value).length > 0;
 }
 
+function mergeSourceBlocks(...values: unknown[]) {
+  const seen = new Set<string>();
+  return values.flatMap((value) => {
+    const text = String(value ?? "").trim();
+    const key = text.replace(/\s+/g, " ").toLowerCase();
+    if (!key || seen.has(key)) return [];
+    seen.add(key);
+    return [text];
+  }).join("\n");
+}
+
+export function normalizeRoundSoapSourceFields(
+  fields: RoundSoapSourceFields,
+): RoundSoapSourceFields & Record<string, unknown> {
+  const rawSource = String(fields.rawSource ?? "").trim();
+  const routeInput = mergeSourceBlocks(
+    fields.admission,
+    fields.lastSoap,
+    rawSource,
+    fields.vitals,
+    fields.labs,
+    fields.images,
+    fields.orders,
+    fields.other,
+  );
+  const routed = splitGuidedSoapSource(routeInput);
+  const admissionIsRaw = clean(fields.admission) && clean(fields.admission) === clean(rawSource);
+  const lastSoapIsRaw = clean(fields.lastSoap) && clean(fields.lastSoap) === clean(rawSource);
+  return {
+    admission: mergeSourceBlocks(admissionIsRaw ? "" : fields.admission, routed.admission),
+    lastSoap: mergeSourceBlocks(lastSoapIsRaw ? "" : fields.lastSoap, routed.lastSoap),
+    // Routed text is older context; explicit guided fields come last and win
+    // same-date/same-domain tie-breaks in the canonical parsers.
+    vitals: mergeSourceBlocks(routed.vitals, fields.vitals),
+    labs: mergeSourceBlocks(routed.labs, fields.labs),
+    images: mergeSourceBlocks(routed.images, fields.images),
+    orders: mergeSourceBlocks(routed.orders, fields.orders),
+    other: mergeSourceBlocks(routed.other, fields.other),
+    rawSource,
+  };
+}
+
 function looksLikeVitals(value: string) {
   return /\b(?:BP|HR|RR|SpO2|SaO2|Temp(?:erature)?|Pulse)\s*[:=]?\s*\d|\bT\s*[:=]?\s*\d{2}(?:\.\d+)?/i.test(value);
+}
+
+function vitalDate(value: string) {
+  const full = value.match(/\b(20\d{2})[-/](\d{1,2})[-/](\d{1,2})\b/);
+  if (full) {
+    const month = full[2].padStart(2, "0");
+    const day = full[3].padStart(2, "0");
+    return { key: `${full[1]}-${month}-${day}`, display: `${month}-${day}` };
+  }
+  const short = value.match(/\b(\d{1,2})[-/](\d{1,2})\b/);
+  if (!short) return { key: "", display: "" };
+  const month = short[1].padStart(2, "0");
+  const day = short[2].padStart(2, "0");
+  return { key: `0000-${month}-${day}`, display: `${month}-${day}` };
+}
+
+function vitalValue(value: string, pattern: RegExp) {
+  const matches = [...value.matchAll(new RegExp(pattern.source, `${pattern.flags.replace("g", "")}g`))];
+  return matches[matches.length - 1]?.[1]?.replace(/\s+/g, " ").trim() ?? "";
 }
 
 function sourceVitalLines(value: unknown) {
@@ -112,20 +173,46 @@ function sourceVitalLines(value: unknown) {
     .split(/\r?\n/)
     .map(clean)
     .filter((line) => line && looksLikeVitals(line));
-  const seen = new Set<string>();
-  return lines.flatMap((line) => {
-    const text = line
-      .replace(/^(\(?\d{4}[-/]\d{1,2}[-/]\d{1,2}\)?\s*)?(?:Vital signs|Vitals?|V\/S|VS)\s*:\s*/i, "$1")
-      .trim();
-    const key = text.toLowerCase();
-    if (!text || seen.has(key)) return [];
-    seen.add(key);
-    return [editorLine(text, "vs")];
-  });
+  if (lines.length === 0) return [];
+
+  const dated = lines.map((line) => ({ line, date: vitalDate(line) }));
+  const sortedDateKeys = dated.map((item) => item.date.key).filter(Boolean).sort();
+  const latestKey = sortedDateKeys[sortedDateKeys.length - 1] ?? "";
+  const selected = dated
+    .filter((item) => !latestKey || !item.date.key || item.date.key === latestKey)
+    .map((item) => item.line);
+  const source = selected.join(" ");
+  const dateDisplay = dated.find((item) => item.date.key === latestKey)?.date.display ?? "";
+  const temperature = vitalValue(source, /\b(?:T|Temp(?:erature)?)\s*[:=]?\s*(\d{2}(?:\.\d+)?)\s*(?:°?\s*C)?/i);
+  const bp = vitalValue(source, /\bBP\s*[:=]?\s*(\d{2,3}\s*\/\s*\d{2,3})/i);
+  const hr = vitalValue(source, /\b(?:HR|Pulse)\s*[:=]?\s*(\d{2,3})/i);
+  const rr = vitalValue(source, /\bRR\s*[:=]?\s*(\d{1,2})/i);
+  const spo2 = vitalValue(source, /\b(?:SpO2|SaO2)\s*[:=]?\s*(\d{2,3}\s*%?)/i);
+  const oxygen = source.match(/\b(room air|RA|nasal cannula\s*\d+(?:\.\d+)?\s*L(?:\/min)?|NC\s*\d+(?:\.\d+)?\s*L(?:\/min)?|HFNC(?:\s*\d+(?:\.\d+)?\s*L(?:\/min)?)?|NRM(?:\s*\d+(?:\.\d+)?\s*L(?:\/min)?)?|BiPAP|CPAP|mechanical ventilation|ventilator)\b/i)?.[1] ?? "";
+  const parts = [
+    temperature ? `T ${temperature} C` : "",
+    bp ? `BP ${bp}` : "",
+    hr ? `HR ${hr}` : "",
+    rr ? `RR ${rr}` : "",
+    spo2 ? `SpO2 ${spo2}${oxygen ? ` ${oxygen.replace(/^room air$/i, "RA")}` : ""}` : oxygen,
+  ].filter(Boolean);
+  const fallback = selected
+    .map((line) => line.replace(/^(\(?\d{4}[-/]\d{1,2}[-/]\d{1,2}\)?\s*)?(?:Vital signs|Vitals?|V\/S|VS)\s*:\s*/i, "$1").trim())
+    .join("; ");
+  const text = parts.length > 0 ? `${dateDisplay ? `${dateDisplay} ` : ""}${parts.join(", ")}` : fallback;
+  return text ? [editorLine(text, "vs")] : [];
 }
 
 export function isVitalsOnlyDailySource(fields: RoundSoapSourceFields) {
-  return hasText(fields.vitals) && ![fields.labs, fields.images, fields.orders, fields.other, fields.admission, fields.lastSoap].some(hasText);
+  const normalized = normalizeRoundSoapSourceFields(fields);
+  return hasText(normalized.vitals) && ![
+    normalized.labs,
+    normalized.images,
+    normalized.orders,
+    normalized.other,
+    normalized.admission,
+    normalized.lastSoap,
+  ].some(hasText);
 }
 
 function looksLikeLabs(value: string) {
@@ -196,35 +283,9 @@ function sourceLines(value: unknown) {
     .filter(Boolean);
 }
 
-function sourceImageEditorLines(
-  fields: RoundSoapSourceFields,
-  selectedImages: StructuredRoundSoapDraft["objective"]["imaging"] = [],
-) {
-  const dataset = buildCanonicalImageDataset([fields.images, fields.rawSource].filter(Boolean).join("\n"));
-  const factsById = new Map(dataset.facts.map((fact) => [fact.id, fact]));
-  const selectedReportKeys = new Set<string>();
-  const selectedLines = selectedImages.flatMap((image) => {
-    const selectedFacts = (image.sourceIds ?? [])
-      .map((id) => factsById.get(id))
-      .filter((fact): fact is NonNullable<typeof fact> => Boolean(fact));
-    const evidenceFacts = selectedFacts.length > 0 ? selectedFacts : dataset.facts;
-    if (evidenceFacts.length === 0) return [];
-    const display = `${image.study}${image.date ? ` ${image.date}` : ""}: ${image.finding}`.trim();
-    if (!imageOutputUsesOnlySourceNumbers(display, evidenceFacts)) return [];
-    if (selectedFacts.length > 0) {
-      selectedFacts.forEach((fact) => selectedReportKeys.add(fact.reportKey));
-    } else {
-      const selectedStudy = imageStudyKey(display);
-      dataset.facts
-        .filter((fact) => imageStudyKey(`${fact.study} ${fact.date}: ${fact.evidence}`) === selectedStudy)
-        .forEach((fact) => selectedReportKeys.add(fact.reportKey));
-    }
-    return [editorLine(display, "image")];
-  });
-  const remainingSlots = Math.max(0, 4 - selectedLines.length);
-  const sourceFallback = canonicalImageFallbackLines(dataset, remainingSlots, selectedReportKeys)
-    .map((line) => editorLine(line, "image"));
-  return uniqueEditorLines([...selectedLines, ...sourceFallback]);
+function sourceImageEditorLines(fields: RoundSoapSourceFields) {
+  const dataset = buildCanonicalImageDataset(String(fields.images ?? ""));
+  return canonicalImageFallbackLines(dataset, 4).map((line) => editorLine(line, "image"));
 }
 
 function sourcePathologyEditorLines(fields: RoundSoapSourceFields) {
@@ -268,6 +329,35 @@ function objectiveGroups(lines: SoapEditorLine[]) {
     image: lines.filter((line) => line.kind === "image"),
     other: lines.filter((line) => !["vs", "pe", "lab", "image"].includes(line.kind)),
   };
+}
+
+function sanitizeGeneratedPe(lines: SoapEditorLine[]) {
+  return uniqueEditorLines(lines.filter((line) => {
+    const text = stripColorMarkup(line.text).trim();
+    if (!text || looksLikeVitals(text) || looksLikeLabs(text) || looksLikeImage(text)) return false;
+    return !/^(?:Dx|Diagnosis|PMH|PHx|CC|HPI|PI|Admission|Assessment|A\/P|Plan|Consult|Recommendation)\s*:/i.test(text);
+  })).slice(0, 3);
+}
+
+function sanitizeGeneratedObjectiveOther(lines: SoapEditorLine[], source: string) {
+  const objectiveSignal = /\b(?:I\/O|intake|output|UO|urine output|stool|BM|drain|NG|Foley|CVC|PICC|port(?:-A)?|chest tube|J-?tube|PEG|weight|ventilator|HFNC|BiPAP|CPAP|dialysis|CRRT)\b/i;
+  const allowedNumbers = new Set(numericTokens(source));
+  return uniqueEditorLines(lines.filter((line) => {
+    const text = stripColorMarkup(line.text).trim();
+    if (!text || !objectiveSignal.test(text)) return false;
+    if (/^(?:Dx|Diagnosis|PMH|PHx|CC|HPI|PI|Admission|Assessment|A\/P|Plan|Consult|Recommendation)\s*:/i.test(text)) return false;
+    return numericTokens(text).every((number) => allowedNumbers.has(number));
+  })).slice(0, 4);
+}
+
+function sanitizeGeneratedHeader(lines: SoapEditorLine[]) {
+  return uniqueEditorLines(lines.flatMap((line) => {
+    const text = stripColorMarkup(line.text)
+      .split(/\s+(?=(?:PMH|PHx|CC|HPI|PI|V\/S|VS|Lab|Image|A\/P|Tasks?|DC)\s*:)/i)[0]
+      .trim();
+    if (!text) return [];
+    return [{ ...line, text }];
+  })).slice(0, 2);
 }
 
 function tokenSet(value: string) {
@@ -407,6 +497,50 @@ function attachSourceAntibioticsToAp(problems: SoapEditorProblem[], orderLines: 
   return next;
 }
 
+function explicitInfectionSource(value: string) {
+  const text = stripColorMarkup(value);
+  const lobarRespiratory = text.match(/\b(RUL|RML|RLL|LUL|LLL)\b[\s\S]{0,32}\b(?:aspiration\s+)?(?:PNA|pneumonia|CAP|HAP|VAP)\b/i);
+  if (lobarRespiratory) return `${lobarRespiratory[1].toUpperCase()} PNA`;
+  const respiratory = text.match(/\b(?:(RUL|RML|RLL|LUL|LLL)\s+)?(?:aspiration\s+)?(?:PNA|pneumonia|CAP|HAP|VAP)\b/i);
+  if (respiratory) return respiratory[0].replace(/\bpneumonia\b/i, "PNA");
+  if (/\b(?:pyelonephritis|UTI|urinary tract infection|urosepsis)\b/i.test(text)) return "urinary source";
+  if (/\b(?:cholangitis|biliary infection|biliary sepsis)\b/i.test(text)) return "biliary source";
+  if (/\b(?:meningitis|ventriculitis|CSF infection)\b/i.test(text)) return "CNS source";
+  if (/\b(?:osteomyelitis|bone infection)\b/i.test(text)) return "osteomyelitis";
+  if (/\b(?:cellulitis|SSTI|soft tissue infection|wound infection)\b/i.test(text)) return "skin/wound source";
+  if (/\b(?:intra-?abdominal infection|abdominal abscess|intra-?abdominal abscess)\b/i.test(text)) return "intra-abdominal source";
+  if (/\b(?:line infection|catheter-related infection|CLABSI|port(?:-A)?\s+(?:infection|source)|CVC\s+(?:infection|source))\b/i.test(text)) return "line/port source";
+  return "";
+}
+
+function ensureInfectionSourceContext(problems: SoapEditorProblem[], source: string) {
+  const infectionProblem = /\b(?:infection|sepsis|septic|bacteremia|pna|pneumonia|cap|hap|vap|uti|pyelonephritis|cholangitis|meningitis|cellulitis|abscess|osteomyelitis)\b/i;
+  const specificSource = /\b(?:pna|pneumonia|cap|hap|vap|aspiration|urinary source|uti|pyelonephritis|biliary source|cholangitis|cns source|meningitis|skin\/wound source|wound infection|cellulitis|soft tissue infection|intra-?abdominal source|abscess|osteomyelitis|line\/port source|line source|port source|catheter source|clabsi|source unclear|unknown source)\b/i;
+  const sourceLabel = explicitInfectionSource(source) || "source unclear";
+  return problems.map((problem) => {
+    const combined = `${problem.title} ${problem.lines.map((line) => line.text).join(" ")}`;
+    if (!infectionProblem.test(problem.title) || specificSource.test(combined)) return problem;
+    const sourceLine = `Source: ${sourceLabel}`;
+    if (problem.lines.length === 0) return { ...problem, lines: [editorLine(sourceLine, "ap")] };
+    const [first, ...rest] = problem.lines;
+    return {
+      ...problem,
+      lines: [{ ...first, text: `${sourceLine}; ${first.text}` }, ...rest],
+    };
+  });
+}
+
+function finalizeApProblems(
+  problems: SoapEditorProblem[],
+  orderLines: SoapEditorLine[],
+  source: string,
+) {
+  return ensureInfectionSourceContext(
+    sanitizeRepeatedApContent(attachSourceAntibioticsToAp(problems, orderLines)),
+    source,
+  );
+}
+
 function actionableModelWarnings(values: string[]) {
   return [...new Set(values.map(clean).filter(Boolean))].filter((warning) =>
     /\b(?:critical|unstable|active bleeding|shock|code status|allergy|cannot verify|conflicting)\b/i.test(warning) &&
@@ -438,7 +572,8 @@ export function applyVitalsOnlyDailyUpdate(
   sourceFields: RoundSoapSourceFields,
 ): StructuredRoundSoapAcceptance {
   const baseline = parseCanonicalSoapTextToEditorDraft(baselineText);
-  const nextVitals = sourceVitalLines(sourceFields.vitals);
+  const normalizedFields = normalizeRoundSoapSourceFields(sourceFields);
+  const nextVitals = sourceVitalLines(normalizedFields.vitals);
   if (nextVitals.length === 0) {
     const message = "No valid V/S values were found. The reviewed SOAP was left unchanged.";
     return {
@@ -489,25 +624,25 @@ export function acceptStructuredRoundSoap(params: {
   sourceFields: RoundSoapSourceFields;
   workflowMode: RoundSoapWorkflowMode;
 }): StructuredRoundSoapAcceptance {
-  if (params.workflowMode === "dailyUpdate" && isVitalsOnlyDailySource(params.sourceFields)) {
-    return applyVitalsOnlyDailyUpdate(params.baselineText, params.sourceFields);
+  const sourceFields = normalizeRoundSoapSourceFields(params.sourceFields);
+  if (params.workflowMode === "dailyUpdate" && isVitalsOnlyDailySource(sourceFields)) {
+    return applyVitalsOnlyDailyUpdate(params.baselineText, sourceFields);
   }
   const baseline = parseCanonicalSoapTextToEditorDraft(params.baselineText);
   const generated = structuredRoundSoapToEditorDraft(params.value);
-  const source = sourceText(params.sourceFields);
-  const sourceHasVitals = hasText(params.sourceFields.vitals) || looksLikeVitals(source);
-  const sourceHasLabs = hasText(params.sourceFields.labs) || looksLikeLabs(source);
-  const sourceImageDataset = buildCanonicalImageDataset([params.sourceFields.images, params.sourceFields.rawSource].filter(Boolean).join("\n"));
-  const sourceHasImages = sourceImageDataset.facts.length > 0 || hasText(params.sourceFields.images) || looksLikeImage(source);
-  const sourceHasOther = hasText(params.sourceFields.other);
-  const sourceHasOrders = hasText(params.sourceFields.orders);
-  const sourceOwnedLabs = sourceHasLabs
-    ? sourceLabEditorLines(params.sourceFields, params.value.objective.labs, params.workflowMode === "dailyUpdate" ? params.baselineText : "")
+  const source = sourceText(sourceFields);
+  const sourceOwnedVitals = sourceVitalLines(sourceFields.vitals);
+  const sourceOwnedLabs = hasText(sourceFields.labs)
+    ? sourceLabEditorLines(sourceFields, params.value.objective.labs, params.workflowMode === "dailyUpdate" ? params.baselineText : "")
     : [];
-  const sourceOwnedVitals = sourceHasVitals ? sourceVitalLines(params.sourceFields.vitals) : [];
-  const sourceOwnedImages = sourceHasImages ? sourceImageEditorLines(params.sourceFields, params.value.objective.imaging) : [];
-  const sourceOwnedPathology = looksLikePathology(source) ? sourcePathologyEditorLines(params.sourceFields) : [];
-  const sourceOwnedOrders = sourceHasOrders ? sourceOrderEditorLines(params.sourceFields) : [];
+  const sourceOwnedImages = hasText(sourceFields.images) ? sourceImageEditorLines(sourceFields) : [];
+  const sourceOwnedPathology = looksLikePathology(source) ? sourcePathologyEditorLines(sourceFields) : [];
+  const sourceOwnedOrders = hasText(sourceFields.orders) ? sourceOrderEditorLines(sourceFields) : [];
+  const sourceHasVitals = sourceOwnedVitals.length > 0;
+  const sourceHasLabs = sourceOwnedLabs.length > 0;
+  const sourceHasImages = sourceOwnedImages.length > 0;
+  const sourceHasOther = hasText(sourceFields.other);
+  const sourceHasOrders = sourceOwnedOrders.length > 0;
   const sourceOwnedLabText = sourceOwnedLabs.map((line) => line.text).join(" ");
   const generatedO = objectiveGroups(generated.oLines);
   const generatedTasks = splitSoapEditorTaskLines(generated.taskLines);
@@ -524,16 +659,17 @@ export function acceptStructuredRoundSoap(params: {
   // and orders instead of rejecting an otherwise useful draft.
   const repairedGenerated: SoapEditorDraft = {
     ...generated,
+    headerLines: sanitizeGeneratedHeader(generated.headerLines),
     oLines: [
       ...(sourceOwnedVitals.length > 0 ? sourceOwnedVitals : generatedO.vs),
-      ...generatedO.pe,
+      ...sanitizeGeneratedPe(generatedO.pe),
       ...(sourceOwnedLabs.length > 0
         ? uniqueEditorLines([...sourceOwnedLabs, ...generatedO.lab.filter(isMicrobiologyLabLine)])
         : generatedO.lab),
       ...(sourceOwnedImages.length > 0 ? sourceOwnedImages : generatedO.image),
-      ...uniqueEditorLines([...generatedO.other, ...sourceOwnedPathology]),
+      ...uniqueEditorLines([...sanitizeGeneratedObjectiveOther(generatedO.other, source), ...sourceOwnedPathology]),
     ],
-    apProblems: sanitizeRepeatedApContent(attachSourceAntibioticsToAp(groundedProblems, sourceOwnedOrders)),
+    apProblems: finalizeApProblems(groundedProblems, sourceOwnedOrders, source),
     taskLines: uniqueEditorLines([...sourceOwnedOrders, ...generatedTasks.orderLines, ...generatedTasks.taskOnlyLines]),
   };
   let accepted = repairedGenerated;
@@ -555,7 +691,7 @@ export function acceptStructuredRoundSoap(params: {
         ...(sourceHasImages ? mergeDailyImages(priorO.image, nextO.image) : priorO.image),
         ...(sourceHasOther && nextO.other.length > 0 ? uniqueEditorLines([...priorO.other, ...nextO.other]) : priorO.other),
       ],
-      apProblems: sanitizeRepeatedApContent(attachSourceAntibioticsToAp(mergedProblems, sourceOwnedOrders)),
+      apProblems: finalizeApProblems(mergedProblems, sourceOwnedOrders, source),
       taskLines: [
         ...(sourceHasOrders ? uniqueEditorLines([...priorTasks.orderLines, ...nextTasks.orderLines]) : priorTasks.orderLines),
         ...(sourceHasOther ? nextTasks.taskOnlyLines : priorTasks.taskOnlyLines),

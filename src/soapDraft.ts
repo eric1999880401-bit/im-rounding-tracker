@@ -343,7 +343,7 @@ function addUniqueLine(lines: string[], line: string, maxItems: number, maxChars
   if (lines.length > maxItems) lines.splice(maxItems);
 }
 
-type GuidedSoapSourceSection = "admission" | "vitals" | "labs" | "images" | "orders" | "other";
+type GuidedSoapSourceSection = "admission" | "lastSoap" | "vitals" | "labs" | "images" | "orders" | "other";
 
 function guidedSectionKey(label: string): GuidedSoapSourceSection {
   const normalized = label.trim().toLowerCase();
@@ -352,7 +352,18 @@ function guidedSectionKey(label: string): GuidedSoapSourceSection {
   if (/^(?:image|img|imaging)$/.test(normalized)) return "images";
   if (/^(?:orders?|meds?|medication|藥囑)$/.test(normalized)) return "orders";
   if (/^admission$/.test(normalized)) return "admission";
+  if (/^(?:last soap(?:\s*\/\s*sbar)?|sbar|handoff)$/.test(normalized)) return "lastSoap";
   return "other";
+}
+
+function shouldRouteOutOfAdmission(value: string) {
+  const text = String(value ?? "").trim();
+  if (!text) return false;
+  const kind = objectiveKindFromLine(text, "other");
+  if (kind !== "other") return true;
+  return /^(?:V\/S|VS|Vitals?|PE|Labs?|Image|Img|Imaging|Pathology|Orders?|Meds?|Medication|藥囑|Consult(?:ation)?(?:\s+note)?)\s*:/i.test(text) ||
+    /\b(?:CXR|CT\b|MRI|echo|sono|ultrasound|impression)\b/i.test(text) ||
+    /\b(?:WBC|Hb|Hgb|Plt|Cr|BUN|Na|K\b|AST|ALT|INR|lactate|CRP|PCT|ABG|VBG|pH|pCO2|HCO3)\s*[:=]?\s*[<>]?-?\d/i.test(text);
 }
 
 function routeUnguidedSoapSourceFragment(
@@ -405,6 +416,7 @@ function routeUnguidedSoapSourceFragment(
 export function splitGuidedSoapSource(rawText: string): Record<GuidedSoapSourceSection, string> {
   const buckets: Record<GuidedSoapSourceSection, string[]> = {
     admission: [],
+    lastSoap: [],
     vitals: [],
     labs: [],
     images: [],
@@ -416,7 +428,7 @@ export function splitGuidedSoapSource(rawText: string): Record<GuidedSoapSourceS
   normalizeLabTableSourceText(rawText).text
     .split(/\r?\n/)
     .forEach((line) => {
-      const match = line.match(/^\s*(Admission|V\/S|VS|Vitals?|Lab|Labs|Image|Img|Imaging|Orders?|Meds?|Medication|藥囑|Description\s*\/\s*other|Other update\s*\/\s*task\s*\/\s*course|Last SOAP\s*\/\s*SBAR)\s*:\s*(.*)$/i);
+      const match = line.match(/^\s*(Admission|V\/S|VS|Vitals?|Lab|Labs|Image|Img|Imaging|Pathology|Orders?|Meds?|Medication|藥囑|Consult(?:ation)?(?:\s+note)?|Description\s*\/\s*other|Other update\s*\/\s*task\s*\/\s*course|Last SOAP(?:\s*\/\s*SBAR)?|SBAR|Handoff)\s*:\s*(.*)$/i);
       if (match) {
         const matchedSection = guidedSectionKey(match[1]);
         const inlineValue = match[2].trim();
@@ -431,6 +443,10 @@ export function splitGuidedSoapSource(rawText: string): Record<GuidedSoapSourceS
       const trimmed = line.trim();
       if (!trimmed) return;
       if (current !== "other") {
+        if (current === "admission" && shouldRouteOutOfAdmission(trimmed)) {
+          sourceSentences(trimmed).forEach((fragment) => routeUnguidedSoapSourceFragment(fragment, buckets));
+          return;
+        }
         buckets[current].push(trimmed);
         return;
       }
@@ -439,6 +455,7 @@ export function splitGuidedSoapSource(rawText: string): Record<GuidedSoapSourceS
 
   return {
     admission: buckets.admission.join("\n"),
+    lastSoap: buckets.lastSoap.join("\n"),
     vitals: buckets.vitals.join("\n"),
     labs: buckets.labs.join("\n"),
     images: buckets.images.join("\n"),
