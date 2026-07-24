@@ -749,7 +749,8 @@ try {
       !/clinical-lab-item-previous[^>]*>.*31\.8/.test(tableHtml) ||
       !/clinical-lab-item-name">CRP</.test(tableHtml) ||
       !/clinical-lab-item-value[^>]*>.*11/.test(tableHtml) ||
-      (tableHtml.match(/Blood culture no growth/g) ?? []).length !== 1) {
+      (tableHtml.match(/clinical-lab-item-name">Blood culture</g) ?? []).length !== 1 ||
+      (tableHtml.match(/clinical-lab-item-value[^>]*>.*no growth/g) ?? []).length !== 1) {
     throw new Error(`shared compact Lab table did not render grouped values: ${tableHtml}`);
   }
   if ((tableHtml.match(/title="CBC\/DC">CBC</g) ?? []).length !== 1 ||

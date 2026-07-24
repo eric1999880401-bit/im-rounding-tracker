@@ -7,41 +7,41 @@
 }
 
 .print-page {
-  --print-font-size: 6.2pt;
-  --print-small-font-size: 5.8pt;
+  --print-font-size: 6.6pt;
+  --print-small-font-size: 6pt;
   --print-chip-font-size: 5.8pt;
-  --print-line-height: 1.08;
-  --print-section-title-size: 6.5pt;
+  --print-line-height: 1.12;
+  --print-section-title-size: 6.8pt;
   --print-card-padding: 1px 2px;
   --print-cell-padding: 2px;
 }
 
 .density-normal {
-  --print-font-size: 6.2pt;
-  --print-small-font-size: 5.8pt;
+  --print-font-size: 6.6pt;
+  --print-small-font-size: 6pt;
   --print-chip-font-size: 5.8pt;
-  --print-line-height: 1.08;
-  --print-section-title-size: 6.5pt;
+  --print-line-height: 1.12;
+  --print-section-title-size: 6.8pt;
   --print-card-padding: 1px 2px;
   --print-cell-padding: 2px;
 }
 
 .density-compact {
-  --print-font-size: 5.9pt;
-  --print-small-font-size: 5.5pt;
+  --print-font-size: 6.2pt;
+  --print-small-font-size: 5.8pt;
   --print-chip-font-size: 5.5pt;
-  --print-line-height: 1.05;
-  --print-section-title-size: 6.2pt;
+  --print-line-height: 1.08;
+  --print-section-title-size: 6.4pt;
   --print-card-padding: 1px 2px;
   --print-cell-padding: 1.5px;
 }
 
 .density-ultra-compact {
-  --print-font-size: 5.5pt;
-  --print-small-font-size: 5.2pt;
+  --print-font-size: 5.8pt;
+  --print-small-font-size: 5.4pt;
   --print-chip-font-size: 5.2pt;
-  --print-line-height: 1.02;
-  --print-section-title-size: 5.8pt;
+  --print-line-height: 1.06;
+  --print-section-title-size: 6pt;
   --print-card-padding: 0 1.5px;
   --print-cell-padding: 1px;
 }
@@ -54,10 +54,10 @@
 }
 
 .print-font-default {
-  --print-font-size: 6.2pt;
-  --print-small-font-size: 5.8pt;
+  --print-font-size: 6.6pt;
+  --print-small-font-size: 6pt;
   --print-chip-font-size: 5.8pt;
-  --print-section-title-size: 6.5pt;
+  --print-section-title-size: 6.8pt;
 }
 
 .print-font-large {
@@ -583,7 +583,7 @@
 }
 
 .print-patient-list {
-  border: 1px solid #1f2933;
+  border: 1px solid #475569;
   display: grid;
   font-size: var(--print-font-size);
   gap: 0;
@@ -591,12 +591,12 @@
 
 .print-patient-block {
   background: white;
-  border-bottom: 1px solid #94a3b8;
+  border-bottom: 1.5px solid #64748b;
   break-inside: auto;
   color: black;
   display: grid;
   font-size: var(--print-font-size);
-  gap: 2px;
+  gap: 3px;
   line-height: var(--print-line-height);
   padding: var(--print-cell-padding);
   page-break-inside: auto;
@@ -608,12 +608,15 @@
 
 .print-patient-header {
   align-items: baseline;
+  background: #f1f5f9;
+  border-left: 3px solid #334155;
   display: flex;
   flex-wrap: wrap;
   font-size: calc(var(--print-font-size) + 0.5pt);
   font-weight: 700;
-  gap: 2px 8px;
+  gap: 2px 9px;
   line-height: var(--print-line-height);
+  padding: 2px 4px;
 }
 
 .print-complexity-badge {
@@ -630,7 +633,7 @@
 .print-patient-context {
   color: #1f2933;
   font-size: var(--print-small-font-size);
-  font-weight: 700;
+  font-weight: 620;
   line-height: var(--print-line-height);
   overflow-wrap: break-word;
 }
@@ -663,17 +666,17 @@
 
 .print-summary-grid {
   display: grid;
-  gap: 2px;
-  grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.15fr) minmax(0, 1.25fr) minmax(0, 1fr);
+  gap: 0;
+  grid-template-columns: minmax(0, 0.68fr) minmax(0, 1.42fr) minmax(0, 1.52fr) minmax(0, 0.92fr);
   min-width: 0;
 }
 
 .print-patient-expanded .print-summary-grid {
-  grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.05fr) minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 0.68fr) minmax(0, 1.42fr) minmax(0, 1.52fr) minmax(0, 0.92fr);
 }
 
 .print-patient-expanded .print-summary-grid .print-section-ap {
-  grid-column: span 2;
+  grid-column: span 3;
 }
 
 .print-patient-expanded .print-summary-grid .print-section-objective {
@@ -681,13 +684,14 @@
 }
 
 .print-patient-expanded .print-summary-grid .print-section-taskdc {
-  grid-column: span 2;
+  grid-column: span 1;
 }
 
 .print-section-box {
-  background: #f8fafc;
-  border: 1px solid #cbd5e1;
-  border-radius: 2px;
+  background: transparent;
+  border: 0;
+  border-left: 1px solid #cbd5e1;
+  border-radius: 0;
   break-inside: auto;
   display: block;
   font-size: var(--print-font-size);
@@ -695,19 +699,19 @@
   min-width: 0;
   max-width: 100%;
   overflow-wrap: break-word;
-  padding: var(--print-card-padding);
+  padding: 1px 4px 2px;
   page-break-inside: auto;
   word-break: normal;
 }
 
 .print-section-title {
-  border-bottom: 1px solid #d9e2ec;
-  color: #111827;
+  border-bottom: 1.5px solid #64748b;
+  color: #334155;
   font-size: var(--print-small-font-size);
   font-weight: 900;
   line-height: var(--print-line-height);
-  margin-bottom: 1px;
-  padding-bottom: 1px;
+  margin-bottom: 2px;
+  padding: 0 0 1px;
   text-transform: uppercase;
   white-space: normal;
 }
@@ -734,32 +738,39 @@
 
 .print-visual-list {
   display: grid;
-  gap: 1px;
+  gap: 0;
   min-width: 0;
 }
 
 .print-visual-row {
   align-items: start;
-  background: #ffffff;
-  border: 0.5px solid #cbd5e1;
-  border-left: 2px solid #94a3b8;
-  border-radius: 2px;
+  background: transparent;
+  border: 0;
+  border-bottom: 0.5px solid #e2e8f0;
+  border-left: 1.5px solid #94a3b8;
+  border-radius: 0;
   display: grid;
-  gap: 2px;
-  grid-template-columns: 24px minmax(0, 1fr);
+  gap: 3px;
+  grid-template-columns: 21px minmax(0, 1fr);
   line-height: var(--print-line-height);
   min-width: 0;
   max-width: 100%;
-  padding: 1px 2px;
+  padding: 1.5px 1px 1.5px 3px;
+}
+
+.print-visual-row:last-child {
+  border-bottom-color: transparent;
 }
 
 .print-patient-expanded .print-visual-row {
-  grid-template-columns: 30px minmax(0, 1fr);
-  padding: 1px 3px;
+  grid-template-columns: 24px minmax(0, 1fr);
+  padding: 1.5px 2px 1.5px 3px;
 }
 
 .print-section-ap .print-visual-row {
-  grid-template-columns: 34px minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
+  padding-bottom: 2px;
+  padding-top: 2px;
 }
 
 .print-visual-row-unlabeled {
@@ -775,27 +786,43 @@
 }
 
 .print-visual-label {
-  background: #e5e7eb;
-  border: 0.5px solid #cbd5e1;
-  border-radius: 2px;
-  color: #111827;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  color: #64748b;
   font-size: var(--print-chip-font-size);
   font-weight: 900;
   letter-spacing: 0;
   line-height: 1;
-  padding: 1px;
-  text-align: center;
+  padding: 1px 0;
+  text-align: left;
   white-space: nowrap;
 }
 
 .print-visual-text {
   color: #000000;
-  font-weight: 650;
+  font-weight: 580;
   line-height: var(--print-line-height);
   min-width: 0;
   max-width: 100%;
   overflow-wrap: break-word;
   word-break: normal;
+}
+
+.print-ap-title {
+  color: #111827;
+  display: block;
+  font-weight: 850;
+  line-height: var(--print-line-height);
+}
+
+.print-ap-detail {
+  color: #475569;
+  display: block;
+  font-size: var(--print-small-font-size);
+  font-weight: 580;
+  line-height: var(--print-line-height);
+  margin-top: 0.5px;
 }
 
 .print-section-objective .clinical-lab-table-wrap {
@@ -869,8 +896,7 @@
 }
 
 .print-visual-lab {
-  background: #fff8e6;
-  border-color: #f0c36d;
+  background: transparent;
   border-left-color: #b7791f;
 }
 
@@ -891,40 +917,34 @@
 }
 
 .print-visual-important {
-  background: #fff8e6;
-  border-color: #f0c36d;
+  background: #fffbeb;
   border-left-color: #b7791f;
 }
 
 .print-visual-important .print-visual-label {
-  background: #ffffff;
-  border-color: #f0c36d;
+  background: transparent;
   color: #92400e;
 }
 
 .print-visual-info {
-  background: #eff6ff;
-  border-color: #bfdbfe;
+  background: transparent;
   border-left-color: #2563eb;
 }
 
 .print-visual-info .print-visual-label {
-  background: #ffffff;
-  border-color: #bfdbfe;
+  background: transparent;
   color: #1d4ed8;
 }
 
 .print-visual-red,
 .print-visual-critical {
   background: #fff1f0;
-  border-color: #d92d20;
   border-left-color: #b42318;
 }
 
 .print-visual-red .print-visual-label,
 .print-visual-critical .print-visual-label {
-  background: #ffffff;
-  border-color: #d92d20;
+  background: transparent;
   color: #b42318;
 }
 
@@ -1228,24 +1248,22 @@
   }
 
   .print-section-box {
-    background-color: #f8fafc !important;
+    background-color: #ffffff !important;
   }
 
   .print-visual-row {
     background-color: #ffffff !important;
-    border-color: #cbd5e1 !important;
+    border-bottom-color: #e2e8f0 !important;
     border-left-color: #94a3b8 !important;
   }
 
   .print-visual-label {
-    background-color: #e5e7eb !important;
-    border-color: #cbd5e1 !important;
-    color: #000000 !important;
+    background-color: transparent !important;
+    color: #475569 !important;
   }
 
   .print-visual-lab {
-    background-color: #fff8e6 !important;
-    border-color: #f0c36d !important;
+    background-color: transparent !important;
     border-left-color: #b7791f !important;
   }
 
@@ -1284,21 +1302,18 @@
   }
 
   .print-visual-important {
-    background-color: #fff8e6 !important;
-    border-color: #f0c36d !important;
+    background-color: #fffbeb !important;
     border-left-color: #b7791f !important;
   }
 
   .print-visual-info {
-    background-color: #eff6ff !important;
-    border-color: #bfdbfe !important;
+    background-color: transparent !important;
     border-left-color: #2563eb !important;
   }
 
   .print-visual-red,
   .print-visual-critical {
-    background-color: #fff1f0 !important;
-    border-color: #d92d20 !important;
+    background-color: #fff5f5 !important;
     border-left-color: #b42318 !important;
   }
 

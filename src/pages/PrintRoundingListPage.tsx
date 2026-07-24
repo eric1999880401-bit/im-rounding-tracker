@@ -311,10 +311,40 @@ function PrintRoundingListPage({
 
   function printRoundLineLabel(line: RoundNoteLineView) {
     if (line.section === "subjective" || line.section === "assessmentPlan") return "";
-    if (line.section === "orders") return "藥囑";
+    if (line.section === "orders") return "藥";
     if (line.section === "tasks") return "T";
     if (line.section === "dc") return "DC";
     return line.label;
+  }
+
+  function renderPrintLineText(line: RoundNoteLineView) {
+    if (line.kind !== "ap") {
+      return <ClinicalInlineText value={line.text} keywordRules={preferences.keywordHighlightRules} />;
+    }
+
+    const separator = line.text.indexOf(": ");
+    if (separator < 0) {
+      return (
+        <strong className="print-ap-title">
+          <ClinicalInlineText value={line.text} keywordRules={preferences.keywordHighlightRules} />
+        </strong>
+      );
+    }
+
+    const title = line.text.slice(0, separator).trim();
+    const detail = line.text.slice(separator + 2).trim();
+    return (
+      <>
+        <strong className="print-ap-title">
+          <ClinicalInlineText value={title} keywordRules={preferences.keywordHighlightRules} />
+        </strong>
+        {detail && (
+          <span className="print-ap-detail">
+            <ClinicalInlineText value={detail} keywordRules={preferences.keywordHighlightRules} />
+          </span>
+        )}
+      </>
+    );
   }
 
   function renderRoundPrintLines(lines: RoundNoteLineView[], keyPrefix: string) {
@@ -330,7 +360,7 @@ function PrintRoundingListPage({
             >
               {label && <span className="print-visual-label">{label}</span>}
               <span className="print-visual-text">
-                <ClinicalInlineText value={line.text} keywordRules={preferences.keywordHighlightRules} />
+                {renderPrintLineText(line)}
               </span>
             </div>
           );
