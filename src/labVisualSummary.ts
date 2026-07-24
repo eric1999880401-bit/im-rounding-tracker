@@ -410,6 +410,30 @@ function dedupeVisualItems(items: LabVisualItem[]) {
   return [...byKey.values()];
 }
 
+function dedupeNarrativeItems(items: LabVisualItem[]) {
+  const byNarrative = new Map<string, LabVisualItem>();
+  const retained: LabVisualItem[] = [];
+  items.forEach((item) => {
+    if (!/^(?:Microbiology|Other)$/i.test(item.label)) return void retained.push(item);
+    const narrativeKey = stripColorMarkup(item.text)
+      .replace(/^(?:Other|Micro(?:biology)?|Infx(?:\/Perfusion)?)\s*:?\s*/i, "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .toLocaleLowerCase();
+    if (!narrativeKey) return;
+    const existing = byNarrative.get(narrativeKey);
+    if (!existing) return void byNarrative.set(narrativeKey, item);
+    const existingSpecific = !/^Other$/i.test(existing.label);
+    const itemSpecific = !/^Other$/i.test(item.label);
+    if (
+      (itemSpecific && !existingSpecific) ||
+      (item.explicitMark && !existing.explicitMark) ||
+      (itemSpecific === existingSpecific && item.score > existing.score)
+    ) byNarrative.set(narrativeKey, item);
+  });
+  return [...retained, ...byNarrative.values()];
+}
+
 function buildGroupsFromVisualItems(items: LabVisualItem[], options: LabVisualSummaryOptions) {
   const maxGroups = options.maxGroups ?? Number.POSITIVE_INFINITY;
   const groups = new Map<LabVisualGroupId, LabVisualItem[]>();
@@ -419,7 +443,7 @@ function buildGroupsFromVisualItems(items: LabVisualItem[], options: LabVisualSu
   const isPreferred = (item: LabVisualItem) =>
     Boolean(item.sourceId && preferredItemIds.has(item.sourceId)) || preferredLabels.has(canonicalLabSelectionKey(item.label));
 
-  items.forEach((item) => {
+  dedupeNarrativeItems(items).forEach((item) => {
     const parsedLikeItem = { label: item.label, name: item.label, value: item.value } satisfies ParsedLabItem;
     const groupId = groupIdForItem(parsedLikeItem);
     groups.set(groupId, [...(groups.get(groupId) ?? []), item]);

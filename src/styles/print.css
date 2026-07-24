@@ -7,31 +7,31 @@
 }
 
 .print-page {
-  --print-font-size: 6.6pt;
-  --print-small-font-size: 6pt;
-  --print-chip-font-size: 5.8pt;
-  --print-line-height: 1.12;
-  --print-section-title-size: 6.8pt;
+  --print-font-size: 7pt;
+  --print-small-font-size: 6.35pt;
+  --print-chip-font-size: 6pt;
+  --print-line-height: 1.15;
+  --print-section-title-size: 7.2pt;
   --print-card-padding: 1px 2px;
   --print-cell-padding: 2px;
 }
 
 .density-normal {
-  --print-font-size: 6.6pt;
-  --print-small-font-size: 6pt;
-  --print-chip-font-size: 5.8pt;
-  --print-line-height: 1.12;
-  --print-section-title-size: 6.8pt;
+  --print-font-size: 7pt;
+  --print-small-font-size: 6.35pt;
+  --print-chip-font-size: 6pt;
+  --print-line-height: 1.15;
+  --print-section-title-size: 7.2pt;
   --print-card-padding: 1px 2px;
   --print-cell-padding: 2px;
 }
 
 .density-compact {
-  --print-font-size: 6.2pt;
-  --print-small-font-size: 5.8pt;
-  --print-chip-font-size: 5.5pt;
-  --print-line-height: 1.08;
-  --print-section-title-size: 6.4pt;
+  --print-font-size: 6.5pt;
+  --print-small-font-size: 6pt;
+  --print-chip-font-size: 5.7pt;
+  --print-line-height: 1.12;
+  --print-section-title-size: 6.7pt;
   --print-card-padding: 1px 2px;
   --print-cell-padding: 1.5px;
 }
@@ -54,10 +54,10 @@
 }
 
 .print-font-default {
-  --print-font-size: 6.6pt;
-  --print-small-font-size: 6pt;
-  --print-chip-font-size: 5.8pt;
-  --print-section-title-size: 6.8pt;
+  --print-font-size: 7pt;
+  --print-small-font-size: 6.35pt;
+  --print-chip-font-size: 6pt;
+  --print-section-title-size: 7.2pt;
 }
 
 .print-font-large {
@@ -68,15 +68,15 @@
 }
 
 .print-line-tight {
-  --print-line-height: 1.02;
+  --print-line-height: 1.07;
 }
 
 .print-line-normal {
-  --print-line-height: 1.08;
+  --print-line-height: 1.15;
 }
 
 .print-line-airy {
-  --print-line-height: 1.16;
+  --print-line-height: 1.22;
 }
 
 .print-padding-dense {
@@ -596,7 +596,7 @@
   color: black;
   display: grid;
   font-size: var(--print-font-size);
-  gap: 3px;
+  gap: 4px;
   line-height: var(--print-line-height);
   padding: var(--print-cell-padding);
   page-break-inside: auto;
@@ -667,12 +667,12 @@
 .print-summary-grid {
   display: grid;
   gap: 0;
-  grid-template-columns: minmax(0, 0.68fr) minmax(0, 1.42fr) minmax(0, 1.52fr) minmax(0, 0.92fr);
+  grid-template-columns: minmax(0, 0.62fr) minmax(0, 1.42fr) minmax(0, 1.62fr) minmax(0, 0.88fr);
   min-width: 0;
 }
 
 .print-patient-expanded .print-summary-grid {
-  grid-template-columns: minmax(0, 0.68fr) minmax(0, 1.42fr) minmax(0, 1.52fr) minmax(0, 0.92fr);
+  grid-template-columns: minmax(0, 0.62fr) minmax(0, 1.42fr) minmax(0, 1.62fr) minmax(0, 0.88fr);
 }
 
 .print-patient-expanded .print-summary-grid .print-section-ap {
@@ -699,7 +699,7 @@
   min-width: 0;
   max-width: 100%;
   overflow-wrap: break-word;
-  padding: 1px 4px 2px;
+  padding: 2px 5px 3px;
   page-break-inside: auto;
   word-break: normal;
 }
@@ -710,8 +710,8 @@
   font-size: var(--print-small-font-size);
   font-weight: 900;
   line-height: var(--print-line-height);
-  margin-bottom: 2px;
-  padding: 0 0 1px;
+  margin-bottom: 3px;
+  padding: 0 0 2px;
   text-transform: uppercase;
   white-space: normal;
 }
@@ -755,7 +755,7 @@
   line-height: var(--print-line-height);
   min-width: 0;
   max-width: 100%;
-  padding: 1.5px 1px 1.5px 3px;
+  padding: 2px 1px 2px 3px;
 }
 
 .print-visual-row:last-child {
@@ -764,13 +764,13 @@
 
 .print-patient-expanded .print-visual-row {
   grid-template-columns: 24px minmax(0, 1fr);
-  padding: 1.5px 2px 1.5px 3px;
+  padding: 2px 2px 2px 3px;
 }
 
 .print-section-ap .print-visual-row {
   grid-template-columns: minmax(0, 1fr);
-  padding-bottom: 2px;
-  padding-top: 2px;
+  padding-bottom: 3px;
+  padding-top: 3px;
 }
 
 .print-visual-row-unlabeled {
@@ -813,7 +813,7 @@
   color: #111827;
   display: block;
   font-weight: 850;
-  line-height: var(--print-line-height);
+  line-height: 1.18;
 }
 
 .print-ap-detail {
@@ -821,8 +821,8 @@
   display: block;
   font-size: var(--print-small-font-size);
   font-weight: 580;
-  line-height: var(--print-line-height);
-  margin-top: 0.5px;
+  line-height: 1.22;
+  margin-top: 1px;
 }
 
 .print-section-objective .clinical-lab-table-wrap {
@@ -917,7 +917,7 @@
 }
 
 .print-visual-important {
-  background: #fffbeb;
+  background: transparent;
   border-left-color: #b7791f;
 }
 
@@ -1302,7 +1302,7 @@
   }
 
   .print-visual-important {
-    background-color: #fffbeb !important;
+    background-color: transparent !important;
     border-left-color: #b7791f !important;
   }
 

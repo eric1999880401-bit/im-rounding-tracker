@@ -758,6 +758,17 @@ try {
       /clinical-lab-table-wrap[^>]*style=/.test(tableHtml)) {
     throw new Error(`Lab table repeated panel labels or leaked hidden placeholders: ${tableHtml}`);
   }
+  const duplicateNarrativeHtml = renderToStaticMarkup(React.createElement(ClinicalLabTable, {
+    lines: [
+      "Lab: Infx/Perfusion: Micro: CSF cx 07-07 E. coli, cefepime S",
+      "Lab: Other: Micro: CSF cx 07-07 E. coli, cefepime S",
+    ],
+    density: "board",
+  }));
+  if ((duplicateNarrativeHtml.match(/CSF cx 07-07 E\. coli, cefepime S/g) ?? []).length !== 1 ||
+      /title="Other"/.test(duplicateNarrativeHtml)) {
+    throw new Error(`Lab table repeated identical microbiology narrative across groups: ${duplicateNarrativeHtml}`);
+  }
   console.log("PASS Compact Lab table preserves critical values, trends, and deterministic same-day updates");
   supplementalPasses += 1;
 } catch (error) {
