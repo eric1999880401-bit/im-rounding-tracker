@@ -431,18 +431,21 @@ function buildGroupsFromVisualItems(items: LabVisualItem[], options: LabVisualSu
       const coreOrder = new Map(coreDisplayKeys[group.id].map((key, index) => [key, index]));
       const orderedItems = dedupeVisualItems(groups.get(group.id) ?? [])
         .sort((left, right) => {
-          const preferredDifference = Number(isPreferred(right)) - Number(isPreferred(left));
-          if (preferredDifference) return preferredDifference;
+          // Keep familiar panel order for scanning. Visibility (below), not
+          // row position, guarantees that critical/abnormal values survive.
           const leftCore = coreOrder.get(left.label);
           const rightCore = coreOrder.get(right.label);
           if (leftCore !== undefined || rightCore !== undefined) {
             if (leftCore === undefined) return 1;
             if (rightCore === undefined) return -1;
-            return leftCore - rightCore;
+            const coreDifference = leftCore - rightCore;
+            if (coreDifference) return coreDifference;
           }
           const toneRank = (tone: LabVisualTone) => tone === "critical" ? 2 : tone === "important" ? 1 : 0;
           const toneDifference = toneRank(right.tone) - toneRank(left.tone);
           if (toneDifference) return toneDifference;
+          const preferredDifference = Number(isPreferred(right)) - Number(isPreferred(left));
+          if (preferredDifference) return preferredDifference;
           const leftOrder = displayOrder.get(`${group.id}|${left.label}`) ?? 99;
           const rightOrder = displayOrder.get(`${group.id}|${right.label}`) ?? 99;
           return leftOrder - rightOrder || right.score - left.score || left.label.localeCompare(right.label);
@@ -450,12 +453,16 @@ function buildGroupsFromVisualItems(items: LabVisualItem[], options: LabVisualSu
       const focusedItems = orderedItems.filter((item) =>
         isPreferred(item) ||
         item.tone !== "plain" ||
-        (!hasAiSelection && (
-          (group.id !== "other" && coreOrder.has(item.label)) ||
-          (group.id === "other" && item.label !== "Other")
-        )),
+        (group.id !== "other" && coreOrder.has(item.label)) ||
+        (!hasAiSelection && group.id === "other" && item.label !== "Other"),
       );
-      const sourceItems = focusedItems.slice(0, maxItems);
+      const selectedItems = new Set(focusedItems.filter((item) => item.tone !== "plain" || item.explicitMark));
+      focusedItems.forEach((item) => {
+        if (selectedItems.size < maxItems) selectedItems.add(item);
+      });
+      // Preserve familiar display order after selecting. A group may exceed
+      // its soft limit when more than that many high-yield values are present.
+      const sourceItems = orderedItems.filter((item) => selectedItems.has(item));
       if (sourceItems.length === 0) return null;
       const tone: LabVisualTone = sourceItems.some((item) => item.tone === "critical")
         ? "critical"
@@ -535,6 +542,39 @@ export function buildLabVisualSummaryFromText(value: string, options: LabVisualS
   });
 
   return buildGroupsFromVisualItems(visualItems, options);
+}
+
+export function buildLabVisualTimelineSummary(
+  currentValue: string,
+  previousValue: string,
+  options: LabVisualSummaryOptions = {},
+) {
+  const unlimitedOptions = {
+    ...options,
+    maxGroups: Number.POSITIVE_INFINITY,
+    maxItemsPerGroup: Number.POSITIVE_INFINITY,
+  };
+  const currentGroups = buildLabVisualSummaryFromText(currentValue, unlimitedOptions);
+  if (!previousValue.trim()) return buildGroupsFromVisualItems(currentGroups.flatMap((group) => group.items), options);
+
+  const previousItems = buildLabVisualSummaryFromText(previousValue, unlimitedOptions)
+    .flatMap((group) => group.items);
+  const previousByKey = new Map(previousItems.map((item) => [item.key, item]));
+  const timelineItems = currentGroups
+    .flatMap((group) => group.items)
+    .map((item) => {
+      const previous = previousByKey.get(item.key);
+      return previous ? withPreviousVisualValue(item, previous) : item;
+    });
+  return buildGroupsFromVisualItems(timelineItems, options);
+}
+
+export function formatLabVisualTimelineLines(
+  currentValue: string,
+  previousValue: string,
+  options: LabVisualSummaryOptions = {},
+) {
+  return buildLabVisualTimelineSummary(currentValue, previousValue, options).map((group) => group.text);
 }
 
 export function buildPatientLabVisualSummary(patient: Patient, notes: DailyNote[] = [], options: LabVisualSummaryOptions = {}) {

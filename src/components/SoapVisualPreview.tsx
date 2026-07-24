@@ -17,6 +17,7 @@ import {
   isTaskSoapLineVisible,
 } from "../userPreferences";
 import { ClinicalInlineText, ClinicalText, type LabReferenceDisplayMode } from "./ClinicalText";
+import { ClinicalLabTable } from "./ClinicalLabTable";
 
 interface SoapVisualPreviewProps {
   value: string;
@@ -169,14 +170,14 @@ export function SoapVisualPreview({
                 {objectiveNonLabLines.map((line) => (
                   <VisualLine key={line.id} line={line} keywordRules={keywordRules} />
                 ))}
-                {objectiveLabLines.map((line) => (
-                  <VisualLine
-                    key={line.id}
-                    line={line}
+                {objectiveLabLines.length > 0 && (
+                  <ClinicalLabTable
+                    density={compact ? "board" : "detail"}
+                    lines={objectiveLabLines}
                     keywordRules={keywordRules}
                     labReferenceDisplay={labReferenceDisplay}
                   />
-                ))}
+                )}
               </>
             ) : <EmptyLine />}
           </Section>

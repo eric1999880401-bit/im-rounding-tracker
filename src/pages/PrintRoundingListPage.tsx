@@ -26,6 +26,7 @@ import {
   todayKey,
 } from "../utils";
 import { ClinicalInlineText, ClinicalText } from "../components/ClinicalText";
+import { ClinicalLabTable } from "../components/ClinicalLabTable";
 import { useT } from "../i18n";
 import { getPatientHeadline, getRoundingDigest } from "../roundingDigest";
 import { getCanonicalSoapText, patientToSoapDraft } from "../soapDraft";
@@ -338,8 +339,8 @@ function PrintRoundingListPage({
     );
   }
 
-  function roundSectionBox(title: string, lines: RoundNoteLineView[]) {
-    if (lines.length === 0) return null;
+  function roundSectionBox(title: string, lines: RoundNoteLineView[], labLines: RoundNoteLineView[] = []) {
+    if (lines.length === 0 && labLines.length === 0) return null;
     const sectionClass = title === "S"
       ? "print-section-subjective"
       : title === "O"
@@ -351,6 +352,13 @@ function PrintRoundingListPage({
       <div className={`print-section-box ${sectionClass}`}>
         <div className="print-section-title">{title}</div>
         {renderRoundPrintLines(lines, title)}
+        {labLines.length > 0 && (
+          <ClinicalLabTable
+            density="print"
+            lines={labLines}
+            keywordRules={preferences.keywordHighlightRules}
+          />
+        )}
       </div>
     );
   }
@@ -438,9 +446,11 @@ function PrintRoundingListPage({
             const subjectiveLines = isLayoutSectionVisible(roundingLayout, "subjective")
               ? selectRoundNoteLines(roundView.subjective, limits.subjective)
               : [];
+            const visibleObjectiveLines = roundView.objective.all.filter((line) => isObjectiveSoapLineVisible(line.raw, roundingLayout));
+            const objectiveLabLines = visibleObjectiveLines.filter((line) => line.kind === "lab");
             const objectiveLines = selectRoundNoteLines(
-              roundView.objective.all.filter((line) => isObjectiveSoapLineVisible(line.raw, roundingLayout)),
-              limits.pe + limits.labItems + limits.images,
+              visibleObjectiveLines.filter((line) => line.kind !== "lab"),
+              limits.pe + limits.images,
             );
             const assessmentLines = isLayoutSectionVisible(roundingLayout, "assessmentPlan")
               ? selectRoundNoteLines(
@@ -504,7 +514,7 @@ function PrintRoundingListPage({
 
                 <div className="print-summary-grid">
                   {roundSectionBox("S", subjectiveLines)}
-                  {roundSectionBox("O", objectiveLines)}
+                  {roundSectionBox("O", objectiveLines, objectiveLabLines)}
                   {roundSectionBox("A/P", assessmentLines)}
                   {roundSectionBox(taskDcTitle(), taskDcLines)}
                 </div>

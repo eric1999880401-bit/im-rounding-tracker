@@ -113,6 +113,7 @@ const {
 } = await server.ssrLoadModule("/src/draftRecovery.ts");
 const { appendSoapEditTrace, buildSoapEditTrace, nextSoapVersion, SOAP_EDIT_HISTORY_LIMIT } = await server.ssrLoadModule("/src/soapEditTrace.ts");
 const { SoapVisualPreview } = await server.ssrLoadModule("/src/components/SoapVisualPreview.tsx");
+const { ClinicalLabTable } = await server.ssrLoadModule("/src/components/ClinicalLabTable.tsx");
 const { buildCorrectionContract, compactRoundSoapPromptHistory, makeRoundSoapPrompt } = await server.ssrLoadModule("/functions/src/roundSoapPrompt.ts");
 const {
   DEFAULT_BALANCED_MODEL,
@@ -708,6 +709,49 @@ try {
 } catch (error) {
   failures.push({ name: "Visual lab summary groups labs consistently for Board/Preview/Print", error: error instanceof Error ? error.message : String(error) });
   console.error(`FAIL Visual lab summary groups labs consistently for Board/Preview/Print: ${failures[failures.length - 1].error}`);
+}
+
+try {
+  const source = [
+    "2026-07-21 WBC 12.7, Neu 80, Hb 9.8, Plt 220, CRP 4",
+    "2026-07-22 WBC 31.8, Neu 88.9, Hb 9.4, Plt 259, CRP 10",
+    "2026-07-22 WBC 32.4, CRP 11",
+  ].join("\n");
+  const sameDateDataset = buildCanonicalLabDataset(source);
+  const sameDateLatest = new Map(sameDateDataset.latestItems.map((item) => [item.label, item]));
+  if (sameDateLatest.get("WBC")?.value !== "32.4" || sameDateLatest.get("WBC")?.previousValue !== "31.8") {
+    throw new Error(`same-date latest/prior values were not deterministic: ${JSON.stringify(sameDateLatest.get("WBC"))}`);
+  }
+  const selectedNormal = buildLabVisualSummaryFromText(source, {
+    preferredLabels: ["Neu"],
+    maxItemsPerGroup: 2,
+  });
+  const cbc = selectedNormal.find((group) => group.id === "cbc");
+  if (!cbc?.items.some((item) => item.label === "WBC" && item.value === "32.4" && item.tone === "critical")) {
+    throw new Error(`AI preference suppressed critical WBC: ${JSON.stringify(cbc)}`);
+  }
+
+  const tableHtml = renderToStaticMarkup(React.createElement(ClinicalLabTable, {
+    lines: [
+      "Lab: CBC/DC: WBC 32.4↑(31.8), Neu 88.9↑, Hb 9.4↓, Plt 259",
+      "Lab: Infx/Perfusion: CRP 11↑(10)",
+    ],
+    density: "print",
+  }));
+  if (!/<table[^>]+aria-label="Key laboratory results"/.test(tableHtml) ||
+      !/<th scope="row">CBC\/DC<\/th>/.test(tableHtml) ||
+      !/WBC 32\.4/.test(tableHtml) ||
+      !/CRP 11/.test(tableHtml)) {
+    throw new Error(`shared compact Lab table did not render grouped values: ${tableHtml}`);
+  }
+  if ((tableHtml.match(/>CBC\/DC</g) ?? []).length !== 1 || /routine hidden/i.test(tableHtml)) {
+    throw new Error(`Lab table repeated panel labels or leaked hidden placeholders: ${tableHtml}`);
+  }
+  console.log("PASS Compact Lab table preserves critical values, trends, and deterministic same-day updates");
+  supplementalPasses += 1;
+} catch (error) {
+  failures.push({ name: "Compact Lab table priority and trend regression", error: error instanceof Error ? error.message : String(error) });
+  console.error(`FAIL Compact Lab table priority and trend regression: ${failures[failures.length - 1].error}`);
 }
 
 try {

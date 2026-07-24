@@ -13,6 +13,7 @@ import {
   isObjectiveSoapLineVisible,
 } from "../userPreferences";
 import { ClinicalInlineText } from "./ClinicalText";
+import { ClinicalLabTable } from "./ClinicalLabTable";
 
 interface SoapPrintPreviewProps {
   value: string;
@@ -46,16 +47,19 @@ function PrintVisualRows({
 function PrintSection({
   title,
   lines,
+  labLines = [],
   keywordRules,
 }: {
   title: string;
   lines: RoundNoteLineView[];
+  labLines?: RoundNoteLineView[];
   keywordRules?: KeywordHighlightRule[];
 }) {
   return (
     <section className="soap-print-preview-section">
       <div className="soap-print-preview-section-title">{title}</div>
       <PrintVisualRows lines={lines} keywordRules={keywordRules} />
+      {labLines.length > 0 && <ClinicalLabTable density="print" lines={labLines} keywordRules={keywordRules} />}
     </section>
   );
 }
@@ -68,6 +72,8 @@ export function SoapPrintPreview({ value, layoutPreferences, keywordRules = [], 
     { maxLines: 5, maxChars: 150 },
   );
   const visibleObjective = view.objective.all.filter((line) => isObjectiveSoapLineVisible(line.raw, layoutPreferences));
+  const visibleObjectiveLabs = visibleObjective.filter((line) => line.kind === "lab");
+  const visibleObjectiveNonLabs = visibleObjective.filter((line) => line.kind !== "lab");
   const displayedOrders = isLayoutSectionVisible(layoutPreferences, "orders")
     ? formatMedicationOrderLinesForDisplay(
         view.orders.map((line) => line.raw),
@@ -102,7 +108,12 @@ export function SoapPrintPreview({ value, layoutPreferences, keywordRules = [], 
         {isLayoutSectionVisible(layoutPreferences, "subjective") && (
           <PrintSection title="S" lines={selectRoundNoteLines(view.subjective, 3)} keywordRules={keywordRules} />
         )}
-        <PrintSection title="O" lines={selectRoundNoteLines(visibleObjective, 10)} keywordRules={keywordRules} />
+        <PrintSection
+          title="O"
+          lines={selectRoundNoteLines(visibleObjectiveNonLabs, 6)}
+          labLines={visibleObjectiveLabs}
+          keywordRules={keywordRules}
+        />
         {isLayoutSectionVisible(layoutPreferences, "assessmentPlan") && (
           <PrintSection title="A/P" lines={selectRoundNoteLines(apLines, 6)} keywordRules={keywordRules} />
         )}

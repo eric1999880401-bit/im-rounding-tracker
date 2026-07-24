@@ -68,7 +68,9 @@ export function buildCanonicalLabDataset(value: string): CanonicalLabDataset {
     const sorted = [...items].sort((left, right) => {
       const dateDifference = right.date.localeCompare(left.date);
       if (dateDifference) return dateDifference;
-      return allItems.indexOf(left) - allItems.indexOf(right);
+      // Sources are merged oldest-to-newest. When two results share a date (or
+      // have no date), the later source occurrence is the current value.
+      return allItems.indexOf(right) - allItems.indexOf(left);
     });
     const latest = sorted[0];
     if (!latest) return [];

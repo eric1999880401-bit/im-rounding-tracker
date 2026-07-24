@@ -24,6 +24,7 @@ import { applyClinicalKnowledgeToPatientImportDraft } from "../clinicalKnowledge
 import { buildConcisePatientClinicalUpdate } from "../clinicalPatientPolish";
 import { routePatientImportDraft } from "../clinicalFieldRouter";
 import PatientForm from "../components/PatientForm";
+import { ClinicalLabTable } from "../components/ClinicalLabTable";
 import { ClinicalInlineText } from "../components/ClinicalText";
 import RoundSoapComposer from "../components/RoundSoapComposer";
 import {
@@ -1400,10 +1401,7 @@ function PatientBoardPage({
             const visibleObjectiveLines = roundView.objective.all.filter((line) => isObjectiveSoapLineVisible(line.raw, roundingLayout));
             const groupedObjectiveLabLines = visibleObjectiveLines.filter((line) => line.kind === "lab");
             const groupedObjectiveNonLabLines = visibleObjectiveLines.filter((line) => line.kind !== "lab");
-            const prioritizedObjectiveLines = [
-              ...selectRoundNoteLines(groupedObjectiveNonLabLines, 3),
-              ...selectRoundNoteLines(groupedObjectiveLabLines, roundingLayout.boardDensity === "normal" ? 4 : 3),
-            ];
+            const prioritizedObjectiveNonLabLines = selectRoundNoteLines(groupedObjectiveNonLabLines, 3);
             const visibleApProblems = isLayoutSectionVisible(roundingLayout, "assessmentPlan") ? roundView.assessmentPlan : [];
             const mergedApText = visibleApProblems
               .map((problem) => [problem.title.text, ...problem.lines.map((line) => line.text)].filter(Boolean).join(": "))
@@ -1492,7 +1490,22 @@ function PatientBoardPage({
                     {visibleObjectiveLines.length > 0 && (
                       <div className="board-soap-row">
                         <span className="board-label">O</span>
-                        {renderBoardVisualLines(prioritizedObjectiveLines, "-", 6, preferences.keywordHighlightRules, carriedKeys)}
+                        <div className="board-objective-content">
+                          {prioritizedObjectiveNonLabLines.length > 0 && renderBoardVisualLines(
+                            prioritizedObjectiveNonLabLines,
+                            "",
+                            3,
+                            preferences.keywordHighlightRules,
+                            carriedKeys,
+                          )}
+                          {groupedObjectiveLabLines.length > 0 && (
+                            <ClinicalLabTable
+                              density="board"
+                              lines={groupedObjectiveLabLines}
+                              keywordRules={preferences.keywordHighlightRules}
+                            />
+                          )}
+                        </div>
                       </div>
                     )}
                   </section>

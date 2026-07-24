@@ -6,7 +6,7 @@ import {
   canonicalImageFallbackLines,
   imageOutputUsesOnlySourceNumbers,
 } from "./imageDataset";
-import { formatLabVisualSummaryLinesFromText } from "./labVisualSummary";
+import { formatLabVisualSummaryLinesFromText, formatLabVisualTimelineLines } from "./labVisualSummary";
 import { normalizeObjectiveLabExportLines, objectiveKindFromLine } from "./objectiveLineSanitizer";
 import {
   editorDraftToSoapText,
@@ -141,9 +141,11 @@ function looksLikeImage(value: string) {
 function sourceLabEditorLines(
   fields: RoundSoapSourceFields,
   selectedLabs: StructuredRoundSoapDraft["objective"]["labs"] = [],
+  baselineText = "",
 ) {
-  const dataset = buildCanonicalLabDataset(String(fields.labs ?? ""));
-  const validIds = new Set(dataset.latestItems.map((item) => item.id).filter(Boolean));
+  const currentSource = String(fields.labs ?? "");
+  const currentDataset = buildCanonicalLabDataset(currentSource);
+  const validIds = new Set(currentDataset.latestItems.map((item) => item.id).filter(Boolean));
   const preferredItemIds = selectedLabs
     .flatMap((item) => item.sourceIds ?? [])
     .filter((id) => validIds.has(id));
@@ -152,11 +154,23 @@ function sourceLabEditorLines(
   const preferredLabels = selectedLabs
     .filter((item) => !(item.sourceIds ?? []).some((id) => validIds.has(id)))
     .flatMap((item) => labSelectionKeysFromText(item.values));
-  return formatLabVisualSummaryLinesFromText(String(fields.labs ?? ""), {
+  const selectedIdLabels = currentDataset.latestItems
+    .filter((item) => preferredItemIds.includes(item.id))
+    .map((item) => item.name || item.label);
+  const baselineLabText = baselineText
+    ? parseCanonicalSoapTextToEditorDraft(baselineText).oLines
+        .filter((line) => line.kind === "lab" && !isMicrobiologyLabLine(line))
+        .map((line) => line.text)
+        .join("\n")
+    : "";
+  const summaryOptions = {
     includePlain: true,
-    preferredItemIds,
-    preferredLabels,
-  })
+    preferredLabels: [...preferredLabels, ...selectedIdLabels],
+  };
+  const lines = baselineLabText
+    ? formatLabVisualTimelineLines(currentSource, baselineLabText, summaryOptions)
+    : formatLabVisualSummaryLinesFromText(currentSource, summaryOptions);
+  return lines
     .map((text) => editorLine(text.replace(/^Lab\s*:\s*/i, ""), "lab"))
     .filter((line) => line.text);
 }
@@ -487,7 +501,9 @@ export function acceptStructuredRoundSoap(params: {
   const sourceHasImages = sourceImageDataset.facts.length > 0 || hasText(params.sourceFields.images) || looksLikeImage(source);
   const sourceHasOther = hasText(params.sourceFields.other);
   const sourceHasOrders = hasText(params.sourceFields.orders);
-  const sourceOwnedLabs = sourceHasLabs ? sourceLabEditorLines(params.sourceFields, params.value.objective.labs) : [];
+  const sourceOwnedLabs = sourceHasLabs
+    ? sourceLabEditorLines(params.sourceFields, params.value.objective.labs, params.workflowMode === "dailyUpdate" ? params.baselineText : "")
+    : [];
   const sourceOwnedVitals = sourceHasVitals ? sourceVitalLines(params.sourceFields.vitals) : [];
   const sourceOwnedImages = sourceHasImages ? sourceImageEditorLines(params.sourceFields, params.value.objective.imaging) : [];
   const sourceOwnedPathology = looksLikePathology(source) ? sourcePathologyEditorLines(params.sourceFields) : [];

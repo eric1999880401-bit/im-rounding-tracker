@@ -798,6 +798,32 @@
   word-break: normal;
 }
 
+.print-section-objective .clinical-lab-table-wrap {
+  border-color: #cbd5e1;
+  border-left-color: #b7791f;
+  margin-top: 2px;
+}
+
+.print-section-objective .clinical-lab-table th {
+  background: #f1f5f9;
+  color: #334155;
+  font-size: var(--print-chip-font-size);
+  width: 52px;
+}
+
+.print-section-objective .clinical-lab-table td,
+.print-section-objective .clinical-lab-table th {
+  border-color: #d9e2ec;
+  padding: 1px 3px;
+}
+
+.print-section-objective .clinical-lab-item {
+  font-size: var(--print-font-size);
+  line-height: var(--print-line-height);
+  margin-right: 4px;
+  padding-right: 4px;
+}
+
 .print-section-ap .print-visual-text,
 .print-section-objective .print-visual-text,
 .print-section-taskdc .print-visual-text {
@@ -1219,6 +1245,25 @@
     background-color: #fff8e6 !important;
     border-color: #f0c36d !important;
     border-left-color: #b7791f !important;
+  }
+
+  .clinical-lab-table-wrap,
+  .clinical-lab-table th,
+  .clinical-lab-table td {
+    border-color: #cbd5e1 !important;
+  }
+
+  .clinical-lab-table th,
+  .clinical-lab-table td {
+    background: #ffffff !important;
+  }
+
+  .clinical-lab-item-critical {
+    color: #8b0000 !important;
+  }
+
+  .clinical-lab-item-important {
+    color: #6b3f00 !important;
   }
 
   .print-visual-pe {
