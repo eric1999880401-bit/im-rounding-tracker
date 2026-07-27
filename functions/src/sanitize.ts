@@ -472,21 +472,23 @@ export function matchExistingPatient(
   draft: { bed: string; patientCode: string; matchPatientId: string },
   existingPatients: ExistingPatientForBatch[],
 ) {
-  const modelMatch = existingPatients.find((patient) => patient.id && patient.id === draft.matchPatientId);
-  if (modelMatch) return modelMatch;
-
   const bedKey = normalizeTextKey(draft.bed);
   const codeKey = normalizeTextKey(draft.patientCode);
-  if (codeKey) {
-    const codeMatch = existingPatients.find((patient) => normalizeTextKey(patient.patientCode) === codeKey);
-    if (codeMatch) return codeMatch;
+  const bedMatches = bedKey
+    ? existingPatients.filter((patient) => normalizeTextKey(patient.bed) === bedKey)
+    : [];
+  const codeMatches = codeKey
+    ? existingPatients.filter((patient) => normalizeTextKey(patient.patientCode) === codeKey)
+    : [];
+  if (bedMatches.length > 1 || codeMatches.length > 1) return undefined;
+  if (bedKey && codeKey) {
+    const bedMatch = bedMatches[0];
+    const codeMatch = codeMatches[0];
+    return bedMatch && codeMatch && bedMatch.id === codeMatch.id ? bedMatch : undefined;
   }
-
-  if (bedKey) {
-    return existingPatients.find((patient) => normalizeTextKey(patient.bed) === bedKey);
-  }
-
-  return undefined;
+  // Never trust a model-supplied patient id without source identity evidence.
+  // Explicit target-patient mode is resolved separately by the caller.
+  return bedMatches[0] ?? codeMatches[0];
 }
 
 export function sanitizeImportTask(value: unknown) {
@@ -507,7 +509,6 @@ export function sanitizeImportTask(value: unknown) {
 export function sanitizeImportDraft(
   value: unknown,
   index: number,
-  rawText: string,
   existingPatients: ExistingPatientForBatch[],
   targetPatient?: ExistingPatientForBatch,
 ) {
@@ -519,7 +520,9 @@ export function sanitizeImportDraft(
     id: truncateString(item.id, 120) || `import-${index + 1}`,
     status: item.status === "updateCandidate" ? "updateCandidate" : "new",
     matchPatientId: truncateString(item.matchPatientId, 120),
-    sourceIndex: typeof item.sourceIndex === "number" ? item.sourceIndex : index,
+    sourceIndex: typeof item.sourceIndex === "number" && Number.isInteger(item.sourceIndex) && item.sourceIndex >= 0
+      ? item.sourceIndex
+      : index,
     bed: truncateString(item.bed, 80),
     patientCode: truncateString(item.patientCode, 120),
     age: truncateString(item.age, 12),
@@ -547,7 +550,6 @@ export function sanitizeImportDraft(
     sourceExcerpt: truncateString(item.sourceExcerpt, 700),
   };
   const allText = [
-    rawText,
     baseDraft.primaryDiagnosis,
     baseDraft.oneLiner,
     baseDraft.todayUpdates,
@@ -645,7 +647,7 @@ export function sanitizePatientBatchOutput(
   const draftSource = rawDrafts.length > 0 ? rawDrafts : targetPatient ? [fallbackTargetImportDraft(rawText, targetPatient)] : [];
   return draftSource
     .slice(0, 40)
-    .map((item, index) => sanitizeImportDraft(item, index, rawText, existingPatients, targetPatient))
+    .map((item, index) => sanitizeImportDraft(item, index, existingPatients, targetPatient))
     .filter((draft) => draft.bed || draft.patientCode || draft.primaryDiagnosis || draft.oneLiner || draft.admissionSummary);
 }
 

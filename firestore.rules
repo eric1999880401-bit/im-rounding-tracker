@@ -2,13 +2,106 @@ rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
-    match /users/{userId} {
-      allow read, create, update, delete: if request.auth != null
-        && request.auth.uid == userId;
+    function isOwner(userId) {
+      return request.auth != null && request.auth.uid == userId;
+    }
 
-      match /{document=**} {
-        allow read, create, update, delete: if request.auth != null
-          && request.auth.uid == userId;
+    function validAuditEvent(userId, eventId) {
+      return request.resource.data.actorUid == userId
+        && request.resource.data.id == eventId
+        && request.resource.data.patientId is string
+        && request.resource.data.dailyNoteDate is string
+        && request.resource.data.createdAt is string
+        && request.resource.data.status == "committed"
+        && request.resource.data.operation in [
+          "soap.save",
+          "ditto.copy",
+          "patient.update",
+          "bulk.import.apply",
+          "ai.document.save"
+        ];
+    }
+
+    function validAuditPayload(userId, payloadId) {
+      let eventPath = /databases/$(database)/documents/users/$(userId)/clinicalAuditEvents/$(request.resource.data.eventId);
+      return request.resource.data.actorUid == userId
+        && request.resource.data.id == payloadId
+        && request.resource.data.patientId is string
+        && request.resource.data.text is string
+        && request.resource.data.expiresAt is timestamp
+        && request.resource.data.expiresAt >= request.time
+        && request.resource.data.expiresAt <= request.time + duration.value(31, 'd')
+        && existsAfter(eventPath)
+        && getAfter(eventPath).data.actorUid == userId
+        && getAfter(eventPath).data.patientId == request.resource.data.patientId;
+    }
+
+    match /users/{userId} {
+      allow read, create, update, delete: if isOwner(userId);
+
+      match /patients/{patientId} {
+        allow read, create, update, delete: if isOwner(userId);
+
+        match /dailyNotes/{noteDate} {
+          allow read, create, update, delete: if isOwner(userId);
+        }
+
+        // Drafts are written by authenticated Cloud Functions (Admin SDK).
+        match /aiDrafts/{draftId} {
+          allow read: if isOwner(userId);
+          allow create, update: if false;
+          allow delete: if isOwner(userId)
+            && !existsAfter(/databases/$(database)/documents/users/$(userId)/patients/$(patientId));
+        }
+      }
+
+      match /settings/{settingId} {
+        allow read, create, update, delete: if isOwner(userId);
+      }
+
+      match /phonebook/{contactId} {
+        allow read, create, update, delete: if isOwner(userId);
+      }
+
+      match /miscTasks/{taskId} {
+        allow read, create, update, delete: if isOwner(userId);
+      }
+
+      match /studyTopics/{topicId} {
+        allow read, create, update, delete: if isOwner(userId);
+      }
+
+      match /aiJobs/{jobId} {
+        allow read: if isOwner(userId);
+        allow write: if false;
+      }
+
+      match /aiDrafts/{draftId} {
+        allow read: if isOwner(userId);
+        allow write: if false;
+      }
+
+      // Client transactions may append their own audit event, but no client can
+      // rewrite durable correction metadata afterward. Event deletion is only
+      // permitted in the same atomic operation that removes its patient, so a
+      // patient deletion cannot leave clinical-text metadata orphaned.
+      match /clinicalAuditEvents/{eventId} {
+        allow read: if isOwner(userId);
+        allow create: if isOwner(userId) && validAuditEvent(userId, eventId);
+        allow update: if false;
+        allow delete: if isOwner(userId)
+          && resource.data.actorUid == userId
+          && resource.data.patientId is string
+          && !existsAfter(/databases/$(database)/documents/users/$(userId)/patients/$(resource.data.patientId));
+      }
+
+      // Short-lived clinical snapshots may be deleted by their owner for
+      // privacy, but cannot be altered after creation.
+      match /clinicalAuditPayloads/{payloadId} {
+        allow read: if isOwner(userId);
+        allow create: if isOwner(userId) && validAuditPayload(userId, payloadId);
+        allow update: if false;
+        allow delete: if isOwner(userId);
       }
     }
   }

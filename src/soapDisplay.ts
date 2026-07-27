@@ -169,6 +169,27 @@ export function soapHeaderLinesForDisplay(
   return result;
 }
 
+export function soapHeaderSafetyLinesForDisplay(lines: string[]) {
+  const displayLines = soapHeaderLinesForDisplay(lines, {}, { maxLines: 20, maxChars: 130 });
+  // Reviewed SOAP commonly stores several safety fields on one header line,
+  // e.g. `Code: Full | Allergy: NKDA`. Match each pipe-delimited field instead
+  // of treating only the first label as present; otherwise Board/Print can show
+  // a real allergy beside a contradictory `Allergy: MISSING` badge.
+  const fields = displayLines.flatMap((line) =>
+    stripColorMarkup(line)
+      .split(/\s*\|\s*/)
+      .map((field) => field.trim())
+      .filter(Boolean),
+  );
+  const find = (pattern: RegExp) => fields.find((field) => pattern.test(field));
+  return [
+    find(/^Code:/i) ?? "Code: MISSING",
+    find(/^Allergy:/i) ?? "Allergy: MISSING",
+    find(/^Isolation:/i) ?? "",
+    find(/^HD\/POD:/i) ?? "",
+  ].filter(Boolean);
+}
+
 /** Remove legacy inline severity markers after punctuation without touching the source text. */
 export function cleanInlineClinicalMarkers(value: string) {
   return normalizeClinicalDisplayTextPreservingMarks(value)

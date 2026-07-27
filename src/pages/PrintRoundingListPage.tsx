@@ -30,7 +30,7 @@ import { ClinicalLabTable } from "../components/ClinicalLabTable";
 import { useT } from "../i18n";
 import { getPatientHeadline, getRoundingDigest } from "../roundingDigest";
 import { getCanonicalSoapText, patientToSoapDraft } from "../soapDraft";
-import { conciseSoapDiagnosisForDisplay, soapHeaderLinesForDisplay } from "../soapDisplay";
+import { conciseSoapDiagnosisForDisplay, soapHeaderLinesForDisplay, soapHeaderSafetyLinesForDisplay } from "../soapDisplay";
 import {
   buildRoundNoteViewModelFromDraft,
   makeRoundNoteLineView,
@@ -293,7 +293,7 @@ function PrintRoundingListPage({
       maxChars: 120,
     });
     const headerLines = soapHeaderLinesForDisplay(
-      view.header.map((line) => line.raw).filter((line) => isSoapHeaderLineVisible(line, roundingLayout) && !/^Red flags:|^Date:|^Attending:/i.test(line)),
+      view.header.map((line) => line.raw).filter((line) => isSoapHeaderLineVisible(line, roundingLayout) && !/^Red flags:|^Date:|^Attending:|^Code:|^Allergy:|^Isolation:|^HD\/POD:/i.test(line)),
       {
         dx: diagnosis,
         issues: digest?.issues ?? "",
@@ -301,10 +301,9 @@ function PrintRoundingListPage({
       },
       { maxLines: 5, maxChars: 150 },
     ).filter((line) => !patient.patientCode || !line.includes(patient.patientCode));
-    if (headerLines.length === 0) {
-      return diagnosis ? displayPrintLine(`Dx: ${diagnosis}`) : "";
-    }
-    return removePrintEllipsis(headerLines.slice(0, 4).map(displayPrintLine).filter(Boolean).join(" | "));
+    const safetyLines = soapHeaderSafetyLinesForDisplay(view.header.map((line) => line.raw));
+    const clinicalContext = headerLines.length > 0 ? headerLines : diagnosis ? [`Dx: ${diagnosis}`] : [];
+    return removePrintEllipsis([...safetyLines, ...clinicalContext.slice(0, 3)].map(displayPrintLine).filter(Boolean).join(" | "));
   }
 
   function taskDcTitle() {

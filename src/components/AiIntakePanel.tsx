@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import DeidNotice from "./DeidNotice";
 import { detectSourceType } from "../aiPostprocess/sourceTypeDetect";
 import { analyzeClinicalText } from "../firebase/aiService";
@@ -34,6 +34,18 @@ import {
   nowIso,
 } from "../utils";
 import { aiSoapDraftToSoapDraft, formatSoapDraft, soapTextToPatientPatch } from "../soapDraft";
+import {
+  bindDeidentifiedConfirmation,
+  createAiPrivacyContextFingerprint,
+  isDeidentifiedConfirmationCurrent,
+} from "../aiPrivacyConfirmation";
+import {
+  canApplyPatientContextRequest,
+  isLatestRequest,
+  isPatientReviewBoundToContext,
+  type PatientContextRequestIdentity,
+} from "../asyncRequestGuard";
+import type { AiIntakeReviewCardKind } from "../aiIntakePersistence";
 
 const MAX_INPUT_CHARS = 18000;
 
@@ -56,26 +68,7 @@ interface IntakeSourceBlock {
   autoDetect: boolean;
 }
 
-type ReviewCardKind =
-  | "oneLiner"
-  | "admissionSummary"
-  | "isbarHandoff"
-  | "chiefConcern"
-  | "symptom"
-  | "importantSymptom"
-  | "overnightEvent"
-  | "importantOvernightEvent"
-  | "vital"
-  | "bloodSugar"
-  | "physicalExam"
-  | "lab"
-  | "image"
-  | "assessmentPlan"
-  | "redFlag"
-  | "task"
-  | "dischargeIssue"
-  | "thinkingPrompt"
-  | "uncertainty";
+type ReviewCardKind = AiIntakeReviewCardKind;
 
 type ReviewStatus = "pending" | "accepted" | "ignored" | "saved";
 
@@ -786,10 +779,33 @@ function AiIntakePanel({ patient, selectedDate, onApplyPatient }: AiIntakePanelP
   const [model, setModel] = useState("");
   const [reviewCards, setReviewCards] = useState<ReviewCard[]>([]);
   const [soapPreviewText, setSoapPreviewText] = useState("");
+  const [confirmedPrivacyFingerprint, setConfirmedPrivacyFingerprint] = useState("");
+  const [reviewBinding, setReviewBinding] = useState<PatientContextRequestIdentity | null>(null);
+  const latestAnalysisRequestRef = useRef(0);
+  const currentAnalysisContextRef = useRef({ patientId: "", selectedDate: "", contextKey: "" });
 
   const rawText = useMemo(() => buildRawTextFromBlocks(sourceBlocks), [sourceBlocks]);
   const effectiveSourceType = useMemo(() => getEffectiveSourceType(sourceBlocks), [sourceBlocks]);
   const nonEmptyBlockCount = useMemo(() => getNonEmptySourceBlocks(sourceBlocks).length, [sourceBlocks]);
+  const privacyContextFingerprint = useMemo(
+    () => createAiPrivacyContextFingerprint(patient, selectedDate, rawText, effectiveSourceType, storeRawText),
+    [patient, selectedDate, rawText, effectiveSourceType, storeRawText],
+  );
+  const deidentifiedConfirmed = isDeidentifiedConfirmationCurrent(
+    confirmedPrivacyFingerprint,
+    privacyContextFingerprint,
+  );
+  currentAnalysisContextRef.current = {
+    patientId: patient.id,
+    selectedDate,
+    contextKey: privacyContextFingerprint,
+  };
+  const reviewMatchesContext = isPatientReviewBoundToContext(
+    reviewBinding,
+    patient.id,
+    selectedDate,
+    privacyContextFingerprint,
+  );
   const estimatedTokens = Math.ceil(rawText.length / 4);
   const acceptedCount = reviewCards.filter((card) => card.status === "accepted").length;
   const reviewableCount = reviewCards.filter((card) => card.status !== "saved").length;
@@ -807,6 +823,19 @@ function AiIntakePanel({ patient, selectedDate, onApplyPatient }: AiIntakePanelP
       return (leftIndex === -1 ? 999 : leftIndex) - (rightIndex === -1 ? 999 : rightIndex);
     });
   }, [reviewCards]);
+
+  useEffect(() => {
+    latestAnalysisRequestRef.current += 1;
+    setLoading(false);
+    setDraftId("");
+    setModel("");
+    setReviewCards([]);
+    setSoapPreviewText("");
+    setReviewBinding(null);
+    setStatusMessage("");
+    setError("");
+    setConfirmedPrivacyFingerprint("");
+  }, [privacyContextFingerprint]);
 
   function updateSourceBlock(blockId: string, updater: (block: IntakeSourceBlock) => IntakeSourceBlock) {
     setSourceBlocks((blocks) => blocks.map((block) => (block.id === blockId ? updater(block) : block)));
@@ -832,35 +861,73 @@ function AiIntakePanel({ patient, selectedDate, onApplyPatient }: AiIntakePanelP
   }
 
   async function analyze() {
+    const requestPatient = patient;
+    const requestSelectedDate = selectedDate;
+    const requestRawText = rawText;
+    const requestSourceType = effectiveSourceType;
+    const requestStoreRawText = storeRawText;
     setError("");
     setStatusMessage("");
+    const requestPrivacyFingerprint = createAiPrivacyContextFingerprint(
+      requestPatient,
+      requestSelectedDate,
+      requestRawText,
+      requestSourceType,
+      requestStoreRawText,
+    );
+    const requestDeidentifiedConfirmed = isDeidentifiedConfirmationCurrent(
+      confirmedPrivacyFingerprint,
+      requestPrivacyFingerprint,
+    );
+    const request: PatientContextRequestIdentity = {
+      requestId: latestAnalysisRequestRef.current + 1,
+      patientId: requestPatient.id,
+      selectedDate: requestSelectedDate,
+      contextKey: requestPrivacyFingerprint,
+    };
+    latestAnalysisRequestRef.current = request.requestId;
+    const canApplyRequest = () =>
+      canApplyPatientContextRequest(
+        request,
+        latestAnalysisRequestRef.current,
+        currentAnalysisContextRef.current.patientId,
+        currentAnalysisContextRef.current.selectedDate,
+        currentAnalysisContextRef.current.contextKey,
+      );
+    if (!requestDeidentifiedConfirmed) {
+      setLoading(false);
+      setError("Confirm that the pasted source and selected patient context are de-identified before sending them to external AI.");
+      return;
+    }
     setLoading(true);
     try {
       const result = await analyzeClinicalText({
-        patientId: patient.id,
-        sourceType: effectiveSourceType,
-        rawText,
-        deidentifiedConfirmed: true,
-        storeRawText,
+        patientId: requestPatient.id,
+        sourceType: requestSourceType,
+        rawText: requestRawText,
+        deidentifiedConfirmed: requestDeidentifiedConfirmed,
+        storeRawText: requestStoreRawText,
         patientContext: {
-          age: patient.age ? String(patient.age) : "",
-          sex: patient.sex,
-          pmh: getUnderlyingDiseaseItems(patient),
-          activeProblems: getActiveProblemItems(patient),
+          age: requestPatient.age ? String(requestPatient.age) : "",
+          sex: requestPatient.sex,
+          pmh: getUnderlyingDiseaseItems(requestPatient),
+          activeProblems: getActiveProblemItems(requestPatient),
         },
       });
+      if (!canApplyRequest()) return;
 
       setDraftId(result.draftId);
       setModel(result.model);
-      const knowledgeDraft = applyClinicalKnowledgeToAiSoapDraft(result.draft, rawText, {
-        pmh: getUnderlyingDiseaseItems(patient),
-        activeProblems: getActiveProblemItems(patient),
-        today: selectedDate,
+      const knowledgeDraft = applyClinicalKnowledgeToAiSoapDraft(result.draft, requestRawText, {
+        pmh: getUnderlyingDiseaseItems(requestPatient),
+        activeProblems: getActiveProblemItems(requestPatient),
+        today: requestSelectedDate,
       });
-      const reviewDraft = sanitizeAiSoapDraftForReview(knowledgeDraft, rawText, effectiveSourceType);
-      const nextCards = buildCards(reviewDraft, effectiveSourceType);
-      setSoapPreviewText(formatSoapDraft(aiSoapDraftToSoapDraft(reviewDraft, patient, selectedDate)));
+      const reviewDraft = sanitizeAiSoapDraftForReview(knowledgeDraft, requestRawText, requestSourceType);
+      const nextCards = buildCards(reviewDraft, requestSourceType);
+      setSoapPreviewText(formatSoapDraft(aiSoapDraftToSoapDraft(reviewDraft, requestPatient, requestSelectedDate)));
       const preselectedCount = nextCards.filter((card) => card.status === "accepted").length;
+      setReviewBinding(request);
       setReviewCards(nextCards);
       setStatusMessage(
         preselectedCount > 0
@@ -868,9 +935,9 @@ function AiIntakePanel({ patient, selectedDate, onApplyPatient }: AiIntakePanelP
           : `SOAP preview created. Edit before saving. Draft ID: ${result.draftId}`,
       );
     } catch (nextError) {
-      setError(getErrorMessage(nextError));
+      if (canApplyRequest()) setError(getErrorMessage(nextError));
     } finally {
-      setLoading(false);
+      if (isLatestRequest(request, latestAnalysisRequestRef.current)) setLoading(false);
     }
   }
 
@@ -916,6 +983,17 @@ function AiIntakePanel({ patient, selectedDate, onApplyPatient }: AiIntakePanelP
   async function applyAcceptedItems() {
     setError("");
     setStatusMessage("");
+    if (
+      !isPatientReviewBoundToContext(
+        reviewBinding,
+        currentAnalysisContextRef.current.patientId,
+        currentAnalysisContextRef.current.selectedDate,
+        currentAnalysisContextRef.current.contextKey,
+      )
+    ) {
+      setError("This AI review belongs to a different patient, date, or source context. Nothing was saved; analyze again.");
+      return;
+    }
     const acceptedCards = reviewCards.filter((card) => card.status === "accepted");
     if (acceptedCards.length === 0) {
       setError("Accept at least one draft item before applying.");
@@ -1224,6 +1302,7 @@ function AiIntakePanel({ patient, selectedDate, onApplyPatient }: AiIntakePanelP
     setTextPatch("labSummary", routedLabSummaryLines);
     setTextPatch("rawLabText", routedLabSummaryLines);
     setTextPatch("imageSummary", cleanedImageSummaryLines);
+    setTextPatch("dischargePlan", dischargeIssueLines);
     if (labReports.length > 0) {
       acceptedNotePatch.labDate = selectedDate;
       acceptedNotePatch.labReportTitle = "AI Intake";
@@ -1241,7 +1320,7 @@ function AiIntakePanel({ patient, selectedDate, onApplyPatient }: AiIntakePanelP
       setReviewCards((cards) =>
         cards.map((card) => (card.status === "accepted" ? { ...card, status: "saved", isEditing: false } : card)),
       );
-      setStatusMessage(`${acceptedCards.length} accepted draft item(s) saved to this patient and today's SOAP note.`);
+      setStatusMessage(`${acceptedCards.length} accepted draft item(s) saved to the appropriate patient and daily-note fields.`);
     } catch (nextError) {
       setError(getErrorMessage(nextError));
     }
@@ -1250,6 +1329,17 @@ function AiIntakePanel({ patient, selectedDate, onApplyPatient }: AiIntakePanelP
   async function applySoapPreview() {
     setError("");
     setStatusMessage("");
+    if (
+      !isPatientReviewBoundToContext(
+        reviewBinding,
+        currentAnalysisContextRef.current.patientId,
+        currentAnalysisContextRef.current.selectedDate,
+        currentAnalysisContextRef.current.contextKey,
+      )
+    ) {
+      setError("This SOAP preview belongs to a different patient, date, or source context. Nothing was saved; analyze again.");
+      return;
+    }
     if (!soapPreviewText.trim()) {
       setError("Generate or paste a SOAP preview before saving.");
       return;
@@ -1356,6 +1446,19 @@ function AiIntakePanel({ patient, selectedDate, onApplyPatient }: AiIntakePanelP
 
         <DeidNotice span2 />
 
+        <label className="checkbox-label ai-checkbox span-2">
+          <input
+            type="checkbox"
+            checked={deidentifiedConfirmed}
+            onChange={(event) =>
+              setConfirmedPrivacyFingerprint(
+                bindDeidentifiedConfirmation(event.target.checked, privacyContextFingerprint),
+              )
+            }
+          />
+          I confirm the pasted source and selected patient context contain no direct identifiers and may be sent to external AI.
+        </label>
+
         <details className="advanced-fold span-2">
           <summary>Advanced</summary>
           <label className="checkbox-label ai-checkbox">
@@ -1380,7 +1483,7 @@ function AiIntakePanel({ patient, selectedDate, onApplyPatient }: AiIntakePanelP
         <div className="form-actions span-2">
           <button
             type="button"
-            disabled={loading || rawText.trim().length < 20 || rawText.length > MAX_INPUT_CHARS}
+            disabled={loading || !deidentifiedConfirmed || rawText.trim().length < 20 || rawText.length > MAX_INPUT_CHARS}
             onClick={() => void analyze()}
           >
             {loading ? "Analyzing..." : "Analyze and organize"}
@@ -1392,7 +1495,7 @@ function AiIntakePanel({ patient, selectedDate, onApplyPatient }: AiIntakePanelP
       {statusMessage && <p className="status-message">{statusMessage}</p>}
       {model && <p className="muted">Model: {model}{draftId ? ` / Draft: ${draftId}` : ""}</p>}
 
-      {soapPreviewText && (
+      {soapPreviewText && reviewMatchesContext && (
         <section className="soap-preview-panel">
           <div className="section-heading">
             <div>
@@ -1414,7 +1517,7 @@ function AiIntakePanel({ patient, selectedDate, onApplyPatient }: AiIntakePanelP
         </section>
       )}
 
-      {reviewCards.length > 0 && (
+      {reviewCards.length > 0 && reviewMatchesContext && (
         <details className="ai-draft-review ai-draft-review-advanced">
           <summary>Advanced source cards ({acceptedCount} selected / {pendingCount} review)</summary>
           <div className="section-heading">

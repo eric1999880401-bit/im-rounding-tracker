@@ -1,7 +1,14 @@
-import { useState, type ClipboardEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type ClipboardEvent } from "react";
 import { applyClinicalKnowledgeToText, formatRuleBasedAdmissionSummary } from "../clinicalKnowledge";
 import { formatClinicalDocumentDraft } from "../clinicalDocumentFormat";
 import { generateClinicalDocument } from "../firebase/aiService";
+import { canApplyPatientRequest, isLatestRequest, type PatientRequestIdentity } from "../asyncRequestGuard";
+import {
+  bindDeidentifiedConfirmation,
+  createAiPrivacyContextFingerprint,
+  isDeidentifiedConfirmationCurrent,
+} from "../aiPrivacyConfirmation";
+import { applyVisibleAdmissionSummaryEdit } from "../admissionBriefPersistence";
 import { stripMarkdownEmphasis } from "../utils";
 import type { Patient } from "../types";
 import ColorMarkupTextarea from "./ColorMarkupTextarea";
@@ -28,7 +35,34 @@ function AdmissionBriefForm({
   const [generatingSummary, setGeneratingSummary] = useState(false);
   const [generationStatus, setGenerationStatus] = useState("");
   const [generationError, setGenerationError] = useState("");
+  const [confirmedPrivacyFingerprint, setConfirmedPrivacyFingerprint] = useState("");
+  const latestGenerationRequestRef = useRef(0);
+  const currentPatientRef = useRef(patient);
+  const onChangeRef = useRef(onChange);
+  currentPatientRef.current = patient;
+  onChangeRef.current = onChange;
   const displayedAdmissionSummary = stripMarkdownEmphasis(patient.admissionBriefFreeText || patient.generatedAdmissionSummary);
+  const privacyContextFingerprint = useMemo(
+    () => createAiPrivacyContextFingerprint(admissionNoteSource, patient),
+    [admissionNoteSource, patient],
+  );
+  const deidentifiedConfirmed = isDeidentifiedConfirmationCurrent(
+    confirmedPrivacyFingerprint,
+    privacyContextFingerprint,
+  );
+
+  useEffect(() => {
+    latestGenerationRequestRef.current += 1;
+    setAdmissionNoteSource("");
+    setGeneratingSummary(false);
+    setGenerationStatus("");
+    setGenerationError("");
+    setConfirmedPrivacyFingerprint("");
+  }, [patient.id]);
+
+  useEffect(() => {
+    setConfirmedPrivacyFingerprint("");
+  }, [privacyContextFingerprint]);
 
   function updateField<K extends keyof Patient>(field: K, value: Patient[K]) {
     onChange({ ...patient, [field]: value, updatedAt: new Date().toISOString() });
@@ -78,44 +112,38 @@ function AdmissionBriefForm({
     return summary || compactAdmissionLine(sourceText) || sourceText.replace(/\s+/g, " ").trim().slice(0, 500);
   }
 
-  function buildAdmissionPatch(sourceText: string, summary: string): Patient {
-    const now = new Date().toISOString();
-    const chiefConcern = firstMatchingLine(sourceText, /\b(chief|cc|fever|cough|dyspnea|sob|pain|weak|syncope|edema|bleed|melena)\b/i)
-      .replace(/^(?:chief complaint|chief concern|cc)\s*:\s*/i, "")
-      .trim();
-    const hpi = firstMatchingLine(sourceText, /\b(hpi|present illness|history|admitted|presented|progressive|started|for \d+\s*(?:day|week|month))\b/i)
-      .replace(/^(?:hpi|pi|present illness|history of present illness)\s*:\s*/i, "")
-      .trim();
-    const pmh = firstMatchingLine(sourceText, /\b(pmh|past history|htn|dm|ckd|cad|hf|copd|af|stroke|cancer|scc)\b/i)
-      .replace(/^(?:pmh|past medical history)\s*:\s*/i, "")
-      .trim();
-    const lab = firstMatchingLine(sourceText, /\b(wbc|hb|hgb|plt|cr|bun|na|k\b|lactate|crp|troponin|culture|b\/c|bcx)\b/i);
-    const image = firstMatchingLine(sourceText, /\b(ct|mri|cxr|xray|x-ray|echo|sono|ultrasound|egd|scope|image|imaging)\b/i);
-    return {
-      ...patient,
-      generatedAdmissionSummary: summary,
-      // Explicit generation replaces the displayed summary; the clinician still reviews before Save.
-      admissionBriefFreeText: summary,
-      oneLiner: patient.oneLiner.trim() ? patient.oneLiner : summary,
-      chiefComplaint: patient.chiefComplaint.trim() ? patient.chiefComplaint : chiefConcern,
-      admissionChiefConcern: patient.admissionChiefConcern.trim() ? patient.admissionChiefConcern : chiefConcern,
-      presentIllnessOrHPI: patient.presentIllnessOrHPI.trim() ? patient.presentIllnessOrHPI : hpi,
-      hpiOrAdmissionStory: patient.hpiOrAdmissionStory.trim() ? patient.hpiOrAdmissionStory : hpi,
-      admissionPMH: patient.admissionPMH.trim() ? patient.admissionPMH : pmh,
-      initialLabs: patient.initialLabs.trim() ? patient.initialLabs : lab,
-      initialImaging: patient.initialImaging.trim() ? patient.initialImaging : image,
-      showAdmissionBriefOnPrint: true,
-      updatedAt: now,
-    };
-  }
-
-  async function generateAdmissionSummary(sourceText = admissionNoteSource) {
+  async function generateAdmissionSummary(sourceText = admissionNoteSource, requestPatientId = patient.id) {
+    if (requestPatientId !== currentPatientRef.current.id) return;
     const text = sourceText.trim();
+    const requestPrivacyFingerprint = createAiPrivacyContextFingerprint(sourceText, currentPatientRef.current);
+    const requestDeidentifiedConfirmed = isDeidentifiedConfirmationCurrent(
+      confirmedPrivacyFingerprint,
+      requestPrivacyFingerprint,
+    );
+    const request: PatientRequestIdentity = {
+      requestId: latestGenerationRequestRef.current + 1,
+      patientId: requestPatientId,
+    };
+    latestGenerationRequestRef.current = request.requestId;
+    const canApplyRequest = () =>
+      canApplyPatientRequest(
+        request,
+        latestGenerationRequestRef.current,
+        currentPatientRef.current.id,
+      );
+
     setGenerationError("");
     setGenerationStatus("");
 
     if (text.length < 40) {
+      setGeneratingSummary(false);
       setGenerationError("Paste a longer de-identified admission note before generating a summary.");
+      return;
+    }
+
+    if (!isDemoMode && !requestDeidentifiedConfirmed) {
+      setGeneratingSummary(false);
+      setGenerationError("Confirm that the pasted source and selected patient context are de-identified before sending them to external AI.");
       return;
     }
 
@@ -123,27 +151,39 @@ function AdmissionBriefForm({
     try {
       if (isDemoMode) {
         const summary = buildLocalAdmissionSummary(text);
-        onChange(buildAdmissionPatch(text, summary));
+        if (!canApplyRequest()) return;
+        onChangeRef.current(applyVisibleAdmissionSummaryEdit(currentPatientRef.current, summary));
         setGenerationStatus("Demo admission summary generated locally. Review, edit, then Save.");
       } else {
         const result = await generateClinicalDocument({
-          patientId: patient.id,
+          patientId: request.patientId,
           documentType: "admissionSummary",
           rawText: text,
-          deidentifiedConfirmed: true,
+          deidentifiedConfirmed: requestDeidentifiedConfirmed,
           storeRawText: false,
         });
+        if (!canApplyRequest()) return;
         const summary = formatClinicalDocumentDraft(result.draft);
-        onChange(buildAdmissionPatch(text, summary));
+        onChangeRef.current(applyVisibleAdmissionSummaryEdit(currentPatientRef.current, summary));
         setGenerationStatus(`Admission summary generated. Review, edit, then Save. Draft: ${result.draftId}`);
       }
     } catch (error) {
+      if (!canApplyRequest()) return;
       const fallbackSummary = buildLocalAdmissionSummary(text);
-      onChange(buildAdmissionPatch(text, fallbackSummary));
+      onChangeRef.current(applyVisibleAdmissionSummaryEdit(currentPatientRef.current, fallbackSummary));
       setGenerationError(`${getErrorMessage(error)} Local 3-min oral brief was generated for review.`);
     } finally {
-      setGeneratingSummary(false);
+      if (isLatestRequest(request, latestGenerationRequestRef.current)) setGeneratingSummary(false);
     }
+  }
+
+  function replaceAdmissionNoteSource(value: string) {
+    latestGenerationRequestRef.current += 1;
+    setGeneratingSummary(false);
+    setGenerationStatus("");
+    setGenerationError("");
+    setConfirmedPrivacyFingerprint("");
+    setAdmissionNoteSource(value);
   }
 
   function shouldTreatPasteAsAdmissionNote(value: string) {
@@ -155,23 +195,31 @@ function AdmissionBriefForm({
   function handleAdmissionNotePaste(event: ClipboardEvent<HTMLTextAreaElement>) {
     const pastedText = event.clipboardData.getData("text");
     if (!pastedText.trim()) return;
+    const pastePatientId = patient.id;
     event.preventDefault();
-    setAdmissionNoteSource(pastedText);
-    window.setTimeout(() => {
-      void generateAdmissionSummary(pastedText);
-    }, 0);
+    replaceAdmissionNoteSource(pastedText);
+    if (isDemoMode) {
+      window.setTimeout(() => {
+        void generateAdmissionSummary(pastedText, pastePatientId);
+      }, 0);
+    } else {
+      setGenerationStatus("Source changed. Review it, confirm de-identification, then generate the summary.");
+    }
   }
 
   function handleAdmissionSummaryPaste(event: ClipboardEvent<HTMLTextAreaElement>) {
     const pastedText = event.clipboardData.getData("text");
     if (!shouldTreatPasteAsAdmissionNote(pastedText)) return;
+    const pastePatientId = patient.id;
     event.preventDefault();
-    setAdmissionNoteSource(pastedText);
-    setGenerationStatus("");
-    setGenerationError("");
-    window.setTimeout(() => {
-      void generateAdmissionSummary(pastedText);
-    }, 0);
+    replaceAdmissionNoteSource(pastedText);
+    if (isDemoMode) {
+      window.setTimeout(() => {
+        void generateAdmissionSummary(pastedText, pastePatientId);
+      }, 0);
+    } else {
+      setGenerationStatus("Source changed. Review it, confirm de-identification, then generate the summary.");
+    }
   }
 
   return (
@@ -186,17 +234,31 @@ function AdmissionBriefForm({
             <button
               type="button"
               className="secondary"
-              disabled={generatingSummary || admissionNoteSource.trim().length < 40}
+              disabled={generatingSummary || admissionNoteSource.trim().length < 40 || (!isDemoMode && !deidentifiedConfirmed)}
               onClick={() => void generateAdmissionSummary()}
             >
               {generatingSummary ? "Generating..." : "Generate summary"}
             </button>
           </div>
           <DeidNotice />
+          {!isDemoMode && (
+            <label className="checkbox-label ai-checkbox">
+              <input
+                type="checkbox"
+                checked={deidentifiedConfirmed}
+                onChange={(event) =>
+                  setConfirmedPrivacyFingerprint(
+                    bindDeidentifiedConfirmation(event.target.checked, privacyContextFingerprint),
+                  )
+                }
+              />
+              I confirm the pasted source and selected patient context contain no direct identifiers and may be sent to external AI.
+            </label>
+          )}
           <textarea
             className="admission-note-paste"
             value={admissionNoteSource}
-            onChange={(event) => setAdmissionNoteSource(event.target.value)}
+            onChange={(event) => replaceAdmissionNoteSource(event.target.value)}
             onPaste={handleAdmissionNotePaste}
             placeholder="Paste de-identified admission note / H&P"
           />

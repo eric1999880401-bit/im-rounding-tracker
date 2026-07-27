@@ -1,15 +1,32 @@
 import {
   collection,
-  deleteDoc,
   doc,
+  getDoc,
   getDocs,
   onSnapshot,
-  orderBy,
   query,
+  runTransaction,
   setDoc,
-  updateDoc,
+  where,
+  writeBatch,
   type FirestoreError,
 } from "firebase/firestore";
+import {
+  normalizeOptionalDateKey,
+  normalizeSoapVersion,
+  resolveLegacyDailyNoteLabDate,
+  sortDailyNotesDesc,
+  sortPatientsByBed,
+  type ClinicalSnapshotMetadata,
+} from "../clinicalDataSafety";
+import { clinicalSaveConflictReason } from "../clinicalSaveGuard";
+import {
+  patientDeletionLimitReason,
+  patientDeletionWriteCount,
+  patientUpdatedAtConflictReason,
+  persistedPatientUpdatedAt,
+  pickAtomicPatientPatch,
+} from "../patientWriteSafety";
 import type {
   AssessmentPlanItem,
   ActiveProblemItem,
@@ -23,8 +40,10 @@ import type {
   SoapEditChangeKind,
   SoapEditSection,
   SoapEditTrace,
+  SaveDailyNoteOptions,
 } from "../types";
 import { db } from "./firebase";
+import { saveDailyNoteWithAudit } from "./clinicalAuditService";
 import { normalizeDateKey, parseLabReports, parseLabText, textToItems } from "../utils";
 
 function patientsCollection(uid: string) {
@@ -41,6 +60,18 @@ function dailyNotesCollection(uid: string, patientId: string) {
 
 function dailyNoteDocument(uid: string, patientId: string, date: string) {
   return doc(db, "users", uid, "patients", patientId, "dailyNotes", date);
+}
+
+function patientAiDraftsCollection(uid: string, patientId: string) {
+  return collection(db, "users", uid, "patients", patientId, "aiDrafts");
+}
+
+function clinicalAuditEventsCollection(uid: string) {
+  return collection(db, "users", uid, "clinicalAuditEvents");
+}
+
+function clinicalAuditPayloadsCollection(uid: string) {
+  return collection(db, "users", uid, "clinicalAuditPayloads");
 }
 
 function normalizeTask(task: Partial<PatientTask>): PatientTask {
@@ -74,8 +105,8 @@ function normalizeParsedLabItem(item: Record<string, unknown>) {
   };
 }
 
-function normalizeLabReport(report: Partial<LabReport>, fallbackDate = normalizeDateKey(undefined)): LabReport {
-  const date = normalizeDateKey(report.date, normalizeDateKey(fallbackDate));
+function normalizeLabReport(report: Partial<LabReport>, fallbackDate = ""): LabReport {
+  const date = normalizeOptionalDateKey(report.date) || normalizeOptionalDateKey(fallbackDate);
   return {
     id: report.id ?? "",
     date,
@@ -185,12 +216,16 @@ function normalizeSoapEditTrace(value: Partial<SoapEditTrace>): SoapEditTrace {
 }
 
 function normalizeDailyNote(date: string, data: Partial<DailyNote>): DailyNote {
+  const documentDate = normalizeDateKey(date, date);
+  const labDate = resolveLegacyDailyNoteLabDate(documentDate, data.labDate);
   return {
-    date: normalizeDateKey(data.date ?? date, date),
+    // Firestore document identity is authoritative. A stale embedded date must
+    // never redirect the next save into a different daily-note document.
+    date: documentDate,
     soapText: data.soapText ?? "",
     soapStatus: data.soapStatus === "reviewed" ? "reviewed" : "draft",
     soapUpdatedAt: data.soapUpdatedAt ?? "",
-    soapVersion: typeof data.soapVersion === "number" ? data.soapVersion : 1,
+    soapVersion: normalizeSoapVersion(data.soapVersion),
     soapEditHistory: Array.isArray(data.soapEditHistory)
       ? data.soapEditHistory.slice(-12).map((trace) => normalizeSoapEditTrace(trace as Partial<SoapEditTrace>))
       : [],
@@ -207,11 +242,11 @@ function normalizeDailyNote(date: string, data: Partial<DailyNote>): DailyNote {
     dischargePlan: data.dischargePlan ?? "",
     vsOrder: data.vsOrder ?? "",
     rawLabText: data.rawLabText ?? data.labSummary ?? "",
-    labDate: normalizeDateKey(data.labDate ?? date, date),
+    labDate,
     labReportTitle: data.labReportTitle ?? "",
     labReports: Array.isArray(data.labReports)
-      ? data.labReports.map((report) => normalizeLabReport(report as Partial<LabReport>, data.labDate ?? date))
-      : parseLabReports(data.rawLabText ?? data.labSummary ?? "", normalizeDateKey(data.labDate ?? date, date), data.labReportTitle ?? ""),
+      ? data.labReports.map((report) => normalizeLabReport(report as Partial<LabReport>, labDate))
+      : parseLabReports(data.rawLabText ?? data.labSummary ?? "", labDate, data.labReportTitle ?? ""),
     parsedLabItems: Array.isArray(data.parsedLabItems)
       ? data.parsedLabItems.map((item) => normalizeParsedLabItem(item as unknown as Record<string, unknown>))
       : parseLabText(data.rawLabText ?? data.labSummary ?? ""),
@@ -232,13 +267,15 @@ function normalizeDailyNote(date: string, data: Partial<DailyNote>): DailyNote {
 }
 
 function normalizePatient(patientId: string, data: Partial<Patient>): Patient {
+  const patientLabDate = normalizeOptionalDateKey(data.labDate);
   return {
-    id: data.id ?? patientId,
+    // Firestore document identity is authoritative for all later writes.
+    id: patientId,
     bed: data.bed ?? "",
     patientCode: data.patientCode ?? "",
     oneLiner: data.oneLiner ?? "",
     age: data.age ?? 0,
-    sex: data.sex ?? "M",
+    sex: data.sex === "M" || data.sex === "F" || data.sex === "Other" ? data.sex : "Other",
     underlyingDiseases: data.underlyingDiseases ?? "",
     underlyingDiseaseItems: Array.isArray(data.underlyingDiseaseItems)
       ? data.underlyingDiseaseItems
@@ -283,11 +320,13 @@ function normalizePatient(patientId: string, data: Partial<Patient>): Patient {
     vitalSigns: data.vitalSigns ?? "",
     bloodSugar: data.bloodSugar ?? "",
     rawLabText: data.rawLabText ?? data.newLabs ?? "",
-    labDate: normalizeDateKey(data.labDate),
+    labDate: patientLabDate,
     labReportTitle: data.labReportTitle ?? "",
     labReports: Array.isArray(data.labReports)
-      ? data.labReports.map((report) => normalizeLabReport(report as Partial<LabReport>, data.labDate))
-      : parseLabReports(data.rawLabText ?? data.newLabs ?? "", normalizeDateKey(data.labDate), data.labReportTitle ?? ""),
+      ? data.labReports.map((report) => normalizeLabReport(report as Partial<LabReport>, patientLabDate))
+      : patientLabDate
+        ? parseLabReports(data.rawLabText ?? data.newLabs ?? "", patientLabDate, data.labReportTitle ?? "")
+        : [],
     parsedLabItems: Array.isArray(data.parsedLabItems)
       ? data.parsedLabItems.map((item) => normalizeParsedLabItem(item as unknown as Record<string, unknown>))
       : parseLabText(data.rawLabText ?? data.newLabs ?? ""),
@@ -323,6 +362,7 @@ function normalizePatient(patientId: string, data: Partial<Patient>): Patient {
       : [],
     createdAt: data.createdAt ?? "",
     updatedAt: data.updatedAt ?? "",
+    persistedUpdatedAt: data.updatedAt ?? "",
   };
 }
 
@@ -347,8 +387,9 @@ function sanitizeForFirestore(value: unknown): unknown {
 }
 
 function preparePatientForFirestore(patient: Patient): Record<string, unknown> {
-  const normalizedPatient = normalizePatient(patient.id, patient);
-  return sanitizeForFirestore(normalizedPatient) as Record<string, unknown>;
+  const persistablePatient = { ...normalizePatient(patient.id, patient) };
+  delete persistablePatient.persistedUpdatedAt;
+  return sanitizeForFirestore(persistablePatient) as Record<string, unknown>;
 }
 
 function prepareDailyNoteForFirestore(note: DailyNote): Record<string, unknown> {
@@ -357,18 +398,22 @@ function prepareDailyNoteForFirestore(note: DailyNote): Record<string, unknown> 
 
 export function subscribeToPatients(
   uid: string,
-  onPatients: (patients: Patient[]) => void,
+  onPatients: (patients: Patient[], metadata: ClinicalSnapshotMetadata) => void,
   onError: (error: FirestoreError) => void,
 ) {
-  const patientsQuery = query(patientsCollection(uid), orderBy("bed"));
-
   return onSnapshot(
-    patientsQuery,
+    patientsCollection(uid),
+    { includeMetadataChanges: true },
     (snapshot) => {
-      const patients = snapshot.docs.map((patientDoc) =>
-        normalizePatient(patientDoc.id, patientDoc.data() as Partial<Patient>),
+      const patients = sortPatientsByBed(
+        snapshot.docs.map((patientDoc) =>
+          normalizePatient(patientDoc.id, patientDoc.data() as Partial<Patient>),
+        ),
       );
-      onPatients(patients);
+      onPatients(patients, {
+        fromCache: snapshot.metadata.fromCache,
+        hasPendingWrites: snapshot.metadata.hasPendingWrites,
+      });
     },
     onError,
   );
@@ -377,17 +422,22 @@ export function subscribeToPatients(
 export function subscribeToDailyNotes(
   uid: string,
   patientId: string,
-  onNotes: (patientId: string, notes: DailyNote[]) => void,
+  onNotes: (patientId: string, notes: DailyNote[], metadata: ClinicalSnapshotMetadata) => void,
   onError: (error: FirestoreError) => void,
 ) {
-  const notesQuery = query(dailyNotesCollection(uid, patientId), orderBy("date", "desc"));
-
   return onSnapshot(
-    notesQuery,
+    dailyNotesCollection(uid, patientId),
+    { includeMetadataChanges: true },
     (snapshot) => {
       onNotes(
         patientId,
-        snapshot.docs.map((noteDoc) => normalizeDailyNote(noteDoc.id, noteDoc.data() as Partial<DailyNote>)),
+        sortDailyNotesDesc(
+          snapshot.docs.map((noteDoc) => normalizeDailyNote(noteDoc.id, noteDoc.data() as Partial<DailyNote>)),
+        ),
+        {
+          fromCache: snapshot.metadata.fromCache,
+          hasPendingWrites: snapshot.metadata.hasPendingWrites,
+        },
       );
     },
     onError,
@@ -399,17 +449,120 @@ export function createPatient(uid: string, patient: Patient) {
   return setDoc(patientDocument(uid, patient.id), preparePatientForFirestore(patient));
 }
 
-export function updatePatient(uid: string, patient: Patient) {
-  return updateDoc(patientDocument(uid, patient.id), preparePatientForFirestore(patient));
-}
+export async function updatePatient(uid: string, patient: Patient) {
+  const patientRef = patientDocument(uid, patient.id);
+  const expectedUpdatedAt = persistedPatientUpdatedAt(patient);
+  const nextUpdatedAt = patient.updatedAt && patient.updatedAt !== expectedUpdatedAt
+    ? patient.updatedAt
+    : new Date().toISOString();
+  const patientForWrite = { ...patient, updatedAt: nextUpdatedAt };
+  const preparedPatient = preparePatientForFirestore(patientForWrite);
 
-export function saveDailyNote(uid: string, patientId: string, note: DailyNote) {
-  return setDoc(dailyNoteDocument(uid, patientId, note.date), prepareDailyNoteForFirestore(note));
-}
-
-export function deletePatient(uid: string, patientId: string) {
-  return getDocs(dailyNotesCollection(uid, patientId)).then(async (snapshot) => {
-    await Promise.all(snapshot.docs.map((noteDoc) => deleteDoc(noteDoc.ref)));
-    await deleteDoc(patientDocument(uid, patientId));
+  await runTransaction(db, async (transaction) => {
+    const currentSnapshot = await transaction.get(patientRef);
+    const conflictReason = patientUpdatedAtConflictReason(
+      currentSnapshot.exists(),
+      String(currentSnapshot.data()?.updatedAt ?? ""),
+      expectedUpdatedAt,
+    );
+    if (conflictReason) throw new Error(conflictReason);
+    transaction.update(patientRef, preparedPatient);
   });
+
+  // App stores the same object after this promise resolves. Advance its local
+  // revision baseline without ever including it in Firestore data.
+  patient.updatedAt = nextUpdatedAt;
+  patient.persistedUpdatedAt = nextUpdatedAt;
+}
+
+function currentSoapVersion(data: Record<string, unknown> | undefined) {
+  if (!data) return 0;
+  return normalizeSoapVersion(data.soapVersion);
+}
+
+async function saveDailyNoteAtomically(
+  uid: string,
+  patientId: string,
+  note: DailyNote,
+  preparedNote: Record<string, unknown>,
+  options: SaveDailyNoteOptions,
+) {
+  if (options.expectedSoapVersion === undefined) {
+    throw new Error("Atomic daily-note save requires the expected SOAP version.");
+  }
+  const noteRef = dailyNoteDocument(uid, patientId, note.date);
+  const patientRef = patientDocument(uid, patientId);
+  const patientPatch = pickAtomicPatientPatch(options.patientPatch);
+  const preparedPatientPatch = sanitizeForFirestore(patientPatch) as Record<string, unknown>;
+
+  await runTransaction(db, async (transaction) => {
+    const [noteSnapshot, patientSnapshot] = await Promise.all([
+      transaction.get(noteRef),
+      transaction.get(patientRef),
+    ]);
+    const conflictReason = clinicalSaveConflictReason({
+      persistedSoapVersion: noteSnapshot.exists()
+        ? currentSoapVersion(noteSnapshot.data() as Record<string, unknown>)
+        : 0,
+      expectedSoapVersion: options.expectedSoapVersion ?? 0,
+      patientExists: patientSnapshot.exists(),
+      persistedPatientUpdatedAt: String(patientSnapshot.data()?.updatedAt ?? ""),
+      expectedPatientUpdatedAt: options.expectedPatientUpdatedAt,
+    });
+    if (conflictReason) throw new Error(conflictReason);
+
+    transaction.set(noteRef, preparedNote);
+    if (Object.keys(preparedPatientPatch).length > 0) {
+      transaction.update(patientRef, preparedPatientPatch);
+    }
+  });
+}
+
+function advancePatientPatchRevision(options?: SaveDailyNoteOptions) {
+  const updatedAt = String(options?.patientPatch?.updatedAt ?? "");
+  if (updatedAt && options?.patientPatch) options.patientPatch.persistedUpdatedAt = updatedAt;
+}
+
+export async function saveDailyNote(uid: string, patientId: string, note: DailyNote, options?: SaveDailyNoteOptions) {
+  const preparedNote = prepareDailyNoteForFirestore(note);
+  if (options?.audit) {
+    await saveDailyNoteWithAudit(uid, patientId, note.date, preparedNote, options);
+    advancePatientPatchRevision(options);
+    return;
+  }
+  if (!options || options.expectedSoapVersion === undefined) {
+    throw new Error("Daily-note save blocked: the reviewed SOAP version is required to prevent a stale overwrite.");
+  }
+  await saveDailyNoteAtomically(uid, patientId, note, preparedNote, options);
+  advancePatientPatchRevision(options);
+}
+
+export async function deletePatient(uid: string, patientId: string) {
+  const patientRef = patientDocument(uid, patientId);
+
+  // Complete every read before constructing the batch. If discovery or the
+  // size guard fails, no patient-related document has been mutated.
+  const [patientSnapshot, dailyNotesSnapshot, auditEventsSnapshot, auditPayloadsSnapshot, aiDraftsSnapshot] = await Promise.all([
+    getDoc(patientRef),
+    getDocs(dailyNotesCollection(uid, patientId)),
+    getDocs(query(clinicalAuditEventsCollection(uid), where("patientId", "==", patientId))),
+    getDocs(query(clinicalAuditPayloadsCollection(uid), where("patientId", "==", patientId))),
+    getDocs(patientAiDraftsCollection(uid, patientId)),
+  ]);
+  const writeCount = patientDeletionWriteCount(
+    dailyNotesSnapshot.size,
+    auditEventsSnapshot.size,
+    auditPayloadsSnapshot.size,
+    aiDraftsSnapshot.size,
+  );
+  const limitReason = patientDeletionLimitReason(writeCount);
+  if (limitReason) throw new Error(limitReason);
+
+  const batch = writeBatch(db);
+  batch.delete(patientSnapshot.ref);
+  dailyNotesSnapshot.docs.forEach((noteSnapshot) => batch.delete(noteSnapshot.ref));
+  auditEventsSnapshot.docs.forEach((eventSnapshot) => batch.delete(eventSnapshot.ref));
+  auditPayloadsSnapshot.docs.forEach((payloadSnapshot) => batch.delete(payloadSnapshot.ref));
+  aiDraftsSnapshot.docs.forEach((draftSnapshot) => batch.delete(draftSnapshot.ref));
+  await batch.commit();
 }

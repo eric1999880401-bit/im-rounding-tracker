@@ -100,7 +100,7 @@ export function cleanClinicalTail(value: string, options: { stripDanglingImaging
     .replace(/\s+\.\s*$/g, ".")
     .trim();
   const danglingTail =
-    /(?:^|\s)(?:if|and|or|with|without|w\/|for|to|from|of|the|a|an|when|as|in|on|by|after|before|through|via|define|confirm|clarify|review|monitor|trend|repeat|continue|maintain|start|stop|hold|resume|call|contact|arrange|source|duration|coverage|feeding|course|image|still|remain(?:s|ing)?)\.?$/i;
+    /(?:^|\s)(?:if|and|or|with|without|w\/|for|to|from|of|the|a|an|when|as|in|on|by|after|before|through|via|define|confirm|clarify|review|monitor|trend|repeat|continue|maintain|start|stop|hold|resume|call|arrange|source|duration|coverage|feeding|course|image|still|remain(?:s|ing)?)\.?$/i;
   for (let index = 0; index < 4; index += 1) {
     const next = clean.replace(danglingTail, "").replace(/\s+[+,;:/-]\s*$/g, "").trim();
     if (next === clean) break;

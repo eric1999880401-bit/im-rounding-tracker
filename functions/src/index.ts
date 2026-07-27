@@ -1,14 +1,23 @@
 import { initializeApp } from "firebase-admin/app";
-import { FieldValue, getFirestore } from "firebase-admin/firestore";
+import { FieldValue, getFirestore, type DocumentData, type DocumentReference } from "firebase-admin/firestore";
 import { logger } from "firebase-functions";
 
 import { HttpsError, onCall } from "firebase-functions/v2/https";
+import { onSchedule } from "firebase-functions/v2/scheduler";
 
 initializeApp();
 const db = getFirestore();
 
 const MAX_RAW_TEXT_CHARS = 18000;
 const MAX_REVIEWED_SOAP_CHARS = 24000;
+const AUDIT_PAYLOAD_PURGE_BATCH_SIZE = 400;
+const AUDIT_PAYLOAD_PURGE_MAX_BATCHES = 20;
+const AI_DRAFT_RAW_TEXT_PURGE_BATCH_SIZE = 400;
+const AI_DRAFT_RAW_TEXT_PURGE_MAX_BATCHES = 20;
+const EXPIRED_AI_DRAFT_PURGE_BATCH_SIZE = 400;
+const EXPIRED_AI_DRAFT_PURGE_MAX_BATCHES = 20;
+const EXPIRED_AI_JOB_PURGE_BATCH_SIZE = 400;
+const EXPIRED_AI_JOB_PURGE_MAX_BATCHES = 20;
 
 import { aiDocumentDraftSchema, aiSoapDraftSchema, patientBatchImportSchema, roundSoapDraftSchema } from "./schemas";
 import { documentTypes, sourceTypes } from "./types";
@@ -22,6 +31,114 @@ import { buildSoapPatch } from "./soapPatch";
 import { formatStructuredRoundSoapDraft, parseStructuredRoundSoapDraft } from "./roundSoapContract";
 import { admissionSummaryStyleBullets, documentInstructions, makeBatchImportPrompt, makeDocumentPrompt, makePrompt } from "./prompts";
 import { makeRoundSoapPrompt } from "./roundSoapPrompt";
+import { AI_DRAFT_RAW_TEXT_RETENTION_DAYS, buildAiDraftRawTextRetention } from "./rawTextRetention";
+
+async function createPatientAiDraftAtomically(
+  patientRef: DocumentReference,
+  draftRef: DocumentReference,
+  draftData: DocumentData,
+) {
+  await db.runTransaction(async (transaction) => {
+    const latestPatient = await transaction.get(patientRef);
+    if (!latestPatient.exists) {
+      throw new HttpsError(
+        "not-found",
+        "Patient was deleted before the AI draft could be saved. No draft was persisted.",
+      );
+    }
+    transaction.create(draftRef, draftData);
+  });
+}
+
+export const purgeExpiredClinicalAuditPayloads = onSchedule(
+  {
+    schedule: "every day 03:15",
+    timeZone: "Asia/Taipei",
+    timeoutSeconds: 300,
+    memory: "256MiB",
+  },
+  async () => {
+    let deletedAuditPayloads = 0;
+    for (let batchIndex = 0; batchIndex < AUDIT_PAYLOAD_PURGE_MAX_BATCHES; batchIndex += 1) {
+      const snapshot = await db
+        .collectionGroup("clinicalAuditPayloads")
+        .where("expiresAt", "<=", new Date())
+        .limit(AUDIT_PAYLOAD_PURGE_BATCH_SIZE)
+        .get();
+      if (snapshot.empty) break;
+      const batch = db.batch();
+      snapshot.docs.forEach((payloadDoc) => batch.delete(payloadDoc.ref));
+      await batch.commit();
+      deletedAuditPayloads += snapshot.size;
+      if (snapshot.size < AUDIT_PAYLOAD_PURGE_BATCH_SIZE) break;
+    }
+
+    let scrubbedAiDraftSources = 0;
+    for (let batchIndex = 0; batchIndex < AI_DRAFT_RAW_TEXT_PURGE_MAX_BATCHES; batchIndex += 1) {
+      const snapshot = await db
+        .collectionGroup("aiDrafts")
+        .where("rawTextExpiresAt", "<=", new Date())
+        .limit(AI_DRAFT_RAW_TEXT_PURGE_BATCH_SIZE)
+        .get();
+      if (snapshot.empty) break;
+      const batch = db.batch();
+      snapshot.docs.forEach((draftDoc) => {
+        batch.update(draftDoc.ref, {
+          rawText: FieldValue.delete(),
+          rawTextPreview: FieldValue.delete(),
+          rawTextExpiresAt: FieldValue.delete(),
+        });
+      });
+      await batch.commit();
+      scrubbedAiDraftSources += snapshot.size;
+      if (snapshot.size < AI_DRAFT_RAW_TEXT_PURGE_BATCH_SIZE) break;
+    }
+
+    // Pre-retention drafts have no rawTextExpiresAt marker. AI drafts are not
+    // source-of-truth records, so delete every expired draft by server
+    // createdAt. This bounded sweep removes legacy raw source without
+    // repeatedly scanning or rewriting the full collection forever.
+    const expiredDraftCutoff = new Date(
+      Date.now() - AI_DRAFT_RAW_TEXT_RETENTION_DAYS * 24 * 60 * 60 * 1_000,
+    );
+    let deletedExpiredAiDrafts = 0;
+    for (let batchIndex = 0; batchIndex < EXPIRED_AI_DRAFT_PURGE_MAX_BATCHES; batchIndex += 1) {
+      const snapshot = await db
+        .collectionGroup("aiDrafts")
+        .where("createdAt", "<=", expiredDraftCutoff)
+        .limit(EXPIRED_AI_DRAFT_PURGE_BATCH_SIZE)
+        .get();
+      if (snapshot.empty) break;
+      const batch = db.batch();
+      snapshot.docs.forEach((draftDoc) => batch.delete(draftDoc.ref));
+      await batch.commit();
+      deletedExpiredAiDrafts += snapshot.size;
+      if (snapshot.size < EXPIRED_AI_DRAFT_PURGE_BATCH_SIZE) break;
+    }
+
+    let deletedExpiredAiJobs = 0;
+    for (let batchIndex = 0; batchIndex < EXPIRED_AI_JOB_PURGE_MAX_BATCHES; batchIndex += 1) {
+      const snapshot = await db
+        .collectionGroup("aiJobs")
+        .where("expiresAt", "<=", new Date())
+        .limit(EXPIRED_AI_JOB_PURGE_BATCH_SIZE)
+        .get();
+      if (snapshot.empty) break;
+      const batch = db.batch();
+      snapshot.docs.forEach((jobDoc) => batch.delete(jobDoc.ref));
+      await batch.commit();
+      deletedExpiredAiJobs += snapshot.size;
+      if (snapshot.size < EXPIRED_AI_JOB_PURGE_BATCH_SIZE) break;
+    }
+
+    logger.info("Expired clinical text retention purge completed", {
+      deletedAuditPayloads,
+      scrubbedAiDraftSources,
+      deletedExpiredAiDrafts,
+      deletedExpiredAiJobs,
+    });
+  },
+);
 
 export const analyzePatientBatchText = onCall(
   {
@@ -120,7 +237,12 @@ export const analyzePatientBatchText = onCall(
     try {
       parsedDraft = JSON.parse(outputText);
     } catch (error) {
-      logger.error("Failed to parse OpenAI batch import JSON", { error });
+      // JSON.parse messages can embed part of the malformed clinical output.
+      // Log classification only, never the Error object/message/stack.
+      logger.error("Failed to parse OpenAI batch import JSON", {
+        errorName: error instanceof Error ? error.name : "unknown",
+        model,
+      });
       throw new HttpsError("internal", "OpenAI returned malformed patient import JSON.");
     }
 
@@ -483,6 +605,16 @@ export const pollRoundSoapGeneration = onCall(
       throw new HttpsError("deadline-exceeded", "The high-quality SOAP job exceeded the extended generation window. The current SOAP was preserved; retry with the same source.");
     }
 
+    const jobPatientRef = db.doc(`users/${request.auth.uid}/patients/${stored.patientId}`);
+    const jobPatientSnapshot = await jobPatientRef.get();
+    if (!jobPatientSnapshot.exists) {
+      await jobRef.delete();
+      throw new HttpsError(
+        "not-found",
+        "The patient was deleted before this SOAP draft completed. The background job was removed and no result was returned.",
+      );
+    }
+
     const apiKey = getOpenAiApiKey();
     if (!apiKey) {
       throw new HttpsError("failed-precondition", "SOAP generation is not configured. Set OPENAI_API_KEY for Firebase Functions.");
@@ -533,6 +665,27 @@ export const pollRoundSoapGeneration = onCall(
             ? "Efficient mode was automatically raised to Recommended for this complex existing SOAP to protect clinical fidelity."
             : "",
         });
+        const consumeStatus = await db.runTransaction(async (transaction) => {
+          const [latestJob, latestPatient] = await Promise.all([
+            transaction.get(jobRef),
+            transaction.get(jobPatientRef),
+          ]);
+          if (!latestJob.exists) return "job-missing" as const;
+          transaction.delete(jobRef);
+          return latestPatient.exists ? "completed" as const : "patient-missing" as const;
+        });
+        if (consumeStatus === "job-missing") {
+          throw new HttpsError(
+            "not-found",
+            "This SOAP generation job expired or was already completed. Generate the draft again; no patient data was saved.",
+          );
+        }
+        if (consumeStatus === "patient-missing") {
+          throw new HttpsError(
+            "not-found",
+            "The patient was deleted before this SOAP draft completed. The background job was removed and no result was returned.",
+          );
+        }
         logger.info("generateRoundSoap background job completed", {
           jobId,
           workflowMode,
@@ -540,7 +693,6 @@ export const pollRoundSoapGeneration = onCall(
           model,
           soapTextChars: result.soapText.length,
         });
-        await jobRef.delete();
         return { status: "completed" as const, ...result };
       } catch (error) {
         await jobRef.delete();
@@ -737,16 +889,20 @@ export const analyzeClinicalText = onCall(
     try {
       draft = JSON.parse(outputText);
     } catch (error) {
-      logger.error("Failed to parse OpenAI JSON", { error });
+      logger.error("Failed to parse OpenAI JSON", {
+        errorName: error instanceof Error ? error.name : "unknown",
+        model,
+      });
       throw new HttpsError("internal", "OpenAI returned malformed JSON.");
     }
 
-    const rawTextPreview = rawText.slice(0, 700);
+    const rawTextPreview = storeRawText ? rawText.slice(0, 700) : "";
     const draftRef = patientRef.collection("aiDrafts").doc();
-    await draftRef.set({
+    await createPatientAiDraftAtomically(patientRef, draftRef, {
       sourceType,
       rawTextPreview,
-      ...(storeRawText ? { rawText } : {}),
+      rawTextChars: rawText.length,
+      ...buildAiDraftRawTextRetention(rawText, storeRawText),
       draft,
       status: "draft",
       createdAt: FieldValue.serverTimestamp(),
@@ -897,18 +1053,22 @@ export const generateClinicalDocument = onCall(
     try {
       draft = JSON.parse(outputText);
     } catch (error) {
-      logger.error("Failed to parse OpenAI document JSON", { error });
+      logger.error("Failed to parse OpenAI document JSON", {
+        errorName: error instanceof Error ? error.name : "unknown",
+        model,
+      });
       throw new HttpsError("internal", "OpenAI returned malformed JSON.");
     }
 
-    const rawTextPreview = rawText.slice(0, 700);
+    const rawTextPreview = storeRawText ? rawText.slice(0, 700) : "";
     const draftRef = patientRef ? patientRef.collection("aiDrafts").doc() : userRef.collection("aiDrafts").doc();
-    await draftRef.set({
+    const draftData = {
       sourceType: "document",
       documentType,
       ...(patientId ? { patientId } : { patientId: "", standalone: true }),
       rawTextPreview,
-      ...(storeRawText ? { rawText } : {}),
+      rawTextChars: rawText.length,
+      ...buildAiDraftRawTextRetention(rawText, storeRawText),
       dateFrom,
       dateTo,
       draft,
@@ -916,7 +1076,12 @@ export const generateClinicalDocument = onCall(
       createdAt: FieldValue.serverTimestamp(),
       model,
       qualityMode,
-    });
+    };
+    if (patientRef) {
+      await createPatientAiDraftAtomically(patientRef, draftRef, draftData);
+    } else {
+      await draftRef.set(draftData);
+    }
 
     return {
       draftId: draftRef.id,

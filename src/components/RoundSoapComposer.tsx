@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
-import type { AiClinicalSourceType, DailyNote, KeywordHighlightRule, Patient, RoundingLayoutPreferences, SoapEditTrace, UserAiStyleProfile } from "../types";
+import type { AiClinicalSourceType, ClinicalAuditEntrypoint, DailyNote, KeywordHighlightRule, Patient, RoundingLayoutPreferences, SaveDailyNoteOptions, SoapEditTrace, UserAiStyleProfile } from "../types";
 import { generateRoundSoap } from "../firebase/aiService";
 import { readComposerPref, writeComposerPref } from "../composerPreferences";
 import DeidNotice from "./DeidNotice";
@@ -8,6 +8,7 @@ import {
   formatSoapTextForEditorStyle,
   getCanonicalSoapText,
   localRoundSoapFromPaste,
+  reviewedSoapCompletenessIssues,
   soapTextToPatientPatch,
   splitGuidedSoapSource,
   type SoapEditorFormat,
@@ -70,13 +71,30 @@ import {
 } from "../roundSoapWorkflow";
 import { buildCanonicalLabDataset, canonicalLabFactsForAi } from "../labDataset";
 import { buildCanonicalImageDataset, canonicalImageFactsForAi } from "../imageDataset";
+import { buildSoapAuditWrite } from "../clinicalAudit";
+import {
+  canApplyPatientContextRequest,
+  isLatestRequest,
+  isPatientContextDraftBoundToSelection,
+  type PatientContextRequestIdentity,
+} from "../asyncRequestGuard";
+import {
+  bindDeidentifiedConfirmation,
+  createAiPrivacyContextFingerprint,
+  isDeidentifiedConfirmationCurrent,
+} from "../aiPrivacyConfirmation";
+import {
+  captureRoundSoapEditorRevision,
+  reconcileRoundSoapEditorRevision,
+  roundSoapEditorRevisionMatchesSelection,
+} from "../roundSoapEditorRevision";
 
 interface RoundSoapComposerProps {
   patient: Patient;
   dailyNotes: DailyNote[];
   selectedDate: string;
-  onSavePatient: (patient: Patient) => Promise<void>;
-  onSaveDailyNote: (patientId: string, note: DailyNote) => Promise<void>;
+  onSaveDailyNote: (patientId: string, note: DailyNote, options?: SaveDailyNoteOptions) => Promise<void>;
+  auditEntrypoint?: ClinicalAuditEntrypoint;
   isDemoMode?: boolean;
   compact?: boolean;
   externalSoapText?: string;
@@ -224,27 +242,35 @@ function recoveryTimeLabel(value: string) {
   return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
+function generationContextKey(
+  patientUpdatedAt: string,
+  workflowMode: WorkflowMode,
+  rawText: string,
+  baselineText: string,
+) {
+  return JSON.stringify([patientUpdatedAt, workflowMode, rawText, baselineText]);
+}
+
 function buildSavedNote(
   soapText: string,
-  patient: Patient,
-  notes: DailyNote[],
+  baseNote: DailyNote | undefined,
   selectedDate: string,
   patch: ReturnType<typeof soapTextToPatientPatch>,
   savedSoapVersion: number,
   editTrace: SoapEditTrace | null,
 ): DailyNote {
   const now = nowIso();
-  const baseNote = selectedNoteForDate(notes, selectedDate) ?? emptyDailyNote(selectedDate);
+  const savedBaseNote = baseNote ?? emptyDailyNote(selectedDate);
   return {
-    ...baseNote,
+    ...savedBaseNote,
     ...patch.dailyNotePatch,
     date: selectedDate,
     soapText: soapText.trim(),
     soapStatus: "reviewed",
     soapUpdatedAt: now,
     soapVersion: savedSoapVersion,
-    soapEditHistory: appendSoapEditTrace(baseNote.soapEditHistory, editTrace),
-    createdAt: baseNote.createdAt || now,
+    soapEditHistory: appendSoapEditTrace(savedBaseNote.soapEditHistory, editTrace),
+    createdAt: savedBaseNote.createdAt || now,
     updatedAt: now,
   };
 }
@@ -253,8 +279,8 @@ function RoundSoapComposer({
   patient,
   dailyNotes,
   selectedDate,
-  onSavePatient,
   onSaveDailyNote,
+  auditEntrypoint = "unknown",
   isDemoMode = false,
   compact = false,
   externalSoapText = "",
@@ -266,6 +292,8 @@ function RoundSoapComposer({
   onDirtyChange,
 }: RoundSoapComposerProps) {
   const canonical = getCanonicalSoapText(patient, dailyNotes, selectedDate);
+  const subscribedNote = selectedNoteForDate(dailyNotes, selectedDate);
+  const persistedPatientUpdatedAt = patient.persistedUpdatedAt ?? patient.updatedAt;
   const [workflowMode, setWorkflowMode] = useState<WorkflowMode>(() => deriveInitialRoundSoapWorkflow(dailyNotes, patient.isNewAdmission));
   const [dailyFields, setDailyFields] = useState<DailyUpdateFields>(emptyDailyFields);
   const [newSoapFields, setNewSoapFields] = useState<NewSoapFields>(emptyNewSoapFields);
@@ -294,6 +322,8 @@ function RoundSoapComposer({
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
   const [warnings, setWarnings] = useState<string[]>([]);
+  const [confirmedPrivacyFingerprint, setConfirmedPrivacyFingerprint] = useState("");
+  const [storeSourceInAudit, setStoreSourceInAudit] = useState(false);
   const [deltaReview, setDeltaReview] = useState<SoapDeltaReview | null>(null);
   const [recoveryDraft, setRecoveryDraft] = useState<RecoveryDraft<{ soapText: string }> | null>(null);
   const [recoverySavedAt, setRecoverySavedAt] = useState("");
@@ -306,10 +336,21 @@ function RoundSoapComposer({
   const pendingOrderSourcesRef = useRef<Record<WorkflowMode, boolean>>(emptyPendingOrderSources);
   const editOriginRef = useRef<SoapEditOrigin | null>(null);
   const manualBaselineRef = useRef(editorDraftToSoapText(parseCanonicalSoapTextToEditorDraft(canonical.text)));
+  const generationRequestIdRef = useRef(0);
+  const currentGenerationContextRef = useRef({ patientId: patient.id, selectedDate, contextKey: "" });
+  const editorScopeRef = useRef({ patientId: patient.id, selectedDate });
+  const editorRevisionRef = useRef(captureRoundSoapEditorRevision(
+    patient.id,
+    selectedDate,
+    subscribedNote,
+    persistedPatientUpdatedAt,
+  ));
   const recoveryScope = { kind: "roundSoap" as const, patientId: patient.id, selectedDate };
   const recoveryBaseline = canonical.text;
-  const recoveryBaselineUpdatedAt = selectedNoteForDate(dailyNotes, selectedDate)?.soapUpdatedAt || selectedNoteForDate(dailyNotes, selectedDate)?.updatedAt || "";
-  const recoveryStorage = getSessionDraftStorage();
+  const recoveryBaselineUpdatedAt = subscribedNote?.soapUpdatedAt || subscribedNote?.updatedAt || "";
+  // Never place real clinical text in browser storage. Recovery is restricted
+  // to de-identified demo fixtures.
+  const recoveryStorage = isDemoMode ? getSessionDraftStorage() : null;
   const soapText = editorDraftToSoapText(editorDraft);
 
   useEffect(() => {
@@ -318,7 +359,9 @@ function RoundSoapComposer({
 
   useEffect(() => {
     editOriginRef.current = null;
-  }, [patient.id, selectedDate]);
+    setConfirmedPrivacyFingerprint("");
+    setStoreSourceInAudit(false);
+  }, [patient.id, patient.updatedAt, selectedDate]);
 
   useEffect(() => {
     setWorkflowMode(deriveInitialRoundSoapWorkflow(dailyNotes, patient.isNewAdmission));
@@ -371,19 +414,30 @@ function RoundSoapComposer({
   }, [canonical.text, dirty, editorDraft, patient.id, recoveryBaseline, recoveryBaselineUpdatedAt, recoveryStorage, selectedDate]);
 
   useEffect(() => {
-    if (dirtyRef.current || isComposingRef.current) return;
+    const preserveEditorRevision = dirtyRef.current || isComposingRef.current;
+    const nextEditorRevision = reconcileRoundSoapEditorRevision(
+      editorRevisionRef.current,
+      patient.id,
+      selectedDate,
+      subscribedNote,
+      persistedPatientUpdatedAt,
+      preserveEditorRevision,
+    );
+    if (preserveEditorRevision) return;
     const pendingSavedSoap = pendingSavedSoapRef.current;
     if (pendingSavedSoap) {
       if (pendingSavedSoap.date === selectedDate && canonical.text !== pendingSavedSoap.text) return;
       pendingSavedSoapRef.current = null;
     }
     const nextDraft = parseCanonicalSoapTextToEditorDraft(canonical.text);
+    editorScopeRef.current = { patientId: patient.id, selectedDate };
+    editorRevisionRef.current = nextEditorRevision;
     setEditorDraftState(nextDraft);
     const normalizedBaseline = editorDraftToSoapText(nextDraft);
     manualBaselineRef.current = normalizedBaseline;
     setRawSoapText(normalizedBaseline);
     setDeltaReview(null);
-  }, [canonical.text, selectedDate]);
+  }, [canonical.text, dirty, patient.id, persistedPatientUpdatedAt, selectedDate, subscribedNote]);
 
   useEffect(() => {
     if (externalSoapRevisionRef.current === externalSoapRevision || isComposingRef.current) return;
@@ -393,6 +447,13 @@ function RoundSoapComposer({
     pendingSavedSoapRef.current = null;
     editOriginRef.current = null;
     const nextDraft = parseCanonicalSoapTextToEditorDraft(nextSoapText);
+    editorScopeRef.current = { patientId: patient.id, selectedDate };
+    editorRevisionRef.current = captureRoundSoapEditorRevision(
+      patient.id,
+      selectedDate,
+      subscribedNote,
+      persistedPatientUpdatedAt,
+    );
     updateEditorDraft(nextDraft);
     setError("");
     setWarnings([]);
@@ -468,16 +529,19 @@ function RoundSoapComposer({
 
   function updateDailyField(field: keyof DailyUpdateFields, value: string) {
     setDailyFields((current) => ({ ...current, [field]: value }));
+    setConfirmedPrivacyFingerprint("");
     if (field === "orders") updatePendingOrderSource("dailyUpdate", value);
   }
 
   function updateNewSoapField(field: keyof NewSoapFields, value: string) {
     setNewSoapFields((current) => ({ ...current, [field]: value }));
+    setConfirmedPrivacyFingerprint("");
     if (field === "orders") updatePendingOrderSource("newSoap", value);
   }
 
   function updateTransferField(field: keyof TransferSoapFields, value: string) {
     setTransferFields((current) => ({ ...current, [field]: value }));
+    setConfirmedPrivacyFingerprint("");
     if (field === "orders") updatePendingOrderSource("transferHandoff", value);
   }
 
@@ -539,6 +603,34 @@ function RoundSoapComposer({
     return composeDailyUpdateText();
   }
 
+  const currentGenerationRawText = composeRawText();
+  const currentGenerationBaseline = roundSoapBaselineForWorkflow(workflowMode, {
+    text: editorDraftToSoapText(editorDraftRef.current) || canonical.text,
+    source: canonical.source,
+  });
+  const privacyContextFingerprint = createAiPrivacyContextFingerprint(
+    patient.id,
+    patient.updatedAt,
+    selectedDate,
+    workflowMode,
+    currentGenerationRawText,
+    currentGenerationBaseline,
+  );
+  const deidentifiedConfirmed = isDeidentifiedConfirmationCurrent(
+    confirmedPrivacyFingerprint,
+    privacyContextFingerprint,
+  );
+  currentGenerationContextRef.current = {
+    patientId: patient.id,
+    selectedDate,
+    contextKey: generationContextKey(
+      patient.updatedAt,
+      workflowMode,
+      currentGenerationRawText,
+      currentGenerationBaseline,
+    ),
+  };
+
   function currentSourceFields(mode: WorkflowMode = workflowMode): RoundSoapSourceFields & SoapSourceFields {
     if (mode === "repairSoap") {
       return normalizeRoundSoapSourceFields({ other: mixedSourceText.trim(), rawSource: mixedSourceText.trim() });
@@ -586,6 +678,7 @@ function RoundSoapComposer({
 
   function updateMixedSourceText(value: string) {
     setMixedSourceText(value);
+    setConfirmedPrivacyFingerprint("");
     setError("");
     setWarnings([]);
     setDeltaReview(null);
@@ -619,12 +712,21 @@ function RoundSoapComposer({
     setDailyFields(emptyDailyFields);
     setNewSoapFields(emptyNewSoapFields);
     setTransferFields(emptyTransferFields);
+    setConfirmedPrivacyFingerprint("");
+    setStoreSourceInAudit(false);
     clearPendingOrderSources();
   }
 
   function restoreRecoveryDraft() {
     if (!recoveryDraft?.payload.soapText.trim()) return;
     const nextDraft = parseCanonicalSoapTextToEditorDraft(recoveryDraft.payload.soapText);
+    editorScopeRef.current = { patientId: patient.id, selectedDate };
+    editorRevisionRef.current = captureRoundSoapEditorRevision(
+      patient.id,
+      selectedDate,
+      subscribedNote,
+      persistedPatientUpdatedAt,
+    );
     updateEditorDraft(nextDraft);
     setDeltaReview(null);
     setError("");
@@ -659,6 +761,11 @@ function RoundSoapComposer({
     setWarnings([]);
     setDeltaReview(null);
 
+    if (!isPatientContextDraftBoundToSelection(editorScopeRef.current, patient.id, selectedDate)) {
+      setError("This SOAP draft belongs to a different patient or date. Reset to the current saved SOAP before generating.");
+      return;
+    }
+
     if (rawText.length < 10) {
       setError("Paste today's mixed clinical update first.");
       return;
@@ -666,6 +773,11 @@ function RoundSoapComposer({
 
     if (rawText.length > MAX_ROUND_SOAP_RAW_CHARS) {
       setError(`The pasted record exceeds ${MAX_ROUND_SOAP_RAW_CHARS.toLocaleString()} characters. Split only the raw export; do not manually summarize or remove clinical details.`);
+      return;
+    }
+
+    if (!isDemoMode && !deidentifiedConfirmed) {
+      setError("Confirm that the pasted text is de-identified before sending it to the AI service.");
       return;
     }
 
@@ -678,14 +790,30 @@ function RoundSoapComposer({
       editOriginRef.current = {
         source: "manual",
         beforeText: requestBaseline,
+        baselineText: requestBaseline,
+        // Keep the generation source only in component memory. The current
+        // retention choice is applied again at Save and is authoritative.
+        sourceText: rawText,
         workflowMode: requestWorkflowMode,
       };
+      editorScopeRef.current = { patientId: patient.id, selectedDate };
       updateEditorDraft(accepted.draft);
       setDeltaReview(accepted.review);
       setStatus("V/S updated directly from the pasted source. S, Lab, Image, A/P, 藥囑, Tasks, and DC were preserved. Review, then Save reviewed SOAP.");
       return;
     }
 
+    const requestIdentity: PatientContextRequestIdentity = {
+      requestId: ++generationRequestIdRef.current,
+      patientId: patient.id,
+      selectedDate,
+      contextKey: generationContextKey(
+        patient.updatedAt,
+        requestWorkflowMode,
+        rawText,
+        requestBaseline,
+      ),
+    };
     setLoading(true);
     try {
       const result = isDemoMode
@@ -704,7 +832,7 @@ function RoundSoapComposer({
             workflowMode: requestWorkflowMode,
             rawText,
             currentSoapBaseline: requestBaseline,
-            deidentifiedConfirmed: true,
+            deidentifiedConfirmed,
             qualityMode: requestQualityMode,
             patientContext: {
               ...patientContext(patient),
@@ -713,6 +841,17 @@ function RoundSoapComposer({
             },
             userStyleProfile: aiStyleProfile,
           });
+
+      const currentContext = currentGenerationContextRef.current;
+      if (!canApplyPatientContextRequest(
+        requestIdentity,
+        generationRequestIdRef.current,
+        currentContext.patientId,
+        currentContext.selectedDate,
+        currentContext.contextKey,
+      )) {
+        return;
+      }
 
       const accepted = result.structuredDraft
         ? acceptStructuredRoundSoap({
@@ -743,12 +882,17 @@ function RoundSoapComposer({
       const nextDraft = accepted.draft;
       editOriginRef.current = {
         source: "ai",
-        beforeText: requestBaseline,
+        // Correction learning compares the candidate the clinician actually
+        // reviewed with the final saved text, not the pre-generation baseline.
+        beforeText: editorDraftToSoapText(nextDraft),
+        baselineText: requestBaseline,
+        sourceText: rawText,
         workflowMode: requestWorkflowMode,
         aiDraftId: result.draftId,
         model: result.model,
         qualityMode: result.qualityMode ?? requestQualityMode,
       };
+      editorScopeRef.current = { patientId: requestIdentity.patientId, selectedDate: requestIdentity.selectedDate };
       updateEditorDraft(nextDraft);
       updatePendingOrderSource(requestWorkflowMode, false);
       const patchWarnings = result.mode === "patch" && !soapPatchMatchesBaseline(result.patch, requestBaseline)
@@ -762,9 +906,18 @@ function RoundSoapComposer({
           : `SOAP preview generated (${result.model}, ${result.qualityMode ?? requestQualityMode}). Edit, then Save reviewed SOAP.`,
       );
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : "SOAP generation failed. No data was saved.");
+      const currentContext = currentGenerationContextRef.current;
+      if (canApplyPatientContextRequest(
+        requestIdentity,
+        generationRequestIdRef.current,
+        currentContext.patientId,
+        currentContext.selectedDate,
+        currentContext.contextKey,
+      )) {
+        setError(nextError instanceof Error ? nextError.message : "SOAP generation failed. No data was saved.");
+      }
     } finally {
-      setLoading(false);
+      if (isLatestRequest(requestIdentity, generationRequestIdRef.current)) setLoading(false);
     }
   }
 
@@ -790,6 +943,17 @@ function RoundSoapComposer({
     setError("");
     setStatus("");
 
+    if (!isPatientContextDraftBoundToSelection(editorScopeRef.current, patient.id, selectedDate)) {
+      setError("Save blocked: this SOAP draft belongs to a different patient or date. Reset and review the current patient SOAP.");
+      return;
+    }
+
+    const editorRevision = editorRevisionRef.current;
+    if (!roundSoapEditorRevisionMatchesSelection(editorRevision, patient.id, selectedDate)) {
+      setError("Save blocked: this SOAP draft was based on a different patient or date revision. Reset and review the current patient SOAP.");
+      return;
+    }
+
     if (!(await waitForCompositionToSettle())) {
       setError("Finish the current Chinese input composition, then click Save reviewed SOAP again.");
       return;
@@ -801,41 +965,87 @@ function RoundSoapComposer({
       : editorDraftRef.current;
     const reviewedText = editorDraftToSoapText(draftForSave).trim();
     if (!reviewedText) return;
+    const completenessIssues = reviewedSoapCompletenessIssues(reviewedText);
+    if (completenessIssues.length > 0) {
+      setError(`Reviewed SOAP is incomplete: ${completenessIssues.join(" ")} Add an explicit missing-data line instead of saving an ambiguous blank section.`);
+      return;
+    }
 
     setLoading(true);
     try {
       const patch = soapTextToPatientPatch(reviewedText, patient, selectedDate);
       const nextPatient = { ...patch.patient, updatedAt: nowIso() };
-      const subscribedBaseNote = selectedNoteForDate(dailyNotes, selectedDate);
-      const pendingBaseNote = pendingSavedSoapRef.current?.date === selectedDate ? pendingSavedSoapRef.current.note : undefined;
-      const baseNote = pendingBaseNote && (pendingBaseNote.soapVersion ?? 0) >= (subscribedBaseNote?.soapVersion ?? 0)
-        ? pendingBaseNote
-        : subscribedBaseNote;
+      // Never rebase a dirty draft from the latest subscription here. The
+      // editor revision is the exact note snapshot this text was based on; if
+      // another client advanced it, the Firestore transaction must conflict.
+      const baseNote = editorRevision.note;
+      const baseSoapVersion = editorRevision.soapVersion;
       const savedSoapVersion = nextSoapVersion(baseNote);
-      const editOrigin = editOriginRef.current ?? {
+      const capturedEditOrigin = editOriginRef.current ?? {
         source: "manual" as const,
         beforeText: manualBaselineRef.current,
         workflowMode,
       };
+      const editOrigin: SoapEditOrigin = {
+        ...capturedEditOrigin,
+        // The checkbox state at the actual commit controls persistence. This
+        // supports opting out after preview and opting in before Save without
+        // accidentally retaining a different/current source.
+        sourceText: storeSourceInAudit ? capturedEditOrigin.sourceText ?? "" : "",
+      };
       const editTrace = buildSoapEditTrace({
         ...editOrigin,
         afterText: reviewedText,
-        baseSoapVersion: baseNote?.soapVersion ?? 0,
+        baseSoapVersion,
         savedSoapVersion,
       });
-      const nextNote = buildSavedNote(reviewedText, nextPatient, dailyNotes, selectedDate, patch, savedSoapVersion, editTrace);
+      const nextNote = buildSavedNote(reviewedText, baseNote, selectedDate, patch, savedSoapVersion, editTrace);
+      const audit = buildSoapAuditWrite({
+        patientId: nextPatient.id,
+        dailyNoteDate: selectedDate,
+        entrypoint: auditEntrypoint,
+        origin: editOrigin,
+        finalText: reviewedText,
+        editTrace,
+        baseSoapVersion,
+        savedSoapVersion,
+      });
       // dailyNote.soapText is the canonical Board/Details/Print source. Commit it
       // before the compatibility patient-field mirror so an unrelated patient
       // document failure cannot make a reviewed A/P disappear from the list.
-      await onSaveDailyNote(nextPatient.id, nextNote);
+      await onSaveDailyNote(nextPatient.id, nextNote, {
+        audit,
+        expectedSoapVersion: baseSoapVersion,
+        expectedPatientUpdatedAt: editorRevision.patientUpdatedAt,
+        patientPatch: {
+          importantRedFlags: nextPatient.importantRedFlags,
+          overnightEvent: nextPatient.overnightEvent,
+          subjectiveOrChiefConcern: nextPatient.subjectiveOrChiefConcern,
+          vitalSigns: nextPatient.vitalSigns,
+          bloodSugar: nextPatient.bloodSugar,
+          physicalExam: nextPatient.physicalExam,
+          newLabs: nextPatient.newLabs,
+          rawLabText: nextPatient.rawLabText,
+          newImaging: nextPatient.newImaging,
+          assessment: nextPatient.assessment,
+          plan: nextPatient.plan,
+          activeProblems: nextPatient.activeProblems,
+          activeProblemItems: nextPatient.activeProblemItems,
+          assessmentPlanItems: nextPatient.assessmentPlanItems,
+          dischargePlan: nextPatient.dischargePlan,
+          vsOrder: nextPatient.vsOrder,
+          tasks: nextPatient.tasks,
+          updatedAt: nextPatient.updatedAt,
+        },
+      });
       const nextDraft = parseCanonicalSoapTextToEditorDraft(reviewedText);
       pendingSavedSoapRef.current = { date: selectedDate, text: reviewedText, note: nextNote };
-      let compatibilityWarning = "";
-      try {
-        await onSavePatient(nextPatient);
-      } catch {
-        compatibilityWarning = "Reviewed SOAP was saved, but legacy patient fields could not be synchronized. Board and Print still use the saved SOAP.";
-      }
+      editorRevisionRef.current = captureRoundSoapEditorRevision(
+        patient.id,
+        selectedDate,
+        nextNote,
+        nextPatient.updatedAt,
+      );
       setEditorDraftState(nextDraft);
       setRawSoapText(editorDraftToSoapText(nextDraft));
       manualBaselineRef.current = reviewedText;
@@ -846,10 +1056,7 @@ function RoundSoapComposer({
       removeRecoveryDraft(recoveryStorage, recoveryScope);
       setRecoveryDraft(null);
       setRecoverySavedAt("");
-      if (compatibilityWarning) {
-        setWarnings((current) => [...new Set([...current, compatibilityWarning])].slice(0, 8));
-      }
-      setStatus(`Reviewed SOAP saved. Board, Details, and Print now read this note.${editTrace ? " Correction history recorded." : ""}`);
+      setStatus(`Reviewed SOAP, compatibility fields, and change history saved atomically.${editTrace ? " Correction history recorded." : ""}`);
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : "Saving SOAP failed.");
     } finally {
@@ -898,6 +1105,13 @@ function RoundSoapComposer({
   function resetToCanonical() {
     pendingSavedSoapRef.current = null;
     const nextDraft = parseCanonicalSoapTextToEditorDraft(canonical.text);
+    editorScopeRef.current = { patientId: patient.id, selectedDate };
+    editorRevisionRef.current = captureRoundSoapEditorRevision(
+      patient.id,
+      selectedDate,
+      subscribedNote,
+      persistedPatientUpdatedAt,
+    );
     setEditorDraftState(nextDraft);
     setRawSoapText(editorDraftToSoapText(nextDraft));
     setMixedSourceText("");
@@ -953,6 +1167,38 @@ function RoundSoapComposer({
     ? recoveryStaleState(recoveryDraft, recoveryFingerprint(recoveryBaseline), recoveryBaselineUpdatedAt)
     : null;
   const recoverySavedLabel = recoveryTimeLabel(recoverySavedAt);
+  const aiGenerationBlocked = !isDemoMode && !deidentifiedConfirmed;
+
+  function renderAiPrivacyControls() {
+    if (isDemoMode) return <DeidNotice />;
+    return (
+      <div className="round-soap-privacy-controls">
+        <DeidNotice />
+        <label>
+          <input
+            type="checkbox"
+            checked={deidentifiedConfirmed}
+            disabled={loading}
+            onChange={(event) =>
+              setConfirmedPrivacyFingerprint(
+                bindDeidentifiedConfirmation(event.target.checked, privacyContextFingerprint),
+              )
+            }
+          />
+          I confirm this source is de-identified (no name, chart ID, phone, address, or other direct identifier).
+        </label>
+        <label>
+          <input
+            type="checkbox"
+            checked={storeSourceInAudit}
+            disabled={loading}
+            onChange={(event) => setStoreSourceInAudit(event.target.checked)}
+          />
+          Keep the exact pasted source in my private change log for 30 days. SOAP corrections are logged even when this is off.
+        </label>
+      </div>
+    );
+  }
 
   if (compact) {
     const transferSuggestion = suggestedRoundSoapWorkflow(mixedSourceText);
@@ -968,7 +1214,15 @@ function RoundSoapComposer({
         <div className="round-soap-mode-bar compact-soap-mode-bar" aria-label="SOAP generation controls">
           <label>
             Workflow
-            <select aria-label="SOAP workflow" value={workflowMode} onChange={(event) => setWorkflowMode(event.target.value as WorkflowMode)}>
+            <select
+              aria-label="SOAP workflow"
+              value={workflowMode}
+              disabled={loading}
+              onChange={(event) => {
+                setWorkflowMode(event.target.value as WorkflowMode);
+                setConfirmedPrivacyFingerprint("");
+              }}
+            >
               {workflowModes.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
             </select>
           </label>
@@ -1007,9 +1261,10 @@ function RoundSoapComposer({
             Keep the transfer record complete. Duplicate low-yield history will be condensed automatically while current status, V/S, labs, treatments, procedures, active problems, pending items, and disposition are preserved. Best quality may take up to five minutes.
           </p>
         )}
+        {renderAiPrivacyControls()}
         <div className="round-soap-generate-row compact-generate-row">
           <span className="muted">Preview only. Save remains explicit.</span>
-          <button type="button" disabled={loading || (workflowMode !== "repairSoap" && mixedSourceText.trim().length < 10) || sourceTooLong} onClick={() => void handleGenerate()}>
+          <button type="button" disabled={loading || aiGenerationBlocked || (workflowMode !== "repairSoap" && mixedSourceText.trim().length < 10) || sourceTooLong} onClick={() => void handleGenerate()}>
             {loading ? "Working..." : `Generate ${workflow.label}`}
           </button>
         </div>
@@ -1067,7 +1322,15 @@ function RoundSoapComposer({
       <div className="round-soap-mode-bar" aria-label="SOAP generation controls">
         <label>
           Workflow
-          <select aria-label="SOAP workflow" value={workflowMode} onChange={(event) => setWorkflowMode(event.target.value as WorkflowMode)}>
+          <select
+            aria-label="SOAP workflow"
+            value={workflowMode}
+            disabled={loading}
+            onChange={(event) => {
+              setWorkflowMode(event.target.value as WorkflowMode);
+              setConfirmedPrivacyFingerprint("");
+            }}
+          >
             {workflowModes.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
           </select>
         </label>
@@ -1108,9 +1371,10 @@ function RoundSoapComposer({
           Keep the transfer record complete. Duplicate low-yield history will be condensed automatically while current status, V/S, labs, treatments, procedures, active problems, pending items, and disposition are preserved. Best quality may take up to five minutes.
         </p>
       )}
+      {renderAiPrivacyControls()}
       <div className="round-soap-generate-row primary-generate-row">
         <span className="muted">The selected workflow and model are used as shown. Nothing is saved until Save reviewed SOAP.</span>
-        <button type="button" disabled={loading || (workflowMode !== "repairSoap" && mixedSourceText.trim().length < 10) || sourceTooLong} onClick={() => void handleGenerate()}>
+        <button type="button" disabled={loading || aiGenerationBlocked || (workflowMode !== "repairSoap" && mixedSourceText.trim().length < 10) || sourceTooLong} onClick={() => void handleGenerate()}>
           {loading ? "Working..." : `Generate ${workflow.label}`}
         </button>
       </div>
@@ -1443,16 +1707,16 @@ function RoundSoapComposer({
         />
       )}
 
-      <DeidNotice />
+      {renderAiPrivacyControls()}
       <div className="round-soap-generate-row">
-        <button type="button" disabled={loading || !composeRawText() || sourceTooLong} onClick={() => void handleGenerate()}>
+        <button type="button" disabled={loading || aiGenerationBlocked || !composeRawText() || sourceTooLong} onClick={() => void handleGenerate()}>
           {loading ? "Working..." : "Generate SOAP"}
         </button>
         {qualityMode !== "highAccuracy" && (warnings.length > 0 || Boolean(deltaReview?.highRiskWarnings.length)) && (
           <button
             type="button"
             className="secondary"
-            disabled={loading || !composeRawText() || sourceTooLong}
+            disabled={loading || aiGenerationBlocked || !composeRawText() || sourceTooLong}
             onClick={() => {
               setQualityMode("highAccuracy");
               void handleGenerate("highAccuracy");

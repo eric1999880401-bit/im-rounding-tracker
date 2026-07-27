@@ -63,6 +63,7 @@ export function stripLeadingClinicalDate(value: string) {
 }
 
 export function formatDateLabel(dateKey: string) {
-  return normalizeDateKey(dateKey).replace(/-/g, "/");
+  const normalized = normalizeDateKey(dateKey, "");
+  return normalized ? normalized.replace(/-/g, "/") : "Date missing";
 }
 

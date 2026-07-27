@@ -13,7 +13,12 @@ const SOAP_EDIT_LINE_LIMIT = 320;
 
 export interface SoapEditOrigin {
   source: "ai" | "manual";
+  /** AI candidate (or manual starting point) that the clinician reviewed. */
   beforeText: string;
+  /** Canonical SOAP before generation; used for the durable mutation audit. */
+  baselineText?: string;
+  /** Exact pasted source only when the clinician explicitly opted in. */
+  sourceText?: string;
   workflowMode: SoapEditWorkflowMode;
   aiDraftId?: string;
   model?: string;

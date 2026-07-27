@@ -36,6 +36,7 @@ const {
   todayKey,
   nowIso,
   createId,
+  cleanClinicalTail,
   dailyNoteMatchesSavedSnapshot,
   dailyNoteFromPatientPreservingSoap,
 } = await server.ssrLoadModule("/src/utils.ts");
@@ -51,6 +52,7 @@ const {
   normalizeSoapTextForEditor,
   parseSoapText,
   patientToSoapDraft,
+  reviewedSoapCompletenessIssues,
   soapDraftToPatientPatch,
   soapTextToPatientPatch,
   soapTextWithDerivedHighlights,
@@ -62,7 +64,7 @@ const { sanitizeAiSoapDraftForReview } = await server.ssrLoadModule("/src/aiDraf
 const { routePatientImportDraft, routePatientClinicalFields } = await server.ssrLoadModule("/src/clinicalFieldRouter.ts");
 const { classifyClinicalLine, compactDisplaySymbols, normalizeClinicalDisplayText, normalizeClinicalDisplayTextPreservingMarks } = await server.ssrLoadModule("/src/clinicalLineClassifier.ts");
 const { editorDraftToSoapText, lintSoapEditorDraft, mergeOrderSourceIntoEditorDraft, parseCanonicalSoapTextToEditorDraft, parseSoapTextToEditorDraft, splitSoapEditorTaskLines } = await server.ssrLoadModule("/src/soapEditorDraft.ts");
-const { buildRoundNoteViewModel, selectRoundNoteLines } = await server.ssrLoadModule("/src/roundNoteViewModel.ts");
+const { buildRoundNoteViewModel, prioritizeRoundNoteProblems, selectRoundNoteLines } = await server.ssrLoadModule("/src/roundNoteViewModel.ts");
 const { buildAntibioticApSummary, ensureAntibioticApInDraft } = await server.ssrLoadModule("/src/antibioticPlan.ts");
 const {
   buildUserAiStyleProfile,
@@ -85,7 +87,7 @@ const {
   restoreSoapDeltaSection,
 } = await server.ssrLoadModule("/src/soapDeltaGuardrails.ts");
 const { classifyPrintVisualItem, displayPrintLine, selectPriorityPrintItems } = await server.ssrLoadModule("/src/printPriority.ts");
-const { cleanInlineClinicalMarkers, conciseSoapDiagnosisForDisplay, soapHeaderLinesForDisplay } = await server.ssrLoadModule("/src/soapDisplay.ts");
+const { cleanInlineClinicalMarkers, conciseSoapDiagnosisForDisplay, soapHeaderLinesForDisplay, soapHeaderSafetyLinesForDisplay } = await server.ssrLoadModule("/src/soapDisplay.ts");
 const { applyClinicalColorMarkup, applyUserKeywordHighlights, clearClinicalColorMarkupAtSelection } = await server.ssrLoadModule("/src/clinicalColorMarkup.ts");
 const { labReferenceText, parseClinicalLabTokens } = await server.ssrLoadModule("/src/labReference.ts");
 const { boardDischargeTasks, hasBoardDischargeSoonSignal, isBoardNewAdmission } = await server.ssrLoadModule("/src/boardCockpit.ts");
@@ -116,6 +118,7 @@ const {
   writeRecoveryDraft,
 } = await server.ssrLoadModule("/src/draftRecovery.ts");
 const { appendSoapEditTrace, buildSoapEditTrace, nextSoapVersion, SOAP_EDIT_HISTORY_LIMIT } = await server.ssrLoadModule("/src/soapEditTrace.ts");
+const { buildAiDocumentAuditWrite, buildSoapAuditWrite } = await server.ssrLoadModule("/src/clinicalAudit.ts");
 const { SoapVisualPreview } = await server.ssrLoadModule("/src/components/SoapVisualPreview.tsx");
 const { ClinicalLabTable } = await server.ssrLoadModule("/src/components/ClinicalLabTable.tsx");
 const { buildCorrectionContract, compactRoundSoapPromptHistory, makeRoundSoapPrompt } = await server.ssrLoadModule("/functions/src/roundSoapPrompt.ts");
@@ -145,6 +148,18 @@ const {
   roundSoapBaselineForWorkflow,
   suggestedRoundSoapWorkflow,
 } = await server.ssrLoadModule("/src/roundSoapWorkflow.ts");
+const {
+  canApplyDocumentContextRequest,
+  canApplyDocumentRequest,
+  canApplyPatientContextRequest,
+  canApplyPatientRequest,
+  isDocumentDraftBoundToSelection,
+  isDocumentReviewBoundToContext,
+  isLatestRequest,
+  isPatientReviewBoundToContext,
+} = await server.ssrLoadModule("/src/asyncRequestGuard.ts");
+const { matchExistingPatient } = await server.ssrLoadModule("/functions/src/sanitize.ts");
+const { clinicalSaveConflictReason } = await server.ssrLoadModule("/src/clinicalSaveGuard.ts");
 
 function haystack(plan) {
   return [
@@ -377,6 +392,73 @@ const cases = [
 
 const failures = [];
 let supplementalPasses = 0;
+
+try {
+  const patientARequest = { requestId: 41, patientId: "fake-patient-a" };
+  const patientBRequest = { requestId: 42, patientId: "fake-patient-b" };
+  const admissionARequest = { ...patientARequest, documentType: "admissionSummary" };
+  const weeklyBRequest = { ...patientBRequest, documentType: "weeklySummary" };
+  const intakeARequest = { ...patientARequest, selectedDate: "2026-07-26", contextKey: "2026-07-26|source-a" };
+  const intakeBRequest = { ...patientBRequest, selectedDate: "2026-07-27", contextKey: "2026-07-27|source-b" };
+  const quickWeeklyBRequest = { ...weeklyBRequest, contextKey: "2026-07-27|weekly-context-b" };
+
+  if (canApplyPatientRequest(patientARequest, patientBRequest.requestId, patientBRequest.patientId)) {
+    throw new Error("older patient A response could overwrite newer patient B");
+  }
+  if (!canApplyPatientRequest(patientBRequest, patientBRequest.requestId, patientBRequest.patientId)) {
+    throw new Error("latest response for the bound patient was incorrectly discarded");
+  }
+  if (canApplyDocumentRequest(admissionARequest, admissionARequest.requestId, patientARequest.patientId, "weeklySummary")) {
+    throw new Error("admission draft could apply after the selected document type changed");
+  }
+  if (canApplyDocumentRequest(weeklyBRequest, weeklyBRequest.requestId, patientARequest.patientId, "weeklySummary")) {
+    throw new Error("patient B document could apply to patient A");
+  }
+  if (!isDocumentDraftBoundToSelection(weeklyBRequest, patientBRequest.patientId, "weeklySummary") ||
+      isDocumentDraftBoundToSelection(weeklyBRequest, patientBRequest.patientId, "isbar") ||
+      isDocumentDraftBoundToSelection(weeklyBRequest, patientARequest.patientId, "weeklySummary")) {
+    throw new Error("reviewed draft binding did not enforce both patient and document type");
+  }
+  if (isLatestRequest(patientARequest, patientBRequest.requestId) ||
+      !isLatestRequest(patientBRequest, patientBRequest.requestId)) {
+    throw new Error("request sequence comparison did not reject the out-of-order response");
+  }
+  if (canApplyPatientContextRequest(intakeARequest, intakeBRequest.requestId, patientBRequest.patientId, intakeBRequest.selectedDate, intakeBRequest.contextKey) ||
+      canApplyPatientContextRequest(intakeBRequest, intakeBRequest.requestId, patientBRequest.patientId, "2026-07-28", intakeBRequest.contextKey) ||
+      canApplyPatientContextRequest(intakeBRequest, intakeBRequest.requestId, patientBRequest.patientId, intakeBRequest.selectedDate, "2026-07-28|changed-source")) {
+    throw new Error("AI Intake accepted a stale patient/date/source response");
+  }
+  if (!canApplyPatientContextRequest(intakeBRequest, intakeBRequest.requestId, patientBRequest.patientId, intakeBRequest.selectedDate, intakeBRequest.contextKey) ||
+      !isPatientReviewBoundToContext(intakeBRequest, patientBRequest.patientId, intakeBRequest.selectedDate, intakeBRequest.contextKey) ||
+      isPatientReviewBoundToContext(intakeBRequest, patientBRequest.patientId, "2026-07-28", intakeBRequest.contextKey) ||
+      isPatientReviewBoundToContext(intakeBRequest, patientBRequest.patientId, intakeBRequest.selectedDate, "changed-context")) {
+    throw new Error("AI Intake review binding did not preserve the exact current context");
+  }
+  if (canApplyDocumentContextRequest(
+    quickWeeklyBRequest,
+    quickWeeklyBRequest.requestId,
+    patientBRequest.patientId,
+    "weeklySummary",
+    "changed-weekly-context",
+  ) || !isDocumentReviewBoundToContext(
+    quickWeeklyBRequest,
+    patientBRequest.patientId,
+    "weeklySummary",
+    quickWeeklyBRequest.contextKey,
+  ) || isDocumentReviewBoundToContext(
+    quickWeeklyBRequest,
+    patientARequest.patientId,
+    "weeklySummary",
+    quickWeeklyBRequest.contextKey,
+  )) {
+    throw new Error("Quick document review did not bind patient/date/type/context before save");
+  }
+  console.log("PASS Async AI responses and reviewed drafts stay bound to fake patient/request/document identity");
+  supplementalPasses += 1;
+} catch (error) {
+  failures.push({ name: "Async patient/document request binding", error: error instanceof Error ? error.message : String(error) });
+  console.error(`FAIL Async patient/document request binding: ${failures[failures.length - 1].error}`);
+}
 
 try {
   const functionsPackage = JSON.parse(readFileSync(new URL("../functions/package.json", import.meta.url), "utf8"));
@@ -1963,6 +2045,19 @@ try {
   const mergedLocalSoap = localRoundSoapFromPaste(patient, [reviewedNote], "2026-05-15", "5/16 B/C pending. Continue Teicoplanin 5/13-. CT neck/chest: stable LAD.");
   if (!/B\/C pending|Teicoplanin|CT neck\/chest/i.test(mergedLocalSoap)) {
     throw new Error(`Local demo SOAP merge lost treatment/pending/image facts:\n${mergedLocalSoap}`);
+  }
+  const genericAntibioticPlanSoap = localRoundSoapFromPaste(
+    { ...emptyPatient(), bed: "T-GENERIC", patientCode: "FAKE-GENERIC", age: 61, sex: "F" },
+    [],
+    "2026-07-27",
+    "Fever resolved; BP stable; Cr 1.2; continue antibiotics; follow culture.",
+    "newSoap",
+  );
+  if (!/continue antibiotics/i.test(genericAntibioticPlanSoap) || !/follow culture/i.test(genericAntibioticPlanSoap)) {
+    throw new Error(`Local SOAP fallback dropped a generic antibiotic or culture plan:\n${genericAntibioticPlanSoap}`);
+  }
+  if (/^# Bacteremia/m.test(genericAntibioticPlanSoap)) {
+    throw new Error(`Local SOAP fallback invented bacteremia from a generic antibiotic plan:\n${genericAntibioticPlanSoap}`);
   }
   const pnaAkiLocalSoap = localRoundSoapFromPaste(
     {
@@ -3642,8 +3737,11 @@ try {
   if (dailyNoteMatchesSavedSnapshot(staleNote, savedNote)) {
     throw new Error("Stale Firestore daily-note snapshot was accepted as the just-saved manual note");
   }
-  if (!dailyNoteMatchesSavedSnapshot({ ...staleNote, soapText: savedNote.soapText }, savedNote)) {
-    throw new Error("Just-saved SOAP snapshot was not recognized after Firestore catch-up");
+  if (dailyNoteMatchesSavedSnapshot({ ...staleNote, soapText: savedNote.soapText }, savedNote)) {
+    throw new Error("Matching SOAP text incorrectly acknowledged a snapshot whose structured clinical fields were still stale");
+  }
+  if (!dailyNoteMatchesSavedSnapshot({ ...savedNote, updatedAt: "2026-05-27T08:01:00.000Z" }, savedNote)) {
+    throw new Error("Complete just-saved SOAP snapshot was not recognized after Firestore catch-up");
   }
   const savedFieldNote = { ...note, updatedAt: "2026-05-27T08:05:00.000Z" };
   if (dailyNoteMatchesSavedSnapshot({ ...staleNote, soapText: "" }, savedFieldNote)) {
@@ -6123,6 +6221,285 @@ try {
 } catch (error) {
   failures.push({ name: "Canonical SOAP lossless round-trip", error: error instanceof Error ? error.message : String(error) });
   console.error(`FAIL Canonical SOAP lossless round-trip: ${failures[failures.length - 1].error}`);
+}
+
+try {
+  const patient = {
+    ...emptyPatient(),
+    id: "fake-canonical-safety",
+    importantRedFlags: "Stale patient-level flag",
+    tasks: [{
+      id: "existing-family-task",
+      text: "Call family with update",
+      done: false,
+      priority: "normal",
+      category: "family",
+      dueDate: "",
+      createdAt: "2026-07-25T00:00:00.000Z",
+      completedAt: "",
+    }],
+  };
+  const oldReviewed = {
+    ...emptyDailyNote("2026-07-25"),
+    soapStatus: "reviewed",
+    soapVersion: 2,
+    soapText: [
+      "F1-01 TEST 60/M",
+      "S:",
+      "- No documented overnight event.",
+      "O:",
+      "- V/S: SpO2 97% RA",
+      "- Lab: K 4.0",
+      "A/P:",
+      "# Stable problem",
+      "- Continue monitoring.",
+    ].join("\n"),
+    importantRedFlags: "Prior reviewed warning",
+  };
+  const newerStructured = {
+    ...emptyDailyNote("2026-07-26"),
+    vitalSigns: "SpO2 84% on NRBM",
+    rawLabText: "K 6.3 mmol/L",
+    labSummary: "K 6.3 mmol/L",
+    importantRedFlags: "New hypoxemia and hyperkalemia",
+    plan: "STAT ECG and hyperkalemia treatment",
+  };
+  const future = {
+    ...emptyDailyNote("2026-07-27"),
+    importantRedFlags: "FUTURE NOTE MUST NOT LEAK",
+    rawLabText: "K 2.0 future value",
+  };
+
+  const canonical = getCanonicalSoapText(patient, [future, oldReviewed, newerStructured], "2026-07-26");
+  if (canonical.source !== "fallback" || !/SpO2 84%|K 6\.3|hyperkalemia/i.test(canonical.text)) {
+    throw new Error(`new structured danger was hidden behind an older reviewed SOAP:\n${canonical.text}`);
+  }
+  if (/FUTURE NOTE|K 2\.0/i.test(canonical.text)) {
+    throw new Error(`future clinical data leaked into a historical SOAP:\n${canonical.text}`);
+  }
+  const historicalSummary = getPatientDisplaySummary(patient, { [patient.id]: [future, oldReviewed] }, "2026-07-25");
+  if (/FUTURE NOTE/.test(historicalSummary.redFlags) || historicalSummary.redFlags !== "Prior reviewed warning") {
+    throw new Error(`historical red flags selected a future/stale source: ${historicalSummary.redFlags}`);
+  }
+  const emptyTodaySummary = getPatientDisplaySummary(
+    patient,
+    { [patient.id]: [{ ...emptyDailyNote("2026-07-26") }, oldReviewed] },
+    "2026-07-26",
+  );
+  if (!emptyTodaySummary.sourceLabels.todayNoteIsEmpty) {
+    throw new Error("an existing but clinically empty today note was not marked as fallback data");
+  }
+
+  const reviewedForTasks = [
+    "F1-01 TEST 60/M",
+    "S:",
+    "- No documented overnight event.",
+    "O:",
+    "- Lab: K 6.3 mmol/L",
+    "A/P:",
+    "# Hyperkalemia",
+    "- Treat and repeat K.",
+    "Tasks:",
+    "- Repeat K at 14:00",
+  ].join("\n");
+  const taskPatch = soapDraftToPatientPatch(parseSoapText(reviewedForTasks), patient, "2026-07-26", reviewedForTasks);
+  const taskTexts = taskPatch.patient.tasks.map((task) => task.text);
+  if (!taskTexts.includes("Call family with update") || !taskTexts.includes("Repeat K at 14:00")) {
+    throw new Error(`SOAP save deleted an unrelated pending task: ${JSON.stringify(taskTexts)}`);
+  }
+  if (reviewedSoapCompletenessIssues("S:\n- Stable\nA/P:\n# Problem\n- Plan").length === 0) {
+    throw new Error("incomplete reviewed SOAP was accepted without an O section");
+  }
+  if (reviewedSoapCompletenessIssues("S:\nO:\n- No new objective data provided.\nA/P:\n# Problem\n- Plan").length === 0) {
+    throw new Error("incomplete reviewed SOAP was accepted with an empty S section");
+  }
+  if (reviewedSoapCompletenessIssues("S:\n- No documented interval event.\nO:\nA/P:\n# Problem\n- Plan").length === 0) {
+    throw new Error("incomplete reviewed SOAP was accepted with an empty O section");
+  }
+  if (reviewedSoapCompletenessIssues("S:\n- Stable\nO:\n- No new objective data provided.\nA/P:\n# Problem only").length === 0) {
+    throw new Error("title-only A/P was accepted without a status or plan line");
+  }
+  if (reviewedSoapCompletenessIssues([
+    "S:",
+    "- No documented interval event.",
+    "O:",
+    "- No new objective data provided.",
+    "A/P:",
+    "# Active problem",
+    "- Status unresolved; clarify today's plan.",
+  ].join("\n")).length > 0) {
+    throw new Error("explicit missing-data statements were rejected as an incomplete reviewed SOAP");
+  }
+
+  const candidate = oldReviewed.soapText.replace("K 4.0", "K 6.3");
+  const finalText = candidate.replace("Continue monitoring.", "Treat hyperkalemia and repeat K.");
+  const trace = buildSoapEditTrace({
+    source: "ai",
+    beforeText: candidate,
+    afterText: finalText,
+    workflowMode: "dailyUpdate",
+    aiDraftId: "fake-ai-draft",
+    model: "fake-model",
+    qualityMode: "balanced",
+    baseSoapVersion: 2,
+    savedSoapVersion: 3,
+  });
+  const audit = buildSoapAuditWrite({
+    patientId: patient.id,
+    dailyNoteDate: "2026-07-26",
+    entrypoint: "detail.soap",
+    origin: {
+      source: "ai",
+      beforeText: candidate,
+      baselineText: oldReviewed.soapText,
+      sourceText: "FAKE DE-IDENTIFIED SOURCE: K 6.3",
+      workflowMode: "dailyUpdate",
+      aiDraftId: "fake-ai-draft",
+      model: "fake-model",
+      qualityMode: "balanced",
+    },
+    finalText,
+    editTrace: trace,
+    baseSoapVersion: 2,
+    savedSoapVersion: 3,
+  });
+  if (!audit.event.sourceStored || !audit.event.payloadKinds.includes("source") || audit.payloads.length !== 4) {
+    throw new Error(`audited save did not retain the explicitly opted-in source chain: ${JSON.stringify(audit.event)}`);
+  }
+  if (audit.event.changes.some((change) => /K 4\.0/.test(`${change.before} ${change.after}`))) {
+    throw new Error("AI correction diff compared baseline→final instead of candidate→final");
+  }
+  const noSourceAudit = buildSoapAuditWrite({
+    patientId: patient.id,
+    dailyNoteDate: "2026-07-26",
+    entrypoint: "board.soap",
+    origin: { source: "manual", beforeText: candidate, baselineText: candidate, workflowMode: "dailyUpdate" },
+    finalText: candidate,
+    editTrace: null,
+    baseSoapVersion: 3,
+    savedSoapVersion: 4,
+  });
+  if (noSourceAudit.event.sourceStored || noSourceAudit.event.payloadKinds.includes("source")) {
+    throw new Error("exact source was retained without explicit opt-in");
+  }
+  const fakeDocumentCandidate = "During this week, AKI improved after fluids; K normalized.";
+  const fakeDocumentFinal = "During this week, AKI improved after cautious fluids; K normalized. Recheck BMP tomorrow.";
+  const documentAudit = buildAiDocumentAuditWrite({
+    patientId: patient.id,
+    documentType: "weeklySummary",
+    auditDate: "2026-07-26",
+    dateFrom: "2026-07-20",
+    dateTo: "2026-07-26",
+    sourceText: "FAKE DE-IDENTIFIED WEEKLY SOURCE",
+    storeSourceText: false,
+    baselineText: "Prior fake weekly summary",
+    candidateText: fakeDocumentCandidate,
+    finalText: fakeDocumentFinal,
+    aiDraftId: "fake-weekly-draft",
+    model: "fake-model",
+    qualityMode: "balanced",
+  });
+  if (
+    documentAudit.event.operation !== "ai.document.save"
+    || documentAudit.event.documentType !== "weeklySummary"
+    || documentAudit.event.sourceStored
+    || documentAudit.payloads.some((payload) => payload.kind === "source")
+  ) {
+    throw new Error(`AI document audit lost binding or retained source without opt-in: ${JSON.stringify(documentAudit.event)}`);
+  }
+  if (
+    documentAudit.payloads.find((payload) => payload.kind === "candidate")?.text !== fakeDocumentCandidate
+    || documentAudit.payloads.find((payload) => payload.kind === "final")?.text !== fakeDocumentFinal
+    || documentAudit.payloads.find((payload) => payload.kind === "baseline")?.text !== "Prior fake weekly summary"
+  ) {
+    throw new Error("AI document audit did not preserve the fake candidate-to-final correction chain");
+  }
+  const existingForImport = [
+    { id: "patient-a", bed: "1A", patientCode: "CODE-A" },
+    { id: "patient-b", bed: "2B", patientCode: "CODE-B" },
+  ];
+  if (emptyPatient().sex !== "Other") {
+    throw new Error("new-patient defaults guessed a sex before clinician review");
+  }
+  if (matchExistingPatient({ bed: "1A", patientCode: "CODE-B", matchPatientId: "patient-a" }, existingForImport)) {
+    throw new Error("conflicting bed/code bulk identity was matched to a patient");
+  }
+  if (matchExistingPatient({ bed: "1A", patientCode: "CODE-A", matchPatientId: "patient-b" }, existingForImport)?.id !== "patient-a") {
+    throw new Error("model-supplied patient id overrode consistent source bed/code identity");
+  }
+  if (!clinicalSaveConflictReason({
+    persistedSoapVersion: 4,
+    expectedSoapVersion: 3,
+    patientExists: true,
+    persistedPatientUpdatedAt: "same",
+    expectedPatientUpdatedAt: "same",
+  }).includes("changed from version 3 to 4")) {
+    throw new Error("stale SOAP revision was not rejected before transactional save");
+  }
+  if (!clinicalSaveConflictReason({
+    persistedSoapVersion: 3,
+    expectedSoapVersion: 3,
+    patientExists: true,
+    persistedPatientUpdatedAt: "newer",
+    expectedPatientUpdatedAt: "older",
+  }).includes("another tab or device")) {
+    throw new Error("stale patient mirror was not rejected before transactional save");
+  }
+  if (clinicalSaveConflictReason({
+    persistedSoapVersion: 3,
+    expectedSoapVersion: 3,
+    patientExists: true,
+    persistedPatientUpdatedAt: "same",
+    expectedPatientUpdatedAt: "same",
+  })) {
+    throw new Error("matching note/patient revisions were incorrectly rejected");
+  }
+  const safetyLines = soapHeaderSafetyLinesForDisplay([
+    "Code: DNR",
+    "Allergy: NKDA",
+    "Isolation: Contact",
+    "HD/POD: HD 3",
+  ]);
+  if (!safetyLines.includes("Isolation: Contact") || !safetyLines.includes("Code: DNR") || !safetyLines.includes("Allergy: NKDA")) {
+    throw new Error(`header safety lines were truncated or dropped: ${JSON.stringify(safetyLines)}`);
+  }
+  const combinedSafety = soapHeaderSafetyLinesForDisplay([
+    "Code: Full | Allergy: Penicillin | Isolation: Droplet | HD/POD: HD 2",
+  ]);
+  if (
+    !combinedSafety.includes("Code: Full") ||
+    !combinedSafety.includes("Allergy: Penicillin") ||
+    !combinedSafety.includes("Isolation: Droplet") ||
+    !combinedSafety.includes("HD/POD: HD 2") ||
+    combinedSafety.some((line) => /MISSING/i.test(line))
+  ) {
+    throw new Error(`combined header safety fields were parsed incorrectly: ${JSON.stringify(combinedSafety)}`);
+  }
+  const missingSafety = soapHeaderSafetyLinesForDisplay(["Dx: Pneumonia"]);
+  if (!missingSafety.includes("Code: MISSING") || !missingSafety.includes("Allergy: MISSING")) {
+    throw new Error(`missing code/allergy were not explicit: ${JSON.stringify(missingSafety)}`);
+  }
+  if (cleanClinicalTail("Isolation: Contact") !== "Isolation: Contact") {
+    throw new Error("Contact isolation was stripped as a dangling verb");
+  }
+  const crowdedAp = buildRoundNoteViewModel([
+    "S:", "- Stable", "O:", "- V/S: stable", "A/P:",
+    "# Routine 1", "- Continue.",
+    "# Routine 2", "- Continue.",
+    "# Routine 3", "- Continue.",
+    "# Routine 4", "- Continue.",
+    "# Routine 5", "- Continue.",
+    "# !! Hyperkalemia K 6.8", "- !! STAT ECG and treatment.",
+  ].join("\n"));
+  const prioritizedAp = prioritizeRoundNoteProblems(crowdedAp.assessmentPlan);
+  if (!/Hyperkalemia/i.test(prioritizedAp[0]?.title.text ?? "")) {
+    throw new Error(`late critical A/P was truncated behind routine problems: ${prioritizedAp.map((problem) => problem.title.text).join(" | ")}`);
+  }
+  console.log("PASS Canonical SOAP, task preservation, completeness, and audited candidate-to-final safety");
+  supplementalPasses += 1;
+} catch (error) {
+  failures.push({ name: "Canonical and audited SOAP safety", error: error instanceof Error ? error.message : String(error) });
+  console.error(`FAIL Canonical and audited SOAP safety: ${failures[failures.length - 1].error}`);
 }
 
 await server.close();

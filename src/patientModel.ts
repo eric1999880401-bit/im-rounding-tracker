@@ -196,12 +196,14 @@ function hasItems<T>(items: T[] | undefined) {
   return Array.isArray(items) && items.length > 0;
 }
 
-function latestNoteWith(notes: DailyNote[], predicate: (note: DailyNote) => boolean) {
-  return [...notes].filter(predicate).sort((a, b) => b.date.localeCompare(a.date))[0];
+export function notesOnOrBefore(notes: DailyNote[], date: string) {
+  if (!date) return notes;
+  return notes.filter((note) => !note.date || note.date <= date);
 }
 
-export function getLatestNonEmptyDailyNote(notes: DailyNote[]) {
-  return latestNoteWith(notes, (note) =>
+export function dailyNoteHasClinicalData(note: DailyNote | undefined) {
+  if (!note) return false;
+  return (
     hasText(note.soapText) ||
     hasText(note.importantRedFlags) ||
     hasText(note.overnightEvents) ||
@@ -219,8 +221,16 @@ export function getLatestNonEmptyDailyNote(notes: DailyNote[]) {
     hasText(note.plan) ||
     hasItems(note.assessmentPlanItems) ||
     hasText(note.dischargePlan) ||
-    hasText(note.vsOrder),
+    hasText(note.vsOrder)
   );
+}
+
+function latestNoteWith(notes: DailyNote[], predicate: (note: DailyNote) => boolean) {
+  return [...notes].filter(predicate).sort((a, b) => b.date.localeCompare(a.date))[0];
+}
+
+export function getLatestNonEmptyDailyNote(notes: DailyNote[]) {
+  return latestNoteWith(notes, dailyNoteHasClinicalData);
 }
 
 function displayString(
@@ -284,26 +294,38 @@ const dailyNoteSnapshotTextFields: Array<keyof Pick<
   "vsOrder",
 ];
 
+const dailyNoteSnapshotArrayFields: Array<keyof Pick<
+  DailyNote,
+  | "labReports"
+  | "parsedLabItems"
+  | "physicalExamEntries"
+  | "imageStudyEntries"
+  | "assessmentPlanItems"
+  | "soapEditHistory"
+>> = ["labReports", "parsedLabItems", "physicalExamEntries", "imageStudyEntries", "assessmentPlanItems", "soapEditHistory"];
+
 export function dailyNoteMatchesSavedSnapshot(note: DailyNote | undefined, expected: DailyNote) {
   if (!note) return false;
-  if (note.updatedAt && expected.updatedAt && note.updatedAt === expected.updatedAt) return true;
-
-  const expectedSoapText = String(expected.soapText ?? "").trim();
-  if (expectedSoapText) {
-    return String(note.soapText ?? "").trim() === expectedSoapText;
-  }
-
-  return dailyNoteSnapshotTextFields.every((field) =>
+  if (note.date !== expected.date) return false;
+  if (String(note.soapText ?? "").trim() !== String(expected.soapText ?? "").trim()) return false;
+  if ((note.soapStatus ?? "draft") !== (expected.soapStatus ?? "draft")) return false;
+  if ((note.soapVersion ?? 1) !== (expected.soapVersion ?? 1)) return false;
+  if (String(note.soapUpdatedAt ?? "") !== String(expected.soapUpdatedAt ?? "")) return false;
+  if (!dailyNoteSnapshotTextFields.every((field) =>
     String(note[field] ?? "").trim() === String(expected[field] ?? "").trim(),
+  )) return false;
+  return dailyNoteSnapshotArrayFields.every((field) =>
+    JSON.stringify(note[field] ?? []) === JSON.stringify(expected[field] ?? []),
   );
 }
 
 export function noteForDateOrFallback(patient: Patient, notes: DailyNote[], date = todayKey()) {
-  return notes.find((note) => note.date === date) ?? getLatestNonEmptyDailyNote(notes) ?? dailyNoteFromPatient(patient, date);
+  const eligibleNotes = notesOnOrBefore(notes, date);
+  return eligibleNotes.find((note) => note.date === date) ?? getLatestNonEmptyDailyNote(eligibleNotes) ?? dailyNoteFromPatient(patient, date);
 }
 
 export function patientForDate(patient: Patient, dailyNotesByPatient: DailyNotesByPatient = {}, date = todayKey()) {
-  const notes = dailyNotesByPatient[patient.id] ?? [];
+  const notes = notesOnOrBefore(dailyNotesByPatient[patient.id] ?? [], date);
   const todayNote = notes.find((note) => note.date === date);
   const latestLabTextNote = latestNoteWith(notes, (note) => hasText(note.rawLabText) || hasText(note.labSummary));
   const latestLabItemsNote = latestNoteWith(notes, (note) => hasItems(note.parsedLabItems));
@@ -428,16 +450,16 @@ export function getPatientDisplaySummary(
   dailyNotesByPatient: DailyNotesByPatient = {},
   date = todayKey(),
 ): PatientDisplaySummary {
-  const notes = dailyNotesByPatient[patient.id] ?? [];
+  const notes = notesOnOrBefore(dailyNotesByPatient[patient.id] ?? [], date);
   const todayNote = notes.find((note) => note.date === date);
   const displayPatient = patientForDate(patient, dailyNotesByPatient, date);
   const latestRedFlagNote = latestNoteWith(notes, (note) => hasText(note.importantRedFlags));
 
   const redFlags = hasText(todayNote?.importantRedFlags)
     ? todayNote?.importantRedFlags ?? ""
-    : hasText(patient.importantRedFlags)
-      ? patient.importantRedFlags
-      : latestRedFlagNote?.importantRedFlags ?? "";
+    : hasText(latestRedFlagNote?.importantRedFlags)
+      ? latestRedFlagNote?.importantRedFlags ?? ""
+      : patient.importantRedFlags;
 
   const labReports = displayPatient.labReports;
   const labItems = hasItems(labReports)
@@ -491,7 +513,7 @@ export function getPatientDisplaySummary(
     dischargeTargetDate: patient.dischargeTargetDate,
     admissionSummary: getAdmissionSummaryText(patient),
     sourceLabels: {
-      todayNoteIsEmpty: Boolean(!todayNote && getLatestNonEmptyDailyNote(notes)),
+      todayNoteIsEmpty: Boolean(!dailyNoteHasClinicalData(todayNote) && getLatestNonEmptyDailyNote(notes.filter((note) => note.date !== date))),
     },
   };
 }
@@ -603,7 +625,9 @@ export function emptyPatient(): Patient {
     patientCode: "",
     oneLiner: "",
     age: 0,
-    sex: "M",
+    // Unknown at creation time. Never seed a guessed demographic into the
+    // patient master before the clinician explicitly selects it.
+    sex: "Other",
     underlyingDiseases: "",
     underlyingDiseaseItems: [],
     attending: "",

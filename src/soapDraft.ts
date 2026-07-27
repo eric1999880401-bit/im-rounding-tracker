@@ -7,9 +7,11 @@ import { normalizeLabTableSourceText, objectiveKindFromLine } from "./objectiveL
 import type { AiSoapDraft, AssessmentPlanItem, DailyNote, Patient, PatientTask, TaskCategory, TaskPriority } from "./types";
 import {
   createId,
+  dailyNoteHasClinicalData,
   dischargePrepText,
   getUnderlyingDiseaseItems,
   hasColorMarkup,
+  notesOnOrBefore,
   nowIso,
   plainClinicalText,
   safeClinicalLinePreservingMarks,
@@ -282,29 +284,73 @@ function noteSoapText(note?: DailyNote) {
   return String(note?.soapText ?? "").trim();
 }
 
+export function reviewedSoapCompletenessIssues(text: string) {
+  const value = String(text ?? "").trim();
+  if (!value) return ["SOAP text is empty."];
+
+  const issues: string[] = [];
+  if (!/^\s*S\s*:/im.test(value)) issues.push("S section is missing.");
+  if (!/^\s*O\s*:/im.test(value)) issues.push("O section is missing.");
+  if (!/^\s*A\/P\s*:/im.test(value)) issues.push("A/P section is missing.");
+  const parsed = parseSoapText(value);
+  if (!parsed.sLines.some((line) => line.trim())) {
+    issues.push("S has no interval event or explicit missing-data statement.");
+  }
+  if (!parsed.oLines.some((line) => line.trim())) {
+    issues.push("O has no objective data or explicit missing-data statement.");
+  }
+  if (!parsed.apProblems.some((problem) => (
+    problem.title.trim() && problem.lines.some((line) => line.trim())
+  ))) {
+    issues.push("A/P needs at least one active problem with a status/plan line.");
+  }
+  return issues;
+}
+
+function reviewedSoapText(note?: DailyNote) {
+  const text = noteSoapText(note);
+  if (note?.soapStatus !== "reviewed" || reviewedSoapCompletenessIssues(text).length > 0) return "";
+  return text;
+}
+
+function canonicalSoapNote(notes: DailyNote[], selectedDate: string) {
+  const eligibleNotes = notesOnOrBefore(notes, selectedDate);
+  const selectedNote = eligibleNotes.find((note) => note.date === selectedDate);
+  if (reviewedSoapText(selectedNote)) return selectedNote;
+
+  // A newer structured note must not be hidden behind an older reviewed SOAP.
+  // In that case the deterministic field-level fallback projects the newer
+  // V/S, labs, images and red flags while retaining safe legacy context.
+  if (selectedNote && dailyNoteHasClinicalData(selectedNote)) return undefined;
+  const latestClinicalNote = sortedNotes(eligibleNotes).find(dailyNoteHasClinicalData);
+  const latestReviewedNote = sortedNotes(eligibleNotes).find((note) => reviewedSoapText(note));
+  if (latestClinicalNote && latestReviewedNote && latestClinicalNote.date > latestReviewedNote.date) return undefined;
+  return latestReviewedNote;
+}
+
 export function getCanonicalSoapText(patient: Patient, dailyNotes: DailyNote[] = [], selectedDate = "") {
-  const selectedNote = dailyNotes.find((note) => note.date === selectedDate);
-  const selectedSoap = noteSoapText(selectedNote);
-  if (selectedSoap) {
+  const eligibleNotes = notesOnOrBefore(dailyNotes, selectedDate);
+  const selectedNote = eligibleNotes.find((note) => note.date === selectedDate);
+  const canonicalNote = canonicalSoapNote(eligibleNotes, selectedDate);
+  const canonicalSoap = reviewedSoapText(canonicalNote);
+  if (canonicalNote && canonicalNote.date === selectedDate && canonicalSoap) {
     return {
-      text: selectedSoap,
+      text: canonicalSoap,
       source: "selected" as const,
       sourceDate: selectedNote?.date ?? selectedDate,
     };
   }
 
-  const latestSoapNote = sortedNotes(dailyNotes).find((note) => noteSoapText(note));
-  const latestSoap = noteSoapText(latestSoapNote);
-  if (latestSoap) {
+  if (canonicalNote && canonicalSoap) {
     return {
-      text: latestSoap,
+      text: canonicalSoap,
       source: "latest" as const,
-      sourceDate: latestSoapNote?.date ?? "",
+      sourceDate: canonicalNote.date,
     };
   }
 
   return {
-    text: formatSoapDraft(patientToFallbackSoapDraft(patient, dailyNotes, selectedDate)),
+    text: formatSoapDraft(patientToFallbackSoapDraft(patient, eligibleNotes, selectedDate)),
     source: "fallback" as const,
     sourceDate: selectedDate,
   };
@@ -649,14 +695,23 @@ export function localRoundSoapFromPaste(
   }
 
   const treatmentLines = fragments.filter((line) =>
-    /\b(teicoplanin|vancomycin|cef|zosyn|pip\/?tazo|piperacillin|tazobactam|meropenem|ertapenem|abx|antibiotic|culture|b\/c|bcx|source control|j-tube|feeding|nutrition|anemia|hb)\b/i.test(line),
+    /\b(teicoplanin|vancomycin|cef|zosyn|pip\/?tazo|piperacillin|tazobactam|meropenem|ertapenem|abx|antibiotics?|culture|b\/c|bcx|source control|j-tube|feeding|nutrition|anemia|hb)\b/i.test(line),
   );
   if (treatmentLines.length > 0) {
-    const infectionLine = treatmentLines.find((line) => /mrsa|enterococcus|bacteremia|culture|teicoplanin|vancomycin|abx/i.test(line));
+    const infectionLine = treatmentLines.find((line) => /mrsa|enterococcus|bacteremia|culture|teicoplanin|vancomycin|abx|antibiotics?/i.test(line));
     if (infectionLine && !nextProblems.some((problem) => /cholangitis|sepsis|bacteremia|infection|infx|mrsa|enterococcus|cap|hap|vap|pna|pneumonia|aspiration/i.test(problem.title))) {
+      const inferredTitle = /cholangitis|biliary|ercp/i.test(sourceAll)
+        ? "Cholangitis / infection"
+        : /bacteremia|bloodstream infection|mrsa|enterococcus/i.test(sourceAll)
+          ? "Bacteremia / infection"
+          : /\b(?:pna|pneumonia|cap|hap|vap)\b/i.test(sourceAll)
+            ? "PNA / infection"
+            : /\b(?:uti|urinary tract infection)\b/i.test(sourceAll)
+              ? "UTI / infection"
+              : "Infection / antibiotics";
       nextProblems.unshift({
-        title: /cholangitis|biliary|ercp/i.test(sourceAll) ? "Cholangitis / infection" : "Bacteremia / infection",
-        lines: uniqueSoapLines([infectionLine], 3, 140),
+        title: inferredTitle,
+        lines: uniqueSoapLines(treatmentLines, 3, 140),
       });
     }
   }
@@ -776,17 +831,12 @@ function patientToFallbackSoapDraft(patient: Patient, dailyNotes: DailyNote[] = 
 }
 
 export function patientToSoapDraft(patient: Patient, dailyNotes: DailyNote[] = [], selectedDate = ""): SoapDraft {
-  const selectedNote = dailyNotes.find((note) => note.date === selectedDate);
-  const selectedSoap = noteSoapText(selectedNote);
-  // A reviewed SOAP is canonical. Re-injecting legacy patient/note orders here
-  // made deleted or corrected orders reappear on Board and Print after Save.
-  if (selectedSoap) return parseSoapText(selectedSoap);
-
-  const latestSoapNote = sortedNotes(dailyNotes).find((note) => noteSoapText(note));
-  const latestSoap = noteSoapText(latestSoapNote);
-  if (latestSoap) return parseSoapText(latestSoap);
-
-  return patientToFallbackSoapDraft(patient, dailyNotes, selectedDate);
+  const eligibleNotes = notesOnOrBefore(dailyNotes, selectedDate);
+  const canonical = getCanonicalSoapText(patient, eligibleNotes, selectedDate);
+  // A complete reviewed SOAP is canonical. Re-injecting legacy patient/note
+  // orders here made deleted or corrected orders reappear after Save.
+  if (canonical.source !== "fallback") return parseSoapText(canonical.text);
+  return patientToFallbackSoapDraft(patient, eligibleNotes, selectedDate);
 }
 
 function aiVitalLine(vital: AiSoapDraft["objective"]["vitals"][number]) {
@@ -1305,8 +1355,21 @@ function taskCategory(text: string): TaskCategory {
 
 function tasksFromSoapLines(lines: string[], patient: Patient): PatientTask[] {
   const now = nowIso();
-  const doneTasks = patient.tasks.filter((task) => task.done);
-  const nextTasks = uniqueSoapLines(lines, 8, 130).map((line) => ({
+  const existingTasks = Array.isArray(patient.tasks) ? patient.tasks : [];
+  const taskKey = (value: string) => String(value ?? "")
+    .replace(/^\s*(?:!+|[-*]|\d+[.)]|\[[ xX]\])\s*/, "")
+    .replace(/[\s\p{P}]+/gu, " ")
+    .trim()
+    .toLowerCase();
+  const existingKeys = new Set(existingTasks.map((task) => taskKey(task.text)).filter(Boolean));
+  const nextTasks = uniqueSoapLines(lines, 8, 130)
+    .filter((line) => {
+      const key = taskKey(line);
+      if (!key || existingKeys.has(key)) return false;
+      existingKeys.add(key);
+      return true;
+    })
+    .map((line) => ({
     id: createId("t"),
     text: line.replace(/^!+/, "").trim(),
     done: false,
@@ -1316,7 +1379,9 @@ function tasksFromSoapLines(lines: string[], patient: Patient): PatientTask[] {
     createdAt: now,
     completedAt: "",
   }));
-  return [...doneTasks, ...nextTasks];
+  // SOAP is one task-entry surface, not the authority for deleting tasks.
+  // Preserve tasks created elsewhere; explicit deletion remains in TaskList.
+  return [...existingTasks, ...nextTasks];
 }
 
 function assessmentItemsFromSoapProblems(problems: SoapApProblem[]): AssessmentPlanItem[] {

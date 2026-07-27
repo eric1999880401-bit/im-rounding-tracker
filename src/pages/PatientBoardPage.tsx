@@ -1,6 +1,6 @@
 import { Link } from "react-router-dom";
-import { useEffect, useState } from "react";
-import type { AnalyzePatientBatchTextInput, DailyNote, DailyNotesByPatient, KeywordHighlightRule, Patient, PatientImportDraft, SortMode, TaskCategory, TaskPriority, UserPreferences } from "../types";
+import { useEffect, useRef, useState } from "react";
+import type { AnalyzePatientBatchTextInput, DailyNote, DailyNotesByPatient, KeywordHighlightRule, Patient, PatientImportDraft, SaveDailyNoteOptions, SortMode, TaskCategory, TaskPriority, UserPreferences } from "../types";
 import {
   createId,
   createTodayFromYesterday,
@@ -21,7 +21,6 @@ import {
 } from "../utils";
 import { analyzePatientBatchText } from "../firebase/aiService";
 import { applyClinicalKnowledgeToPatientImportDraft } from "../clinicalKnowledge";
-import { buildConcisePatientClinicalUpdate } from "../clinicalPatientPolish";
 import { routePatientImportDraft } from "../clinicalFieldRouter";
 import PatientForm from "../components/PatientForm";
 import { ClinicalLabTable } from "../components/ClinicalLabTable";
@@ -38,11 +37,12 @@ import {
 import { useT } from "../i18n";
 import { getPatientHeadline, getRoundingDigest } from "../roundingDigest";
 import { fallbackSoapTextFromPatient, getCanonicalSoapText, patientToSoapDraft } from "../soapDraft";
-import { conciseSoapDiagnosisForDisplay, soapHeaderLinesForDisplay } from "../soapDisplay";
+import { conciseSoapDiagnosisForDisplay, soapHeaderLinesForDisplay, soapHeaderSafetyLinesForDisplay } from "../soapDisplay";
 import { buildCarriedForwardKeys, isCarriedForwardLine } from "../soapLineDelta";
 import {
   buildRoundNoteViewModelFromDraft,
   makeRoundNoteLineView,
+  prioritizeRoundNoteProblems,
   selectRoundNoteLines,
   type RoundNoteLineView,
   type RoundNoteProblemView,
@@ -57,6 +57,19 @@ import {
   normalizeRoundingLayoutPreferences,
 } from "../userPreferences";
 import { boardDischargeTasks, hasBoardDischargeSoonSignal, isBoardNewAdmission } from "../boardCockpit";
+import { buildBulkImportAuditWrite, buildSoapAuditWrite } from "../clinicalAudit";
+import { appendSoapEditTrace, buildSoapEditTrace } from "../soapEditTrace";
+import { persistedPatientUpdatedAt } from "../patientWriteSafety";
+import {
+  bulkReviewConflictReason,
+  captureBulkReviewRevision,
+  type BulkReviewRevision,
+} from "../bulkReviewSafety";
+import {
+  assignUniqueBulkReviewIds,
+  splitBulkPatientSourceBlocks,
+  uniquelyBoundBulkSourceChunk,
+} from "../bulkSourceBinding";
 
 interface PageProps {
   patients: Patient[];
@@ -67,7 +80,7 @@ interface PageProps {
   isDemoMode?: boolean;
   onCreatePatient: (patient: Patient) => Promise<void>;
   onSavePatient: (patient: Patient) => Promise<void>;
-  onSaveDailyNote: (patientId: string, note: DailyNote) => Promise<void>;
+  onSaveDailyNote: (patientId: string, note: DailyNote, options?: SaveDailyNoteOptions) => Promise<void>;
 }
 
 const taskCategories: TaskCategory[] = ["lab", "imaging", "consult", "discharge", "family", "order", "other"];
@@ -256,19 +269,97 @@ function importDraftToPatient(sourceDraft: PatientImportDraft, existingPatient?:
     updatedAt: now,
   };
 
-  return buildConcisePatientClinicalUpdate(nextPatient, [], todayKey());
+  // The reviewed import card is the write payload. Do not run a hidden polish
+  // pass after confirmation because that makes preview and persisted data differ.
+  return nextPatient;
+}
+
+function normalizedIdentity(value: string) {
+  return String(value ?? "").trim().toLowerCase();
+}
+
+function resolveReviewedImportPatient(
+  draft: PatientImportDraft,
+  patients: Patient[],
+  explicitTarget?: Patient,
+) {
+  if (explicitTarget) return explicitTarget;
+  const bed = normalizedIdentity(draft.bed);
+  const patientCode = normalizedIdentity(draft.patientCode);
+  const bedMatches = bed ? patients.filter((patient) => normalizedIdentity(patient.bed) === bed) : [];
+  const codeMatches = patientCode
+    ? patients.filter((patient) => normalizedIdentity(patient.patientCode) === patientCode)
+    : [];
+  if (bedMatches.length > 1 || codeMatches.length > 1) {
+    throw new Error(`Import blocked for ${draft.bed || draft.patientCode || "unidentified row"}: bed or patient code is not unique.`);
+  }
+  if (bed && patientCode) {
+    const bedPatient = bedMatches[0];
+    const codePatient = codeMatches[0];
+    if (bedPatient && codePatient && bedPatient.id === codePatient.id) return bedPatient;
+    if (bedPatient || codePatient) {
+      throw new Error(`Import blocked for ${draft.bed}/${draft.patientCode}: bed and patient code do not identify the same current patient. Select an explicit Target patient.`);
+    }
+    return undefined;
+  }
+  return bedMatches[0] ?? codeMatches[0];
+}
+
+function reviewedImportNote(draft: PatientImportDraft, existingNote: DailyNote | undefined, date: string) {
+  const routed = routePatientImportDraft(draft);
+  const now = nowIso();
+  const base = existingNote ?? emptyDailyNote(date);
+  const valueOrExisting = (value: string, existing: string) => value.trim() ? value.trim() : existing;
+  const planLines = [
+    ...routed.tasks.map((task) => task.text.trim()).filter(Boolean),
+    routed.dischargePlan.trim(),
+    routed.disposition.trim() ? `Disposition: ${routed.disposition.trim()}` : "",
+  ].filter(Boolean);
+  return {
+    ...base,
+    date,
+    soapText: "",
+    soapStatus: "draft" as const,
+    soapUpdatedAt: "",
+    soapVersion: existingNote ? Math.max(1, Number(existingNote.soapVersion) || 1) + 1 : 1,
+    importantRedFlags: valueOrExisting(routed.importantRedFlags, base.importantRedFlags),
+    overnightEvents: valueOrExisting(routed.todayUpdates, base.overnightEvents),
+    subjectiveOrChiefConcern: valueOrExisting(routed.todayUpdates, base.subjectiveOrChiefConcern),
+    vitalSigns: valueOrExisting(routed.vitalSigns, base.vitalSigns),
+    physicalExam: valueOrExisting(routed.physicalExam, base.physicalExam),
+    labSummary: valueOrExisting(routed.labText, base.labSummary),
+    rawLabText: valueOrExisting(routed.labText, base.rawLabText),
+    parsedLabItems: routed.labText.trim() ? parseLabText(routed.labText) : base.parsedLabItems,
+    imageSummary: valueOrExisting(routed.imageText, base.imageSummary),
+    assessment: valueOrExisting(routed.activeProblems || routed.primaryDiagnosis, base.assessment),
+    plan: planLines.length > 0 ? planLines.join("\n") : base.plan,
+    dischargePlan: valueOrExisting(
+      [routed.dischargePlan, routed.disposition ? `Disposition: ${routed.disposition}` : ""].filter(Boolean).join("\n"),
+      base.dischargePlan,
+    ),
+    createdAt: existingNote?.createdAt || now,
+    updatedAt: now,
+  } satisfies DailyNote;
+}
+
+function auditNoteSnapshot(note: DailyNote | undefined) {
+  if (!note) return "";
+  return JSON.stringify({
+    importantRedFlags: note.importantRedFlags,
+    overnightEvents: note.overnightEvents,
+    subjectiveOrChiefConcern: note.subjectiveOrChiefConcern,
+    vitalSigns: note.vitalSigns,
+    physicalExam: note.physicalExam,
+    rawLabText: note.rawLabText,
+    imageSummary: note.imageSummary,
+    assessment: note.assessment,
+    plan: note.plan,
+    dischargePlan: note.dischargePlan,
+  }, null, 2);
 }
 
 function splitImportChunks(rawText: string): string[] {
-  const normalized = rawText
-    .replace(/\r\n/g, "\n")
-    .replace(/\s+(?=(?:bed|room|rm)\s*[:#-]?\s*[A-Za-z0-9][A-Za-z0-9-]{1,}\b)/gi, "\n\n");
-
-  return normalized
-    .split(/\n{2,}|(?=\n\s*(?:bed|room|rm)\s*[:#-]?\s*[A-Za-z0-9][A-Za-z0-9-]{1,}\b)/i)
-    .map((chunk) => chunk.trim())
-    .filter((chunk) => chunk.length > 20)
-    .slice(0, 12);
+  return splitBulkPatientSourceBlocks(rawText);
 }
 
 function extractLabeledSection(chunk: string, labels: string[], stopLabels: string[] = []) {
@@ -289,12 +380,8 @@ function importFragments(chunk: string) {
 
 function selectedPatientContext(patient: Patient, rawText: string) {
   return [
-    "Target existing patient for this pasted update:",
-    `Bed: ${patient.bed || ""}`,
-    `Patient code: ${patient.patientCode || ""}`,
+    "A target patient was selected locally. Do not infer or return identity fields.",
     patient.age ? `Age/Sex: ${patient.age}/${patient.sex}` : "",
-    patient.attending ? `Attending: ${patient.attending}` : "",
-    patient.teamOrService ? `Service: ${patient.teamOrService}` : "",
     patient.primaryDiagnosis ? `Dx: ${patient.primaryDiagnosis}` : "",
     patient.underlyingDiseases ? `PMH: ${patient.underlyingDiseases}` : "",
     patient.activeProblems ? `Active problems: ${patient.activeProblems}` : "",
@@ -362,6 +449,7 @@ function looksLikeDiscreteTargetUpdate(rawText: string) {
 }
 
 function hasBulkPatientIdentity(rawText: string) {
+  if (/(?:(?:bed|room|rm)|床(?:號|号)?)\s*[：:#-]?\s*[A-Za-z0-9][A-Za-z0-9-]{1,}\b/i.test(rawText)) return true;
   return /\b(?:bed|room|rm|床)\s*[:#-]?\s*[A-Za-z0-9][A-Za-z0-9-]{1,}\b|\b(?:code|pt|patient|id)\s*[:#-]?\s*[A-Za-z0-9-]{2,}\b|\b[A-Z]?\d{1,2}[A-Z]-\d{2,3}\b/i.test(rawText);
 }
 
@@ -370,7 +458,7 @@ function localRuleBasedImportDrafts(rawText: string, existingPatients: Patient[]
   const stopLabels = ["bed", "room", "rm", "dx", "diagnosis", "impression", "pmh", "underlying", "past history", "today", "task", "tasks", "pending", "dispo", "disposition", "dc", "discharge"];
 
   return chunks.map((chunk, index) => {
-    const bed = chunk.match(/\b(?:bed|room|rm)\s*[:#-]?\s*([A-Za-z0-9][A-Za-z0-9-]{1,})\b/i)?.[1] ?? "";
+    const bed = chunk.match(/(?:(?:bed|room|rm)|床(?:號|号)?)\s*[：:#-]?\s*([A-Za-z0-9][A-Za-z0-9-]{1,})\b/i)?.[1] ?? "";
     const patientCode = chunk.match(/\b(?:code|pt|patient|id)\s*[:#-]?\s*([A-Za-z0-9-]{2,})\b/i)?.[1] ?? "";
     const ageSex = chunk.match(/\b(\d{1,3})\s*\/\s*(M|F)\b/i);
     const diagnosis = extractLabeledSection(chunk, ["dx", "diagnosis", "impression"], stopLabels);
@@ -594,8 +682,11 @@ function PatientBoardPage({
   const [bulkError, setBulkError] = useState("");
   const [bulkStatus, setBulkStatus] = useState("");
   const [bulkDrafts, setBulkDrafts] = useState<PatientImportDraft[]>([]);
+  const [bulkReviewRevisions, setBulkReviewRevisions] = useState<Record<string, BulkReviewRevision>>({});
+  const [bulkReviewSources, setBulkReviewSources] = useState<Record<string, string>>({});
   const [selectedDraftIds, setSelectedDraftIds] = useState<Set<string>>(new Set());
   const [bulkImportOpen, setBulkImportOpen] = useState(false);
+  const bulkAnalysisRequestRef = useRef(0);
   const [openSoapComposerPatientId, setOpenSoapComposerPatientId] = useState("");
   const [soapMigrationStatus, setSoapMigrationStatus] = useState("");
   const attendingNames = getActiveAttendingNames(patients);
@@ -666,21 +757,42 @@ function PatientBoardPage({
       return;
     }
 
+    const requestId = bulkAnalysisRequestRef.current + 1;
+    bulkAnalysisRequestRef.current = requestId;
     setBulkLoading(true);
     const targetPatient = bulkTargetPatient;
-    const matchingPatients = targetPatient ? [targetPatient] : activeSourcePatients;
     const analysisText = targetPatient ? selectedPatientContext(targetPatient, bulkText) : bulkText;
     const targetUpdateOnly = Boolean(targetPatient && looksLikeDiscreteTargetUpdate(bulkText));
+    const reviewDate = todayKey();
     const localDraftsForCurrentInput = () =>
       targetPatient
         ? localTargetPatientUpdateDraft(targetPatient, bulkText)
         : localRuleBasedImportDrafts(bulkText, activeSourcePatients, bulkImportMode);
 
     const prepareDrafts = (drafts: PatientImportDraft[]) =>
-      drafts
+      assignUniqueBulkReviewIds(drafts
         .map((draft) => applyTargetPatientToDraft(draft, targetPatient))
         .map((draft) => applyClinicalKnowledgeToPatientImportDraft(draft, { targetUpdate: targetUpdateOnly }))
-        .map(routePatientImportDraft);
+        .map(routePatientImportDraft));
+
+    const captureReviewRevisions = (drafts: PatientImportDraft[]) =>
+      Object.fromEntries(
+        drafts.flatMap((draft) => {
+          const patient = resolveReviewedImportPatient(draft, activeSourcePatients, targetPatient);
+          if (!patient) return [];
+          const note = (dailyNotesByPatient[patient.id] ?? []).find((item) => item.date === reviewDate);
+          return [[draft.id, captureBulkReviewRevision(patient, note, reviewDate)]];
+        }),
+      );
+    const captureReviewSources = (drafts: PatientImportDraft[]) => {
+      const sourceChunks = splitImportChunks(bulkText);
+      return Object.fromEntries(drafts.map((draft) => [
+        draft.id,
+        targetPatient
+          ? bulkText.trim()
+          : uniquelyBoundBulkSourceChunk(sourceChunks, draft, drafts),
+      ]));
+    };
 
     try {
       const result = isDemoMode
@@ -692,28 +804,20 @@ function PatientBoardPage({
           }
         : await analyzePatientBatchText({
             rawText: analysisText,
-            deidentifiedConfirmed: true,
+            deidentifiedConfirmed: bulkConfirmed,
             importMode: bulkImportMode,
-            targetPatientId: targetPatient?.id,
-            existingPatients: matchingPatients.map((patient) => ({
-              id: patient.id,
-              bed: patient.bed,
-              patientCode: patient.patientCode,
-              age: patient.age,
-              sex: patient.sex,
-              attending: patient.attending,
-              teamOrService: patient.teamOrService,
-              primaryDiagnosis: patient.primaryDiagnosis,
-              oneLiner: patient.oneLiner,
-              underlyingDiseases: patient.underlyingDiseases,
-              activeProblems: patient.activeProblems,
-            })),
+            // Identity matching is performed locally after review. Do not add
+            // Firestore ids, bed, patient code, attending, or service to the
+            // external request beyond what the clinician explicitly pasted.
           });
       const fallbackDrafts = targetPatient && result.drafts.length === 0
         ? localDraftsForCurrentInput()
         : [];
       const knowledgeDrafts = prepareDrafts(result.drafts.length > 0 ? result.drafts : fallbackDrafts);
+      if (requestId !== bulkAnalysisRequestRef.current) return;
       setBulkDrafts(knowledgeDrafts);
+      setBulkReviewRevisions(captureReviewRevisions(knowledgeDrafts));
+      setBulkReviewSources(captureReviewSources(knowledgeDrafts));
       setSelectedDraftIds(new Set(knowledgeDrafts.map((draft) => draft.id)));
       setBulkStatus(
         knowledgeDrafts.length > 0
@@ -723,10 +827,13 @@ function PatientBoardPage({
           : "No patient cards were extracted. If this is one patient's report/progress note, choose a Target patient; for batch import, include bed or patient code in each patient block.",
       );
     } catch (error) {
+      if (requestId !== bulkAnalysisRequestRef.current) return;
       if (targetPatient) {
         const fallbackDrafts = prepareDrafts(localDraftsForCurrentInput());
         if (fallbackDrafts.length > 0) {
           setBulkDrafts(fallbackDrafts);
+          setBulkReviewRevisions(captureReviewRevisions(fallbackDrafts));
+          setBulkReviewSources(captureReviewSources(fallbackDrafts));
           setSelectedDraftIds(new Set(fallbackDrafts.map((draft) => draft.id)));
           const reason = aiFailureReason(error);
           setBulkStatus(
@@ -737,7 +844,7 @@ function PatientBoardPage({
       }
       setBulkError(friendlyBulkImportError(error, Boolean(targetPatient)));
     } finally {
-      setBulkLoading(false);
+      if (requestId === bulkAnalysisRequestRef.current) setBulkLoading(false);
     }
   }
 
@@ -757,7 +864,22 @@ function PatientBoardPage({
     });
   }
 
+  function invalidateBulkReview() {
+    bulkAnalysisRequestRef.current += 1;
+    setBulkLoading(false);
+    setBulkDrafts([]);
+    setBulkReviewRevisions({});
+    setBulkReviewSources({});
+    setSelectedDraftIds(new Set());
+    setBulkStatus("");
+    setBulkError("");
+  }
+
   async function createSelectedBulkDrafts() {
+    if (!bulkConfirmed) {
+      setBulkError("Reconfirm that the reviewed bulk source is de-identified before saving it or its audit source.");
+      return;
+    }
     const selectedDrafts = bulkDrafts.filter((draft) => selectedDraftIds.has(draft.id));
     if (selectedDrafts.length === 0) {
       setBulkError("Select at least one reviewed patient draft before saving.");
@@ -767,24 +889,74 @@ function PatientBoardPage({
     setBulkError("");
     setBulkStatus("");
     setBulkLoading(true);
+    let savedCount = 0;
     try {
+      const selectedDate = todayKey();
       for (const draft of selectedDrafts) {
-        const existingPatient =
-          draft.status === "updateCandidate" && draft.matchPatientId
-            ? activeSourcePatients.find((patient) => patient.id === draft.matchPatientId)
-            : undefined;
-        const patient = importDraftToPatient(draft, existingPatient, bulkImportMode);
+        const existingPatient = resolveReviewedImportPatient(draft, activeSourcePatients, bulkTargetPatient);
         if (existingPatient) {
-          await onSavePatient(patient);
+          const existingNote = (dailyNotesByPatient[existingPatient.id] ?? []).find((note) => note.date === selectedDate);
+          const reviewedRevision = bulkReviewRevisions[draft.id];
+          const currentRevision = captureBulkReviewRevision(existingPatient, existingNote, selectedDate);
+          const conflictReason = bulkReviewConflictReason(reviewedRevision, currentRevision);
+          if (conflictReason) {
+            throw new Error(
+              `Import blocked for ${existingPatient.bed || existingPatient.patientCode}: ${conflictReason}`,
+            );
+          }
+          if (existingNote?.soapText?.trim()) {
+            throw new Error(
+              `Import blocked for ${existingPatient.bed || existingPatient.patientCode}: ${selectedDate} already has SOAP text. Use Update SOAP so new facts cannot be hidden by or overwrite the reviewed note.`,
+            );
+          }
+          const nextNote = reviewedImportNote(draft, existingNote, selectedDate);
+          const sourceText = bulkReviewSources[draft.id] ?? "";
+          if (!sourceText) {
+            throw new Error(
+              `Import blocked for ${existingPatient.bed || existingPatient.patientCode}: the reviewed source cannot be uniquely bound by bed/patient code. Select this patient as the explicit Target and analyze again.`,
+            );
+          }
+          const audit = buildBulkImportAuditWrite({
+            patientId: existingPatient.id,
+            dailyNoteDate: selectedDate,
+            sourceText,
+            baselineText: auditNoteSnapshot(existingNote),
+            finalText: auditNoteSnapshot(nextNote),
+            baseSoapVersion: existingNote?.soapVersion ?? 0,
+            savedSoapVersion: nextNote.soapVersion,
+          });
+          const importedTasks = draft.tasks.length > 0 ? mergeTasks(existingPatient.tasks, draft.tasks) : existingPatient.tasks;
+          await onSaveDailyNote(existingPatient.id, nextNote, {
+            audit,
+            expectedSoapVersion: reviewedRevision?.noteSoapVersion ?? 0,
+            expectedPatientUpdatedAt: reviewedRevision?.patientUpdatedAt,
+            patientPatch: draft.tasks.length > 0
+              ? { tasks: importedTasks, updatedAt: nextNote.updatedAt }
+              : undefined,
+          });
         } else {
+          if (bulkImportMode === "existingInpatient") {
+            throw new Error(
+              `Import blocked for ${draft.bed || draft.patientCode || "unidentified row"}: no unique existing patient matched. Select a Target patient; no new patient was created.`,
+            );
+          }
+          const patient = importDraftToPatient(draft, undefined, bulkImportMode);
           await onCreatePatient(patient);
         }
+        savedCount += 1;
       }
-      setBulkStatus(`Saved ${selectedDrafts.length} reviewed patient draft${selectedDrafts.length > 1 ? "s" : ""}.`);
+      setBulkStatus(`Saved ${savedCount} reviewed patient draft${savedCount > 1 ? "s" : ""}. Existing-patient daily facts were written to ${selectedDate}, not appended to the patient master.`);
       setBulkDrafts((current) => current.filter((draft) => !selectedDraftIds.has(draft.id)));
+      setBulkReviewRevisions((current) => Object.fromEntries(
+        Object.entries(current).filter(([draftId]) => !selectedDraftIds.has(draftId)),
+      ));
+      setBulkReviewSources((current) => Object.fromEntries(
+        Object.entries(current).filter(([draftId]) => !selectedDraftIds.has(draftId)),
+      ));
       setSelectedDraftIds(new Set());
     } catch (error) {
       setBulkError(error instanceof Error ? error.message : "Saving selected import drafts failed.");
+      if (savedCount > 0) setBulkStatus(`${savedCount} earlier draft${savedCount > 1 ? "s were" : " was"} committed with an individual audit event before the later item was blocked.`);
     } finally {
       setBulkLoading(false);
     }
@@ -810,17 +982,52 @@ function PatientBoardPage({
     let saved = 0;
     for (const patient of soapMigrationCandidates) {
       const notes = dailyNotesByPatient[patient.id] ?? [];
-      const baseNote = notes.find((note) => note.date === selectedDate) ?? emptyDailyNote(selectedDate);
+      const existingNote = notes.find((note) => note.date === selectedDate);
+      const baseNote = existingNote ?? emptyDailyNote(selectedDate);
       const soapText = fallbackSoapTextFromPatient(patient, notes, selectedDate);
-      await onSaveDailyNote(patient.id, {
+      const baselineSoapText = baseNote.soapText ?? "";
+      const baseSoapVersion = existingNote ? existingNote.soapVersion ?? 1 : 0;
+      const savedSoapVersion = baseSoapVersion + 1;
+      const editTrace = buildSoapEditTrace({
+        source: "manual",
+        beforeText: baselineSoapText,
+        baselineText: baselineSoapText,
+        workflowMode: "dailyUpdate",
+        afterText: soapText,
+        baseSoapVersion,
+        savedSoapVersion,
+        savedAt: now,
+      });
+      const nextNote: DailyNote = {
         ...baseNote,
         date: selectedDate,
         soapText,
         soapStatus: "reviewed",
         soapUpdatedAt: now,
-        soapVersion: 1,
+        soapVersion: savedSoapVersion,
+        soapEditHistory: appendSoapEditTrace(baseNote.soapEditHistory, editTrace),
         createdAt: baseNote.createdAt || now,
         updatedAt: now,
+      };
+      const audit = buildSoapAuditWrite({
+        patientId: patient.id,
+        dailyNoteDate: selectedDate,
+        entrypoint: "board.soap",
+        origin: {
+          source: "manual",
+          beforeText: baselineSoapText,
+          baselineText: baselineSoapText,
+          workflowMode: "dailyUpdate",
+        },
+        finalText: soapText,
+        editTrace,
+        baseSoapVersion,
+        savedSoapVersion,
+      });
+      await onSaveDailyNote(patient.id, nextNote, {
+        audit,
+        expectedSoapVersion: baseSoapVersion,
+        expectedPatientUpdatedAt: persistedPatientUpdatedAt(patient),
       });
       saved += 1;
     }
@@ -1048,6 +1255,8 @@ function PatientBoardPage({
             onChange={(event) => {
               setBulkImportMode(event.target.value as BulkImportMode);
               if (event.target.value !== "existingInpatient") setBulkTargetPatientId("");
+              setBulkConfirmed(false);
+              invalidateBulkReview();
             }}
           >
             <option value="existingInpatient">Existing inpatient / transfer-in</option>
@@ -1059,7 +1268,11 @@ function PatientBoardPage({
             Target patient for one-patient paste
             <select
               value={bulkTargetPatientId}
-              onChange={(event) => setBulkTargetPatientId(event.target.value)}
+              onChange={(event) => {
+                setBulkTargetPatientId(event.target.value);
+                setBulkConfirmed(false);
+                invalidateBulkReview();
+              }}
             >
               <option value="">No target - batch text must include bed or patient code</option>
               {activeSourcePatients.map((patient) => (
@@ -1087,7 +1300,11 @@ function PatientBoardPage({
           <textarea
             className="bulk-import-textarea"
             value={bulkText}
-            onChange={(event) => setBulkText(event.target.value)}
+            onChange={(event) => {
+              setBulkText(event.target.value);
+              setBulkConfirmed(false);
+              invalidateBulkReview();
+            }}
             placeholder={bulkTargetPatient
               ? "Paste this patient's de-identified latest progress, labs, imaging report, consult note, or transfer summary. Nothing is saved until you review and apply the update draft."
               : bulkImportMode === "existingInpatient"
@@ -1102,7 +1319,7 @@ function PatientBoardPage({
               checked={bulkConfirmed}
               onChange={(event) => setBulkConfirmed(event.target.checked)}
             />
-            Text is de-identified and ready for clinician-reviewed draft extraction.
+            The pasted text and selected clinical context are de-identified (including no real patient code/name) and may be sent to external AI.
           </label>
           <button type="button" onClick={analyzeBulkText} disabled={bulkLoading}>
             {bulkLoading ? "Working..." : bulkTargetPatient ? "Analyze selected patient update" : "Analyze batch"}
@@ -1191,6 +1408,13 @@ function PatientBoardPage({
                         const [primaryDiagnosis = "", ...rest] = event.target.value.split(/\r?\n/);
                         updateBulkDraft(draft.id, { primaryDiagnosis, oneLiner: rest.join("\n") });
                       }}
+                    />
+                  </label>
+                  <label>
+                    Chief complaint
+                    <textarea
+                      value={draft.chiefComplaint}
+                      onChange={(event) => updateBulkDraft(draft.id, { chiefComplaint: event.target.value })}
                     />
                   </label>
                   <label>
@@ -1289,8 +1513,8 @@ function PatientBoardPage({
                     <span className="muted">One task per line. Optional metadata: [urgent, lab, YYYY-MM-DD].</span>
                   </label>
                   <details className="bulk-import-source span-2">
-                    <summary>Original extracted text</summary>
-                    <pre>{draft.sourceExcerpt || "No source excerpt available."}</pre>
+                    <summary>Original pasted source</summary>
+                    <pre>{bulkReviewSources[draft.id] || "Exact source unavailable: select an explicit Target patient and analyze again."}</pre>
                   </details>
                 </div>
               </article>
@@ -1394,7 +1618,7 @@ function PatientBoardPage({
               ? roundView.header.find((line) => /^Red flags:/i.test(line.raw))?.raw.replace(/^Red flags:\s*/i, "") ?? ""
               : "";
             const contextLines = soapHeaderLinesForDisplay(
-              roundView.header.map((line) => line.raw).filter((line) => isSoapHeaderLineVisible(line, roundingLayout) && !/^Red flags:|^Date:|^Attending:/i.test(line)),
+              roundView.header.map((line) => line.raw).filter((line) => isSoapHeaderLineVisible(line, roundingLayout) && !/^Red flags:|^Date:|^Attending:|^Code:|^Allergy:|^Isolation:|^HD\/POD:/i.test(line)),
               {
                 dx: fallbackDiagnosis,
                 issues: hasReviewedSoap ? "" : digest.issues,
@@ -1402,13 +1626,15 @@ function PatientBoardPage({
               },
               { maxLines: 6, maxChars: 120 },
             ).filter((line) => !patient.patientCode || !line.includes(patient.patientCode));
+            const safetyHeaderLines = soapHeaderSafetyLinesForDisplay(roundView.header.map((line) => line.raw));
             const visibleSubjectiveLines = isLayoutSectionVisible(roundingLayout, "subjective") ? roundView.subjective : [];
             const visibleObjectiveLines = roundView.objective.all.filter((line) => isObjectiveSoapLineVisible(line.raw, roundingLayout));
             const groupedObjectiveLabLines = visibleObjectiveLines.filter((line) => line.kind === "lab");
             const groupedObjectiveNonLabLines = visibleObjectiveLines.filter((line) => line.kind !== "lab");
             const prioritizedObjectiveNonLabLines = selectRoundNoteLines(groupedObjectiveNonLabLines, 3);
             const visibleApProblems = isLayoutSectionVisible(roundingLayout, "assessmentPlan") ? roundView.assessmentPlan : [];
-            const mergedApText = visibleApProblems
+            const prioritizedApProblems = prioritizeRoundNoteProblems(visibleApProblems);
+            const mergedApText = prioritizedApProblems
               .map((problem) => [problem.title.text, ...problem.lines.map((line) => line.text)].filter(Boolean).join(": "))
               .filter(Boolean)
               .join("； ");
@@ -1471,6 +1697,11 @@ function PatientBoardPage({
                       <span>{redFlagLine}</span>
                     </div>
                   )}
+                  <div className="board-soap-header-safety" aria-label="Header safety fields">
+                    {safetyHeaderLines.map((line) => (
+                      <span className={/MISSING/i.test(line) ? "badge urgent" : "badge normal"} key={line}>{line}</span>
+                    ))}
+                  </div>
                   <div className="board-soap-header-lines">
                     {contextLines.slice(0, 5).map((line) => (
                       <div className={/^Dx:/i.test(line) ? "board-soap-header-primary" : "board-soap-header-line"} key={line}>
@@ -1523,7 +1754,7 @@ function PatientBoardPage({
                       renderBoardVisualLines(mergedApText ? [mergedApLine] : [], "-", 1, preferences.keywordHighlightRules)
                     ) : (
                       <div className="board-soap-ap-list">
-                        {visibleApProblems.slice(0, roundingLayout.boardDensity === "normal" ? 5 : 4).map((problem) => {
+                        {prioritizedApProblems.slice(0, roundingLayout.boardDensity === "normal" ? 5 : 4).map((problem) => {
                           const problemClass = boardProblemClass(problem);
                           const problemCarried =
                             !problemClass.includes("critical") &&
@@ -1652,7 +1883,7 @@ function PatientBoardPage({
               {openSoapComposerPatientId === patient.id && (
                 <div className="patient-board-inline-soap">
                   <RoundSoapComposer
-                    patient={patient}
+                    patient={activeSourcePatients.find((source) => source.id === patient.id) ?? patient}
                     dailyNotes={dailyNotesByPatient[patient.id] ?? []}
                     selectedDate={todayKey()}
                     isDemoMode={isDemoMode}
@@ -1660,7 +1891,7 @@ function PatientBoardPage({
                     layoutPreferences={roundingLayout}
                     aiStyleProfile={preferences.aiStyleProfile}
                     keywordRules={preferences.keywordHighlightRules}
-                    onSavePatient={onSavePatient}
+                    auditEntrypoint="board.soap"
                     onSaveDailyNote={onSaveDailyNote}
                   />
                 </div>

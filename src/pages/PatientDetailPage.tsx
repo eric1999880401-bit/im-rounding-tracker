@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { Link, useParams } from "react-router-dom";
-import type { DailyNote, DailyNotesByPatient, Patient, UserPreferences } from "../types";
+import type { DailyNote, DailyNotesByPatient, Patient, SaveDailyNoteOptions, UserPreferences } from "../types";
 import PatientForm from "../components/PatientForm";
 import AdmissionBriefForm from "../components/AdmissionBriefForm";
 import DailyNoteForm from "../components/DailyNoteForm";
@@ -9,6 +9,7 @@ import AiIntakePanel from "../components/AiIntakePanel";
 import ClinicalDocumentQuickActions from "../components/ClinicalDocumentQuickActions";
 import { ClinicalText } from "../components/ClinicalText";
 import RoundSoapComposer from "../components/RoundSoapComposer";
+import ClinicalAuditTrailPanel from "../components/ClinicalAuditTrailPanel";
 import LabHistoryPanel from "../components/LabHistoryPanel";
 import ActiveProblemEditor from "../components/ActiveProblemEditor";
 import { buildConcisePatientClinicalUpdate } from "../clinicalPatientPolish";
@@ -22,21 +23,19 @@ import {
 } from "../components/icons";
 import { useT } from "../i18n";
 import {
-  dailyNoteFromPatient,
   dailyNoteFromPatientPreservingSoap,
   dailyNoteMatchesSavedSnapshot,
   emptyDailyNote,
   getLatestNonEmptyDailyNote,
-  getPatientDisplaySummary,
   nowIso,
-  patientForDate,
   patientWithDailyNote,
   textToItems,
   todayKey,
 } from "../utils";
 import { getRoundingDigest } from "../roundingDigest";
-import { fallbackSoapTextFromPatient, getCanonicalSoapText, parseSoapText, soapPreviewTextFromPatient, soapTextToPatientPatch } from "../soapDraft";
+import { fallbackSoapTextFromPatient, getCanonicalSoapText, parseSoapText, reviewedSoapCompletenessIssues, soapPreviewTextFromPatient, soapTextToPatientPatch } from "../soapDraft";
 import { conciseSoapDiagnosisForDisplay } from "../soapDisplay";
+import { retargetSoapDateHeader } from "../clinicalDataSafety";
 import { normalizeRoundingLayoutPreferences } from "../userPreferences";
 import {
   canRedo,
@@ -58,6 +57,15 @@ import {
   writeRecoveryDraft,
   type RecoveryDraft,
 } from "../draftRecovery";
+import { buildDittoAuditWrite } from "../clinicalAudit";
+import {
+  patientDetailEditorPatient,
+  persistedPatientUpdatedAt,
+  pickAiIntakePatientPatch,
+  pickAtomicPatientPatch,
+  reconcilePatientDraftRevision,
+  selectedDailyNoteContext,
+} from "../patientWriteSafety";
 
 interface PageProps {
   patients: Patient[];
@@ -66,7 +74,7 @@ interface PageProps {
   dataLoading?: boolean;
   isDemoMode?: boolean;
   onSavePatient: (patient: Patient) => Promise<void>;
-  onSaveDailyNote: (patientId: string, note: DailyNote) => Promise<void>;
+  onSaveDailyNote: (patientId: string, note: DailyNote, options?: SaveDailyNoteOptions) => Promise<void>;
 }
 
 type DetailTab = "rounds" | "objective" | "assessmentPlan" | "tasksDischarge" | "aiIntake" | "more";
@@ -156,39 +164,6 @@ function shouldPromptForAdmissionBrief(patient: Patient) {
   return (patient.isNewAdmission || patient.showAdmissionBriefOnPrint) && !hasReviewedAdmissionBrief(patient);
 }
 
-function mergeNoteWithFallback(note: DailyNote, fallbackPatient: Patient, date: string): DailyNote {
-  const fallbackNote = dailyNoteFromPatient(fallbackPatient, date);
-  const textOrFallback = (value: string, fallback: string) => (value.trim() ? value : fallback);
-  const arrayOrFallback = <T,>(value: T[], fallback: T[]) => (value.length > 0 ? value : fallback);
-
-  return {
-    ...fallbackNote,
-    ...note,
-    importantRedFlags: textOrFallback(note.importantRedFlags, fallbackNote.importantRedFlags),
-    overnightEvents: textOrFallback(note.overnightEvents, fallbackNote.overnightEvents),
-    subjectiveOrChiefConcern: textOrFallback(note.subjectiveOrChiefConcern, fallbackNote.subjectiveOrChiefConcern),
-    vitalSigns: textOrFallback(note.vitalSigns, fallbackNote.vitalSigns),
-    bloodSugar: textOrFallback(note.bloodSugar, fallbackNote.bloodSugar),
-    physicalExam: textOrFallback(note.physicalExam, fallbackNote.physicalExam),
-    labSummary: textOrFallback(note.labSummary, fallbackNote.labSummary),
-    imageSummary: textOrFallback(note.imageSummary, fallbackNote.imageSummary),
-    assessment: textOrFallback(note.assessment, fallbackNote.assessment),
-    plan: textOrFallback(note.plan, fallbackNote.plan),
-    dischargePlan: textOrFallback(note.dischargePlan, fallbackNote.dischargePlan),
-    vsOrder: textOrFallback(note.vsOrder, fallbackNote.vsOrder),
-    rawLabText: textOrFallback(note.rawLabText, fallbackNote.rawLabText),
-    labDate: note.labDate || fallbackNote.labDate,
-    labReportTitle: note.labReportTitle || fallbackNote.labReportTitle,
-    labReports: arrayOrFallback(note.labReports, fallbackNote.labReports),
-    parsedLabItems: arrayOrFallback(note.parsedLabItems, fallbackNote.parsedLabItems),
-    physicalExamEntries: arrayOrFallback(note.physicalExamEntries, fallbackNote.physicalExamEntries),
-    imageStudyEntries: arrayOrFallback(note.imageStudyEntries, fallbackNote.imageStudyEntries),
-    assessmentPlanItems: arrayOrFallback(note.assessmentPlanItems, fallbackNote.assessmentPlanItems),
-    createdAt: note.createdAt || fallbackNote.createdAt,
-    updatedAt: note.updatedAt || fallbackNote.updatedAt,
-  };
-}
-
 function crisisCarryForwardScore(value: string) {
   const text = value.toLowerCase();
   let score = 0;
@@ -254,16 +229,13 @@ function PatientDetailPage({
   const [selectedDate, setSelectedDate] = useState(todayKey());
   const patientNotes = patientId ? dailyNotesByPatient[patientId] ?? EMPTY_PATIENT_NOTES : EMPTY_PATIENT_NOTES;
   const selectedNote = patientNotes.find((note) => note.date === selectedDate);
-  const displayFallbackPatient = sourcePatient ? patientForDate(sourcePatient, dailyNotesByPatient, selectedDate) : null;
-  const displaySummary = sourcePatient ? getPatientDisplaySummary(sourcePatient, dailyNotesByPatient, selectedDate) : null;
-  const selectedDraftNote =
-    selectedNote && displayFallbackPatient
-      ? mergeNoteWithFallback(selectedNote, displayFallbackPatient, selectedDate)
-      : displayFallbackPatient
-        ? dailyNoteFromPatient(displayFallbackPatient, selectedDate)
-        : emptyDailyNote(selectedDate);
-  const initialDraft = displayFallbackPatient ? patientWithDailyNote(displayFallbackPatient, selectedDraftNote) : null;
-  const initialSoapEditorText = initialDraft ? soapPreviewTextFromPatient(initialDraft, patientNotes, selectedDate) : "";
+  // Display selectors may fall back to older notes, but writable editor state
+  // is bounded to the source patient and the exact selected-date note only.
+  const editorDailyNotes = selectedDailyNoteContext(patientNotes, selectedDate);
+  const initialDraft = patientDetailEditorPatient(sourcePatient);
+  const initialSoapEditorText = initialDraft && selectedNote
+    ? soapPreviewTextFromPatient(patientWithDailyNote(initialDraft, selectedNote), editorDailyNotes, selectedDate)
+    : "";
   const [draftPatient, setDraftPatient] = useState<Patient | null>(initialDraft);
   const [detailHistory, setDetailHistory] = useState<UndoRedoHistory<DetailRecoveryPayload | null>>(() =>
     createUndoRedoHistory(initialDraft ? { patient: initialDraft, soapEditorText: initialSoapEditorText } : null),
@@ -282,6 +254,7 @@ function PatientDetailPage({
   const [admissionPromptOpen, setAdmissionPromptOpen] = useState(false);
   const [admissionPromptDismissedPatientId, setAdmissionPromptDismissedPatientId] = useState("");
   const draftRef = useRef<Patient | null>(initialDraft);
+  const draftPersistedRevisionRef = useRef(initialDraft ? persistedPatientUpdatedAt(initialDraft) : "");
   const detailHistoryRef = useRef(detailHistory);
   const soapEditorTextRef = useRef(initialSoapEditorText);
   const isDirtyRef = useRef(false);
@@ -292,7 +265,9 @@ function PatientDetailPage({
   const detailRecoveryScope = sourcePatient ? { kind: "patientDetail" as const, patientId: sourcePatient.id, selectedDate } : null;
   const detailRecoveryBaseline = initialDraft ? { patient: initialDraft, soapEditorText: initialSoapEditorText } : null;
   const detailRecoveryBaselineUpdatedAt = selectedNote?.updatedAt || initialDraft?.updatedAt || "";
-  const detailRecoveryStorage = getSessionDraftStorage();
+  // Real clinical drafts must not be duplicated into browser storage. Demo
+  // recovery remains useful because demo fixtures contain no patient data.
+  const detailRecoveryStorage = isDemoMode ? getSessionDraftStorage() : null;
 
   useEffect(() => {
     detailHistoryRef.current = detailHistory;
@@ -350,15 +325,18 @@ function PatientDetailPage({
 
     const changedPatient = draftRef.current?.id !== sourcePatient.id;
     const canAcceptSnapshot = changedPatient || (!isDirtyRef.current && !soapEditorDirtyRef.current && !roundSoapDirtyRef.current && !isComposingRef.current);
+    draftPersistedRevisionRef.current = reconcilePatientDraftRevision(
+      draftPersistedRevisionRef.current,
+      sourcePatient,
+      canAcceptSnapshot,
+    );
 
     if (canAcceptSnapshot) {
-      const scopedDailyNotesByPatient = { [sourcePatient.id]: patientNotes };
-      const nextDisplayPatient = patientForDate(sourcePatient, scopedDailyNotesByPatient, selectedDate);
-      const nextNote = selectedNote
-        ? mergeNoteWithFallback(selectedNote, nextDisplayPatient, selectedDate)
-        : dailyNoteFromPatient(nextDisplayPatient, selectedDate);
-      const nextPatient = patientWithDailyNote(nextDisplayPatient, nextNote);
-      const nextSoapEditorText = soapPreviewTextFromPatient(nextPatient, patientNotes, selectedDate);
+      const nextPatient = patientDetailEditorPatient(sourcePatient);
+      if (!nextPatient) return;
+      const nextSoapEditorText = selectedNote
+        ? soapPreviewTextFromPatient(patientWithDailyNote(nextPatient, selectedNote), [selectedNote], selectedDate)
+        : "";
       draftRef.current = nextPatient;
       setDraftPatient(nextPatient);
       soapEditorTextRef.current = nextSoapEditorText;
@@ -412,6 +390,19 @@ function PatientDetailPage({
 
   const currentPatient = draftPatient;
 
+  function expectedDraftPatientRevision(patient: Patient): string {
+    return draftPersistedRevisionRef.current || persistedPatientUpdatedAt(patient);
+  }
+
+  function advanceDraftPatientRevision(patient: Patient) {
+    patient.persistedUpdatedAt = patient.updatedAt;
+    draftPersistedRevisionRef.current = reconcilePatientDraftRevision(
+      draftPersistedRevisionRef.current,
+      patient,
+      true,
+    );
+  }
+
   function updateDraft(nextPatient: Patient) {
     const nextPayload = { patient: nextPatient, soapEditorText: soapEditorTextRef.current };
     const nextHistory = pushUndoRedoEdit(detailHistoryRef.current, nextPayload, detailPayloadEquals);
@@ -436,6 +427,11 @@ function PatientDetailPage({
 
   function restoreDetailPayload(payload: DetailRecoveryPayload | null, message: string) {
     if (!payload) return;
+    draftPersistedRevisionRef.current = reconcilePatientDraftRevision(
+      draftPersistedRevisionRef.current,
+      payload.patient,
+      true,
+    );
     draftRef.current = payload.patient;
     setDraftPatient(payload.patient);
     soapEditorTextRef.current = payload.soapEditorText;
@@ -523,14 +519,19 @@ function PatientDetailPage({
 
   async function commitDraft(patientToSave = draftRef.current) {
     if (!patientToSave || isComposingRef.current) return;
+    const expectedPatientUpdatedAt = expectedDraftPatientRevision(patientToSave);
 
-    const nextPatient = { ...patientToSave, updatedAt: nowIso() };
-    const nextNote = noteFromDraft(nextPatient);
-    markPendingSavedDailyNote(nextPatient.id, nextNote);
+    // Patient Info / Admission saves are patient-only. Creating or updating a
+    // daily note must be an explicit SOAP action.
+    const nextPatient = {
+      ...patientToSave,
+      persistedUpdatedAt: expectedPatientUpdatedAt,
+      updatedAt: nowIso(),
+    };
     draftRef.current = nextPatient;
     setDraftPatient(nextPatient);
     await onSavePatient(nextPatient);
-    await onSaveDailyNote(nextPatient.id, nextNote);
+    advanceDraftPatientRevision(nextPatient);
     setIsDirty(false);
     isDirtyRef.current = false;
     if (detailRecoveryScope) removeRecoveryDraft(detailRecoveryStorage, detailRecoveryScope);
@@ -539,8 +540,14 @@ function PatientDetailPage({
   }
 
   async function createSelectedDateNote() {
-    if (!draftRef.current) return;
-    await commitDraft(draftRef.current);
+    if (!sourcePatient || selectedNote) return;
+    // Never seed a new note from master fields or a previous-date fallback.
+    const newNote = emptyDailyNote(selectedDate);
+    markPendingSavedDailyNote(sourcePatient.id, newNote);
+    await onSaveDailyNote(sourcePatient.id, newNote, {
+      expectedSoapVersion: 0,
+      expectedPatientUpdatedAt: expectedDraftPatientRevision(draftRef.current ?? sourcePatient),
+    });
   }
 
   async function saveAdmissionPrompt() {
@@ -566,6 +573,7 @@ function PatientDetailPage({
     const nextNote: DailyNote = {
       ...baseNote,
       date: selectedDate,
+      soapVersion: selectedNote ? Math.max(1, Number(selectedNote.soapVersion) || 1) + 1 : 1,
       createdAt: selectedNote?.createdAt || now,
       updatedAt: now,
     };
@@ -632,15 +640,20 @@ function PatientDetailPage({
     const safeNextPatient = {
       ...nextPatient,
       importantRedFlags: appendUniqueClinicalText(nextPatient.importantRedFlags, carriedRedFlags),
+      updatedAt: nowIso(),
     };
     const acceptedNote = buildAiAcceptedDailyNote(acceptedNotePatch, previousNote ?? null);
     markPendingSavedDailyNote(safeNextPatient.id, acceptedNote);
 
     draftRef.current = safeNextPatient;
     setDraftPatient(safeNextPatient);
-    await onSavePatient(safeNextPatient);
-    await onSaveDailyNote(safeNextPatient.id, acceptedNote);
-    const nextSoapText = soapPreviewTextFromPatient(safeNextPatient, [acceptedNote, ...patientNotes], selectedDate);
+    await onSaveDailyNote(safeNextPatient.id, acceptedNote, {
+      expectedSoapVersion: selectedNote?.soapVersion ?? 0,
+      expectedPatientUpdatedAt: expectedDraftPatientRevision(safeNextPatient),
+      patientPatch: pickAiIntakePatientPatch(safeNextPatient),
+    });
+    advanceDraftPatientRevision(safeNextPatient);
+    const nextSoapText = soapPreviewTextFromPatient(safeNextPatient, [acceptedNote], selectedDate);
     setSoapEditorText(nextSoapText);
     soapEditorTextRef.current = nextSoapText;
     setSoapEditorDirty(false);
@@ -654,7 +667,12 @@ function PatientDetailPage({
 
   async function saveSoapEditor() {
     if (!draftRef.current || isComposingRef.current) return;
-    const currentSoapText = soapEditorText || soapPreviewTextFromPatient(draftRef.current, patientNotes, selectedDate);
+    const currentSoapText = soapEditorText || (
+      selectedNote
+        ? soapPreviewTextFromPatient(patientWithDailyNote(draftRef.current, selectedNote), [selectedNote], selectedDate)
+        : ""
+    );
+    if (!currentSoapText.trim()) return;
     const patch = soapTextToPatientPatch(currentSoapText, draftRef.current, selectedDate);
     const now = nowIso();
     const nextPatient = { ...patch.patient, updatedAt: now };
@@ -662,6 +680,7 @@ function PatientDetailPage({
       ...noteFromDraft(nextPatient),
       ...patch.dailyNotePatch,
       date: selectedDate,
+      soapVersion: selectedNote ? Math.max(1, Number(selectedNote.soapVersion) || 1) + 1 : 1,
       createdAt: selectedNote?.createdAt || now,
       updatedAt: now,
     };
@@ -669,9 +688,13 @@ function PatientDetailPage({
     markPendingSavedDailyNote(nextPatient.id, nextNote);
     draftRef.current = nextPatient;
     setDraftPatient(nextPatient);
-    await onSavePatient(nextPatient);
-    await onSaveDailyNote(nextPatient.id, nextNote);
-    const nextSoapText = soapPreviewTextFromPatient(nextPatient, [nextNote, ...patientNotes], selectedDate);
+    await onSaveDailyNote(nextPatient.id, nextNote, {
+      expectedSoapVersion: selectedNote?.soapVersion ?? 0,
+      expectedPatientUpdatedAt: expectedDraftPatientRevision(nextPatient),
+      patientPatch: pickAtomicPatientPatch(nextPatient),
+    });
+    advanceDraftPatientRevision(nextPatient);
+    const nextSoapText = soapPreviewTextFromPatient(nextPatient, [nextNote], selectedDate);
     setSoapEditorText(nextSoapText);
     soapEditorTextRef.current = nextSoapText;
     setSoapEditorDirty(false);
@@ -699,8 +722,12 @@ function PatientDetailPage({
     setQuickVsOrder("");
     draftRef.current = nextPatient;
     setDraftPatient(nextPatient);
-    await onSavePatient(nextPatient);
-    await onSaveDailyNote(nextPatient.id, nextNote);
+    await onSaveDailyNote(nextPatient.id, nextNote, {
+      expectedSoapVersion: selectedNote?.soapVersion ?? 0,
+      expectedPatientUpdatedAt: expectedDraftPatientRevision(nextPatient),
+      patientPatch: pickAtomicPatientPatch(nextPatient),
+    });
+    advanceDraftPatientRevision(nextPatient);
     setIsDirty(false);
     isDirtyRef.current = false;
     if (detailRecoveryScope) removeRecoveryDraft(detailRecoveryStorage, detailRecoveryScope);
@@ -712,22 +739,53 @@ function PatientDetailPage({
     if (!sourcePatient) return;
     const sourceNote = patientNotes.find((note) => note.date === selectedDittoDate);
     if (!sourceNote) return;
+    const sourceSoapText = String(sourceNote.soapText ?? "").trim();
+    const sourceIssues = reviewedSoapCompletenessIssues(sourceSoapText);
+    if (sourceNote.soapStatus !== "reviewed" || sourceIssues.length > 0) {
+      window.alert("DITTO is blocked because the source is not a complete reviewed SOAP. Open that date, review it, and save it first.");
+      return;
+    }
     const todayExists = Boolean(selectedNote);
     const message = todayExists
-      ? `Overwrite this date's SOAP draft from ${sourceNote.date}? This will not delete old notes or patient-level data.`
-      : `DITTO copies ${sourceNote.date} into this date. It will not delete old notes or patient-level data.`;
+      ? `Replace this date's SOAP fields with the complete reviewed SOAP from ${sourceNote.date}? The existing target note is preserved in change history.`
+      : `Create this date from the complete reviewed SOAP on ${sourceNote.date}? The copy is recorded in change history.`;
     if (!window.confirm(message)) return;
+    const now = nowIso();
+    const baseNote = selectedNote ?? emptyDailyNote(selectedDate);
+    const savedSoapVersion = selectedNote ? Math.max(1, Number(selectedNote.soapVersion) || 1) + 1 : 1;
+    const copiedSoapText = retargetSoapDateHeader(sourceSoapText, selectedDate);
+    const sourcePatch = soapTextToPatientPatch(copiedSoapText, sourcePatient, selectedDate);
     const copiedNote: DailyNote = {
-      ...sourceNote,
+      ...baseNote,
+      ...sourcePatch.dailyNotePatch,
       date: selectedDate,
-      createdAt: selectedNote?.createdAt || nowIso(),
-      updatedAt: nowIso(),
+      soapText: copiedSoapText,
+      soapStatus: "reviewed",
+      soapVersion: savedSoapVersion,
+      soapEditHistory: [],
+      soapUpdatedAt: now,
+      createdAt: selectedNote?.createdAt || now,
+      updatedAt: now,
     };
-    const nextPatient = patientWithDailyNote(patientForDate(sourcePatient, dailyNotesByPatient, selectedDate), copiedNote);
+    const audit = buildDittoAuditWrite({
+      patientId: sourcePatient.id,
+      dailyNoteDate: selectedDate,
+      sourceDate: sourceNote.date,
+      baselineText: String(selectedNote?.soapText ?? ""),
+      copiedText: copiedSoapText,
+      baseSoapVersion: selectedNote?.soapVersion ?? 0,
+      savedSoapVersion,
+    });
+    const nextPatient = patientDetailEditorPatient(sourcePatient);
+    if (!nextPatient) return;
     markPendingSavedDailyNote(sourcePatient.id, copiedNote);
     draftRef.current = nextPatient;
     setDraftPatient(nextPatient);
-    await onSaveDailyNote(sourcePatient.id, copiedNote);
+    await onSaveDailyNote(sourcePatient.id, copiedNote, {
+      audit,
+      expectedSoapVersion: selectedNote?.soapVersion ?? 0,
+      expectedPatientUpdatedAt: expectedDraftPatientRevision(draftRef.current ?? sourcePatient),
+    });
     setIsDirty(false);
     isDirtyRef.current = false;
     if (detailRecoveryScope) removeRecoveryDraft(detailRecoveryStorage, detailRecoveryScope);
@@ -807,11 +865,11 @@ function PatientDetailPage({
         <div className="detail-date-controls">
           <label>
             Date
-            <input type="date" value={selectedDate} onChange={(event) => setSelectedDate(event.target.value)} />
+            <input type="date" value={selectedDate} onChange={(event) => handleSelectedDateChange(event.target.value)} />
           </label>
           {!selectedNote && (
             <button type="button" onClick={createSelectedDateNote}>
-              Create today note
+              Create empty note
             </button>
           )}
           {renderDittoControls()}
@@ -856,23 +914,14 @@ function PatientDetailPage({
         </div>
 
         <RoundSoapComposer
-          patient={currentPatient}
-          dailyNotes={patientNotes}
+          patient={sourcePatient ?? currentPatient}
+          dailyNotes={editorDailyNotes}
           selectedDate={selectedDate}
           isDemoMode={isDemoMode}
-          onSavePatient={async (nextPatient) => {
-            draftRef.current = nextPatient;
-            setDraftPatient(nextPatient);
-            await onSavePatient(nextPatient);
-            setIsDirty(false);
-            isDirtyRef.current = false;
-            if (detailRecoveryScope) removeRecoveryDraft(detailRecoveryStorage, detailRecoveryScope);
-            setDetailRecoveryDraft(null);
-            setDetailRecoverySavedAt("");
-          }}
-          onSaveDailyNote={async (patientId, note) => {
+          auditEntrypoint="detail.soap"
+          onSaveDailyNote={async (patientId, note, options) => {
             markPendingSavedDailyNote(patientId, note);
-            await onSaveDailyNote(patientId, note);
+            await onSaveDailyNote(patientId, note, options);
           }}
           externalSoapText={externalSoapDraft.text}
           externalSoapRevision={externalSoapDraft.revision}
@@ -882,6 +931,7 @@ function PatientDetailPage({
           keywordRules={preferences.keywordHighlightRules}
           onDirtyChange={updateRoundSoapDirty}
         />
+        <ClinicalAuditTrailPanel patientId={currentPatient.id} isDemoMode={isDemoMode} />
       </section>
     );
   }
@@ -1038,7 +1088,7 @@ function PatientDetailPage({
         </label>
         {!selectedNote && (
           <button type="button" onClick={createSelectedDateNote}>
-            Create today note
+            Create empty note
           </button>
         )}
         {renderDittoControls()}

@@ -52,6 +52,23 @@ export interface RoundNoteViewModelOptions {
   chronicRenal?: boolean;
 }
 
+export function prioritizeRoundNoteProblems(problems: RoundNoteProblemView[]) {
+  const toneRank: Record<ClinicalLineTone, number> = {
+    critical: 0,
+    important: 1,
+    info: 2,
+    plain: 3,
+  };
+  return problems
+    .map((problem, index) => ({
+      problem,
+      index,
+      priority: Math.min(...[problem.title, ...problem.lines].map((line) => toneRank[line.tone] ?? 3)),
+    }))
+    .sort((left, right) => left.priority - right.priority || left.index - right.index)
+    .map(({ problem }) => problem);
+}
+
 export function selectRoundNoteLines(lines: RoundNoteLineView[], maxItems: number) {
   if (lines.length <= maxItems) return lines;
   const required = new Set(

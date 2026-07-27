@@ -1,6 +1,6 @@
 import { Navigate, Route, Routes } from "react-router-dom";
 import { Suspense, lazy, useEffect, useState } from "react";
-import type { DailyNote, DailyNotesByPatient, MiscTask, Patient, PhonebookContact, StudyTopic, UserPreferences } from "./types";
+import type { DailyNote, DailyNotesByPatient, MiscTask, Patient, PhonebookContact, SaveDailyNoteOptions, SavePatientOptions, StudyTopic, UserPreferences } from "./types";
 import AppLayout from "./components/AppLayout";
 import AuthPage from "./pages/AuthPage";
 
@@ -14,6 +14,7 @@ const UtilitiesPage = lazy(() => import("./pages/UtilitiesPage"));
 const AiDocumentsPage = lazy(() => import("./pages/AiDocumentsPage"));
 import { getUserName, signOutCurrentUser, useAuthUser } from "./firebase/auth";
 import { createPatient, deletePatient, saveDailyNote, subscribeToDailyNotes, subscribeToPatients, updatePatient } from "./firebase/patientService";
+import { purgeExpiredClinicalAuditPayloads, savePatientWithAudit } from "./firebase/clinicalAuditService";
 import {
   deleteMiscTask,
   deletePhonebookContact,
@@ -30,6 +31,20 @@ import {
 import { I18nProvider } from "./i18n";
 import { mockPatients } from "./data/mockPatients";
 import { buildUserAiStyleProfile, defaultPreferences, normalizeUserPreferences } from "./userPreferences";
+import {
+  clinicalDataSnapshotsAreReady,
+  markDailyNotesSnapshotReady,
+  patientDailyNotesAreReady,
+  reconcileDailyNotesReadiness,
+  snapshotIsServerConfirmed,
+  sortDailyNotesDesc,
+  type DailyNotesReadiness,
+} from "./clinicalDataSafety";
+
+interface ScopedDailyNotesReadiness {
+  ownerUid: string;
+  patients: DailyNotesReadiness;
+}
 
 function loadPreferences() {
   try {
@@ -77,12 +92,27 @@ function App() {
   const [isDemoMode, setIsDemoMode] = useState(readDemoMode);
   const [patients, setPatients] = useState<Patient[]>(() => (isDemoMode ? cloneDemoPatients() : []));
   const [dailyNotesByPatient, setDailyNotesByPatient] = useState<DailyNotesByPatient>({});
+  const [dailyNotesReadiness, setDailyNotesReadiness] = useState<ScopedDailyNotesReadiness>({
+    ownerUid: "",
+    patients: {},
+  });
+  const [patientListServerReadyUid, setPatientListServerReadyUid] = useState("");
   const [preferences, setPreferences] = useState<UserPreferences>(loadPreferences);
   const [phonebook, setPhonebook] = useState<PhonebookContact[]>([]);
   const [miscTasks, setMiscTasks] = useState<MiscTask[]>([]);
   const [studyTopics, setStudyTopics] = useState<StudyTopic[]>([]);
-  const [dataLoading, setDataLoading] = useState(true);
   const [dataError, setDataError] = useState("");
+  const activeUid = user?.uid ?? "";
+  const patientIds = patients.map((patient) => patient.id).sort();
+  const patientIdsKey = JSON.stringify(patientIds);
+  const dailyNotesReadyByPatient = dailyNotesReadiness.ownerUid === activeUid
+    ? dailyNotesReadiness.patients
+    : {};
+  const dataLoading = !isDemoMode && Boolean(activeUid) && !clinicalDataSnapshotsAreReady(
+    patientListServerReadyUid === activeUid,
+    dailyNotesReadyByPatient,
+    patientIds,
+  );
 
   function formatSyncError(action: string, error: unknown) {
     const message = error instanceof Error ? error.message : "Unknown Firestore error";
@@ -130,13 +160,21 @@ function App() {
   }, [isDemoMode, user]);
 
   useEffect(() => {
+    if (isDemoMode || !user) return;
+    void purgeExpiredClinicalAuditPayloads(user.uid).catch(() => {
+      // Retention cleanup must never block clinical data loading or saving.
+    });
+  }, [isDemoMode, user]);
+
+  useEffect(() => {
     if (isDemoMode) {
       setPatients(cloneDemoPatients());
       setDailyNotesByPatient({});
+      setDailyNotesReadiness({ ownerUid: "", patients: {} });
+      setPatientListServerReadyUid("");
       setPhonebook([]);
       setMiscTasks([]);
       setStudyTopics([]);
-      setDataLoading(false);
       setDataError("");
       return;
     }
@@ -144,24 +182,25 @@ function App() {
     if (!user) {
       setPatients([]);
       setDailyNotesByPatient({});
+      setDailyNotesReadiness({ ownerUid: "", patients: {} });
+      setPatientListServerReadyUid("");
       setPhonebook([]);
       setMiscTasks([]);
       setStudyTopics([]);
-      setDataLoading(false);
       return;
     }
 
-    setDataLoading(true);
     setDataError("");
+    setPatientListServerReadyUid("");
+    setDailyNotesReadiness({ ownerUid: user.uid, patients: {} });
     const unsubscribe = subscribeToPatients(
       user.uid,
-      (nextPatients) => {
+      (nextPatients, metadata) => {
         setPatients(nextPatients);
-        setDataLoading(false);
+        if (snapshotIsServerConfirmed(metadata)) setPatientListServerReadyUid(user.uid);
       },
       (error) => {
         setDataError(formatSyncError("Loading patients", error));
-        setDataLoading(false);
       },
     );
 
@@ -181,17 +220,37 @@ function App() {
 
   useEffect(() => {
     if (isDemoMode) return;
-    if (!user || patients.length === 0) {
+    if (!user) return;
+
+    const subscribedPatientIds = JSON.parse(patientIdsKey) as string[];
+    if (subscribedPatientIds.length === 0) {
       setDailyNotesByPatient({});
+      setDailyNotesReadiness({ ownerUid: user.uid, patients: {} });
       return;
     }
 
-    const unsubscribes = patients.map((patient) =>
+    setDailyNotesByPatient((current) =>
+      Object.fromEntries(subscribedPatientIds.filter((patientId) => patientId in current).map((patientId) => [patientId, current[patientId]])),
+    );
+    setDailyNotesReadiness((current) => ({
+      ownerUid: user.uid,
+      patients: reconcileDailyNotesReadiness(
+        current.ownerUid === user.uid ? current.patients : {},
+        subscribedPatientIds,
+      ),
+    }));
+
+    const unsubscribes = subscribedPatientIds.map((patientId) =>
       subscribeToDailyNotes(
         user.uid,
-        patient.id,
-        (patientId, notes) => {
-          setDailyNotesByPatient((current) => ({ ...current, [patientId]: notes }));
+        patientId,
+        (readyPatientId, notes, metadata) => {
+          setDailyNotesByPatient((current) => ({ ...current, [readyPatientId]: sortDailyNotesDesc(notes) }));
+          setDailyNotesReadiness((current) => {
+            if (current.ownerUid !== user.uid) return current;
+            const nextPatients = markDailyNotesSnapshotReady(current.patients, readyPatientId, metadata);
+            return nextPatients === current.patients ? current : { ...current, patients: nextPatients };
+          });
         },
         (error) => {
           setDataError(formatSyncError("Loading daily notes", error));
@@ -202,7 +261,7 @@ function App() {
     return () => {
       unsubscribes.forEach((unsubscribe) => unsubscribe());
     };
-  }, [isDemoMode, user, patients]);
+  }, [isDemoMode, patientIdsKey, user]);
 
   function enterDemoMode() {
     if (typeof window !== "undefined") {
@@ -218,13 +277,22 @@ function App() {
     setIsDemoMode(false);
     setPatients([]);
     setDailyNotesByPatient({});
+    setDailyNotesReadiness({ ownerUid: "", patients: {} });
+    setPatientListServerReadyUid("");
   }
 
   async function createDemoPatient(patient: Patient) {
     setPatients((current) => [...current, patient]);
   }
 
-  async function updateDemoPatient(patient: Patient) {
+  async function updateDemoPatient(patient: Patient, options?: SavePatientOptions) {
+    if (options?.expectedPatientUpdatedAt !== undefined) {
+      const current = patients.find((item) => item.id === patient.id);
+      const currentRevision = current?.persistedUpdatedAt ?? current?.updatedAt ?? "";
+      if (!current || currentRevision !== options.expectedPatientUpdatedAt) {
+        throw new Error("Patient save conflict: this demo patient changed after the AI document was generated. Review and generate again.");
+      }
+    }
     setPatients((current) => current.map((item) => (item.id === patient.id ? patient : item)));
   }
 
@@ -236,7 +304,7 @@ function App() {
     });
   }
 
-  async function saveDemoDailyNote(patientId: string, note: DailyNote) {
+  async function saveDemoDailyNote(patientId: string, note: DailyNote, _options?: SaveDailyNoteOptions) {
     setDailyNotesByPatient((current) => {
       const notes = current[patientId] ?? [];
       const nextNotes = [note, ...notes.filter((item) => item.date !== note.date)].sort((a, b) =>
@@ -244,6 +312,11 @@ function App() {
       );
       return { ...current, [patientId]: nextNotes };
     });
+    if (_options?.patientPatch) {
+      setPatients((current) => current.map((patient) => (
+        patient.id === patientId ? { ...patient, ..._options.patientPatch } as Patient : patient
+      )));
+    }
   }
 
   async function createSyncedPatient(patient: Patient) {
@@ -262,15 +335,26 @@ function App() {
     }
   }
 
-  async function updateSyncedPatient(patient: Patient) {
+  async function updateSyncedPatient(patient: Patient, options?: SavePatientOptions) {
     if (!user) {
       setDataError("Saving patient failed. You must be signed in before saving patient data.");
       return;
     }
 
+    if (!patientDailyNotesAreReady(dailyNotesReadyByPatient, patient.id)) {
+      const message = "Saving patient blocked until this patient's daily notes finish loading. No clinical data was written; wait for sync and try again.";
+      setDataError(message);
+      throw new Error(message);
+    }
+
     setDataError("");
     try {
-      await updatePatient(user.uid, patient);
+      if (options?.audit) {
+        await savePatientWithAudit(user.uid, patient.id, options);
+        patient.persistedUpdatedAt = patient.updatedAt;
+      } else {
+        await updatePatient(user.uid, patient);
+      }
       setPatients((current) => current.map((item) => (item.id === patient.id ? patient : item)));
     } catch (error) {
       const message = formatSyncError("Saving patient", error);
@@ -279,15 +363,21 @@ function App() {
     }
   }
 
-  async function saveSyncedPatient(patient: Patient) {
+  async function saveSyncedPatient(patient: Patient, options?: SavePatientOptions) {
     if (!user) return;
-    await updateSyncedPatient(patient);
+    await updateSyncedPatient(patient, options);
   }
 
   async function deleteSyncedPatient(patientId: string) {
     if (!user) {
       setDataError("Deleting patient failed. You must be signed in before deleting patient data.");
       return;
+    }
+
+    if (!patientDailyNotesAreReady(dailyNotesReadyByPatient, patientId)) {
+      const message = "Deleting patient blocked until this patient's daily notes finish loading. No clinical data was changed; wait for sync and try again.";
+      setDataError(message);
+      throw new Error(message);
     }
 
     setDataError("");
@@ -300,19 +390,32 @@ function App() {
     }
   }
 
-  async function saveSyncedDailyNote(patientId: string, note: DailyNote) {
+  async function saveSyncedDailyNote(patientId: string, note: DailyNote, options?: SaveDailyNoteOptions) {
     if (!user) {
       setDataError("Saving daily note failed. You must be signed in before saving patient data.");
       return;
     }
 
+    if (!patientDailyNotesAreReady(dailyNotesReadyByPatient, patientId)) {
+      const message = "Saving daily note blocked until this patient's existing notes finish loading. No clinical data was written; wait for sync and try again.";
+      setDataError(message);
+      throw new Error(message);
+    }
+
     setDataError("");
     try {
-      await saveDailyNote(user.uid, patientId, note);
+      await saveDailyNote(user.uid, patientId, note, options);
+      if (options?.patientPatch) {
+        setPatients((current) => current.map((patient) => (
+          patient.id === patientId ? { ...patient, ...options.patientPatch } as Patient : patient
+        )));
+      }
       setDailyNotesByPatient((current) => ({
         ...current,
-        [patientId]: [...(current[patientId] ?? []).filter((item) => item.date !== note.date), note]
-          .sort((left, right) => left.date.localeCompare(right.date)),
+        [patientId]: sortDailyNotesDesc([
+          ...(current[patientId] ?? []).filter((item) => item.date !== note.date),
+          note,
+        ]),
       }));
     } catch (error) {
       const message = formatSyncError("Saving daily note", error);
@@ -333,6 +436,15 @@ function App() {
 
   if (!isDemoMode && !user) {
     return <AuthPage onStartDemo={enterDemoMode} />;
+  }
+
+  if (!isDemoMode && dataLoading) {
+    return (
+      <div className="loading-screen">
+        <div>Loading server-confirmed patient records and daily notes...</div>
+        {dataError && <div className="error-message">{dataError}</div>}
+      </div>
+    );
   }
 
   return (
@@ -408,6 +520,7 @@ function App() {
             <AiDocumentsPage
               patients={patients}
               dailyNotesByPatient={dailyNotesByPatient}
+              isDemoMode={isDemoMode}
               onSavePatient={savePatientHandler}
             />
           }

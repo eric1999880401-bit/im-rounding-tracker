@@ -1,18 +1,33 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { generateClinicalDocument } from "../firebase/aiService";
-import type { AiDocumentDraft, AiDocumentType, DailyNote, DailyNotesByPatient, GeneratedClinicalPlan, Patient } from "../types";
+import type { AiDocumentDraft, AiDocumentType, DailyNote, DailyNotesByPatient, GeneratedClinicalPlan, Patient, SavePatientOptions } from "../types";
 import { getAdmissionSummaryText, nowIso, todayKey } from "../utils";
 import { formatClinicalDocumentDraft, getClinicalDocumentSection } from "../clinicalDocumentFormat";
 import { applyClinicalKnowledgeToText, formatRuleBasedAdmissionSummary, formatRuleBasedSbar, formatRuleBasedWeeklySummary, hasClinicalReasoning } from "../clinicalKnowledge";
 import { formatSoapBasedIsbar } from "../soapSbar";
+import {
+  canApplyDocumentContextRequest,
+  isDocumentReviewBoundToContext,
+  isLatestRequest,
+  type DocumentContextRequestIdentity,
+} from "../asyncRequestGuard";
+import {
+  bindDeidentifiedConfirmation,
+  createAiPrivacyContextFingerprint,
+  isDeidentifiedConfirmationCurrent,
+} from "../aiPrivacyConfirmation";
 import DeidNotice from "../components/DeidNotice";
+import { buildAiDocumentAuditWrite } from "../clinicalAudit";
+import { persistedPatientUpdatedAt } from "../patientWriteSafety";
+import { reviewedAiDocumentPatientPatch } from "../aiDocumentPersistence";
 
 const OTHER_PATIENT_ID = "__other_patient__";
 
 interface AiDocumentsPageProps {
   patients: Patient[];
   dailyNotesByPatient?: DailyNotesByPatient;
-  onSavePatient: (patient: Patient) => Promise<void>;
+  isDemoMode?: boolean;
+  onSavePatient: (patient: Patient, options?: SavePatientOptions) => Promise<void>;
 }
 
 const documentOptions: Array<{ value: AiDocumentType; label: string; helper: string }> = [
@@ -155,12 +170,17 @@ function formatDocumentDraft(draft: AiDocumentDraft) {
   return lines.filter((line, index, array) => line.trim() || array[index - 1]?.trim()).join("\n").trim();
 }
 
-function appendIfBlank(current: string, next: string) {
-  return current.trim() ? current : next;
-}
-
 function selectedDocumentLabel(documentType: AiDocumentType) {
   return documentOptions.find((option) => option.value === documentType)?.label ?? "AI document";
+}
+
+function savedDocumentBaseline(patient: Patient, documentType: AiDocumentType) {
+  if (documentType === "admissionNote") return patient.generatedAdmissionNote || patient.admissionBriefNotes;
+  if (documentType === "admissionSummary") return patient.generatedAdmissionSummary || patient.admissionBriefFreeText;
+  if (documentType === "dischargeHospitalCourse") return patient.generatedDischargeSummary;
+  if (documentType === "weeklySummary") return patient.generatedWeeklySummary;
+  if (documentType === "isbar") return patient.generatedSbarNote;
+  return "";
 }
 
 function patientRuleContext(patient?: Patient, notes: DailyNote[] = []) {
@@ -225,7 +245,7 @@ function localIsbarDraft(text: string): AiDocumentDraft {
   };
 }
 
-function AiDocumentsPage({ patients, dailyNotesByPatient = {}, onSavePatient }: AiDocumentsPageProps) {
+function AiDocumentsPage({ patients, dailyNotesByPatient = {}, isDemoMode = false, onSavePatient }: AiDocumentsPageProps) {
   const activePatients = patients.filter((patient) => patient.status === "active");
   const [patientId, setPatientId] = useState("");
   const [documentType, setDocumentType] = useState<AiDocumentType>("isbar");
@@ -233,7 +253,7 @@ function AiDocumentsPage({ patients, dailyNotesByPatient = {}, onSavePatient }: 
   const [rawText, setRawText] = useState("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState(todayKey());
-    const [storeRawText, setStoreRawText] = useState(false);
+  const [storeRawText, setStoreRawText] = useState(false);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -242,8 +262,20 @@ function AiDocumentsPage({ patients, dailyNotesByPatient = {}, onSavePatient }: 
   const [draftId, setDraftId] = useState("");
   const [model, setModel] = useState("");
   const [editableText, setEditableText] = useState("");
+  const [candidateText, setCandidateText] = useState("");
+  const [baselineText, setBaselineText] = useState("");
+  const [confirmedPrivacyFingerprint, setConfirmedPrivacyFingerprint] = useState("");
+  const [draftBinding, setDraftBinding] = useState<DocumentContextRequestIdentity<AiDocumentType> | null>(null);
+  const latestGenerationRequestRef = useRef(0);
+  const currentSelectionRef = useRef<{ patientId: string; documentType: AiDocumentType; contextKey: string }>({
+    patientId: "",
+    documentType: "isbar",
+    contextKey: "",
+  });
 
-  const effectivePatientId = patientId || activePatients[0]?.id || OTHER_PATIENT_ID;
+  const hasValidExplicitPatient =
+    patientId === OTHER_PATIENT_ID || activePatients.some((patient) => patient.id === patientId);
+  const effectivePatientId = (hasValidExplicitPatient ? patientId : "") || activePatients[0]?.id || OTHER_PATIENT_ID;
   const isOtherPatient = effectivePatientId === OTHER_PATIENT_ID;
   const selectedPatient = isOtherPatient ? undefined : activePatients.find((patient) => patient.id === effectivePatientId);
   const selectedOption = documentOptions.find((option) => option.value === documentType) ?? documentOptions[0];
@@ -253,121 +285,238 @@ function AiDocumentsPage({ patients, dailyNotesByPatient = {}, onSavePatient }: 
     [patientNotes, dateFrom, dateTo],
   );
   const estimatedTokens = Math.ceil(rawText.length / 4);
-  const canGenerate = Boolean((selectedPatient || isOtherPatient) && !loading);
+  const usesExternalAi = !(documentType === "isbar" && selectedPatient);
+  const privacyContextFingerprint = useMemo(
+    () =>
+      createAiPrivacyContextFingerprint(
+        effectivePatientId,
+        documentType,
+        rawText,
+        dateFrom,
+        dateTo,
+        qualityMode,
+        storeRawText,
+        selectedPatient ?? null,
+        notesInRange,
+      ),
+    [effectivePatientId, documentType, rawText, dateFrom, dateTo, qualityMode, storeRawText, selectedPatient, notesInRange],
+  );
+  const deidentifiedConfirmed = isDeidentifiedConfirmationCurrent(
+    confirmedPrivacyFingerprint,
+    privacyContextFingerprint,
+  );
+  currentSelectionRef.current = {
+    patientId: effectivePatientId,
+    documentType,
+    contextKey: privacyContextFingerprint,
+  };
+  const canGenerate = Boolean(
+    (selectedPatient || isOtherPatient) && !loading && !saving && (!usesExternalAi || deidentifiedConfirmed),
+  );
+  const draftMatchesSelection = isDocumentReviewBoundToContext(
+    draftBinding,
+    effectivePatientId,
+    documentType,
+    privacyContextFingerprint,
+  );
+
+  useEffect(() => {
+    setConfirmedPrivacyFingerprint("");
+  }, [privacyContextFingerprint]);
+
+  function clearDraftReview() {
+    setDraft(null);
+    setDraftBinding(null);
+    setEditableText("");
+    setCandidateText("");
+    setBaselineText("");
+    setDraftId("");
+    setModel("");
+  }
 
   async function generateDraft() {
     if (!selectedPatient && !isOtherPatient) return;
+    const requestPatient = selectedPatient;
+    const requestPatientId = effectivePatientId;
+    const requestDocumentType = documentType;
+    const requestQualityMode = qualityMode;
+    const requestRawText = rawText;
+    const requestDateFrom = dateFrom;
+    const requestDateTo = dateTo;
+    const requestStoreRawText = storeRawText;
+    const requestPatientNotes = patientNotes;
+    const requestNotesInRange = notesInRange;
+    const requestUsesExternalAi = !(requestDocumentType === "isbar" && requestPatient);
+    const requestPrivacyFingerprint = createAiPrivacyContextFingerprint(
+      requestPatientId,
+      requestDocumentType,
+      requestRawText,
+      requestDateFrom,
+      requestDateTo,
+      requestQualityMode,
+      requestStoreRawText,
+      requestPatient ?? null,
+      requestNotesInRange,
+    );
+    const requestDeidentifiedConfirmed = isDeidentifiedConfirmationCurrent(
+      confirmedPrivacyFingerprint,
+      requestPrivacyFingerprint,
+    );
+    const request: DocumentContextRequestIdentity<AiDocumentType> = {
+      requestId: latestGenerationRequestRef.current + 1,
+      patientId: requestPatientId,
+      documentType: requestDocumentType,
+      contextKey: requestPrivacyFingerprint,
+    };
+    latestGenerationRequestRef.current = request.requestId;
+    const canApplyRequest = () =>
+      canApplyDocumentContextRequest(
+        request,
+        latestGenerationRequestRef.current,
+        currentSelectionRef.current.patientId,
+        currentSelectionRef.current.documentType,
+        currentSelectionRef.current.contextKey,
+      );
+
     setError("");
     setStatusMessage("");
+    if (requestUsesExternalAi && !requestDeidentifiedConfirmed) {
+      setError("Confirm that the pasted source and selected patient/SOAP context are de-identified before sending them to external AI.");
+      return;
+    }
+    clearDraftReview();
     setLoading(true);
     try {
-      if (documentType === "isbar" && selectedPatient) {
-        const formatted = formatSoapBasedIsbar(selectedPatient, patientNotes, dateTo || todayKey(), rawText);
+      if (requestDocumentType === "isbar" && requestPatient) {
+        const formatted = formatSoapBasedIsbar(
+          requestPatient,
+          requestPatientNotes,
+          requestDateTo || todayKey(),
+          requestRawText,
+        );
+        if (!canApplyRequest()) return;
         if (/^insufficient reviewed SOAP\/context/i.test(formatted)) {
           setError(formatted);
           return;
         }
         setDraft(localIsbarDraft(formatted));
+        setDraftBinding(request);
         setDraftId("local-soap-sbar");
         setModel("reviewed-soap");
         setEditableText(formatted);
+        setCandidateText(formatted);
+        setBaselineText(requestPatient ? savedDocumentBaseline(requestPatient, requestDocumentType) : "");
         setStatusMessage("SBAR drafted from reviewed SOAP and optional pasted context. Review before saving.");
         return;
       }
       const result = await generateClinicalDocument({
-        patientId: selectedPatient?.id ?? "",
-        documentType,
-        rawText,
-        dateFrom,
-        dateTo,
-        deidentifiedConfirmed: true,
-        storeRawText,
-        qualityMode,
+        patientId: requestPatient?.id ?? "",
+        documentType: requestDocumentType,
+        rawText: requestRawText,
+        dateFrom: requestDateFrom,
+        dateTo: requestDateTo,
+        deidentifiedConfirmed: requestDeidentifiedConfirmed,
+        storeRawText: requestStoreRawText,
+        qualityMode: requestQualityMode,
       });
+      if (!canApplyRequest()) return;
+      if (result.draft.documentType !== requestDocumentType) {
+        setError("Generated document type did not match the requested type. Nothing was applied; generate again.");
+        return;
+      }
       const rulePlan = applyClinicalKnowledgeToText(
-        [rawText, patientRuleContext(selectedPatient, notesInRange)].filter(Boolean).join("\n"),
+        [requestRawText, patientRuleContext(requestPatient, requestNotesInRange)].filter(Boolean).join("\n"),
         {
-          pmh: selectedPatient ? [selectedPatient.underlyingDiseases, selectedPatient.admissionPMH].filter(Boolean) : [],
-          activeProblems: selectedPatient ? [selectedPatient.activeProblems, selectedPatient.primaryDiagnosis].filter(Boolean) : [],
+          pmh: requestPatient ? [requestPatient.underlyingDiseases, requestPatient.admissionPMH].filter(Boolean) : [],
+          activeProblems: requestPatient ? [requestPatient.activeProblems, requestPatient.primaryDiagnosis].filter(Boolean) : [],
         },
       );
       const sharedFormatted = formatClinicalDocumentDraft(result.draft);
-      const ruleFormatted = formatRuleReviewedDocument(documentType, rulePlan);
+      const ruleFormatted = formatRuleReviewedDocument(requestDocumentType, rulePlan);
       const formatted = hasClinicalReasoning(result.draft.clinicalReasoning)
         ? sharedFormatted
         : ruleFormatted || sharedFormatted;
       setDraft(result.draft);
+      setDraftBinding(request);
       setDraftId(result.draftId);
-      setModel(`${result.model} / ${result.qualityMode ?? qualityMode}`);
+      setModel(`${result.model} / ${result.qualityMode ?? requestQualityMode}`);
       setEditableText(formatted);
+      setCandidateText(formatted);
+      setBaselineText(requestPatient ? savedDocumentBaseline(requestPatient, requestDocumentType) : "");
       const ruleNote = hasClinicalRuleSignal(rulePlan)
         ? ` Clinical Knowledge review applied: ${rulePlan.ruleMatches.map((match) => match.title).join(", ") || "needs clinical review"}.`
         : "";
       setStatusMessage(
-        isOtherPatient
+        requestPatientId === OTHER_PATIENT_ID
           ? `Standalone draft created. It is not attached to a patient.${ruleNote} Draft ID: ${result.draftId}`
           : `Draft created. Review before saving.${ruleNote} Draft ID: ${result.draftId}`,
       );
     } catch (nextError) {
-      setError(getErrorMessage(nextError));
+      if (canApplyRequest()) setError(getErrorMessage(nextError));
     } finally {
-      setLoading(false);
+      if (isLatestRequest(request, latestGenerationRequestRef.current)) setLoading(false);
     }
   }
 
   async function saveReviewedDraft() {
-    if (isOtherPatient) {
+    if (
+      !draft ||
+      !draftBinding ||
+      !isDocumentReviewBoundToContext(
+        draftBinding,
+        currentSelectionRef.current.patientId,
+        currentSelectionRef.current.documentType,
+        currentSelectionRef.current.contextKey,
+      ) ||
+      draft.documentType !== draftBinding.documentType ||
+      !candidateText.trim()
+    ) {
+      setError("This draft no longer matches the exact patient, document, date range, pasted source, or selected context. Nothing was saved; generate again.");
+      return;
+    }
+    if (draftBinding.patientId === OTHER_PATIENT_ID) {
       setStatusMessage("Standalone draft is ready for review. It was not written to any patient chart.");
       return;
     }
-    if (!selectedPatient || !draft) return;
+    if (!selectedPatient || selectedPatient.id !== draftBinding.patientId) {
+      setError("The selected patient changed after this draft was generated. Nothing was saved; generate again.");
+      return;
+    }
+    const saveDocumentType = draftBinding.documentType;
+    const savePatient = selectedPatient;
     setError("");
     setStatusMessage("");
     setSaving(true);
     const now = nowIso();
-    const summary = draft.conciseSummary.trim() || editableText.split(/\r?\n/).find((line) => line.trim())?.trim() || "";
-    const nextPatient: Patient = {
-      ...selectedPatient,
-      updatedAt: now,
-    };
-
-    if (documentType === "admissionNote") {
-      const existingAdmissionSummary = getAdmissionSummaryText(selectedPatient, { allowFallback: false });
-      nextPatient.generatedAdmissionNote = editableText;
-      nextPatient.admissionBriefNotes = editableText;
-      if (summary) {
-        nextPatient.generatedAdmissionSummary = summary;
-        nextPatient.admissionBriefFreeText = existingAdmissionSummary ? nextPatient.admissionBriefFreeText : summary;
-        nextPatient.oneLiner = appendIfBlank(nextPatient.oneLiner, summary);
-      }
-      nextPatient.chiefComplaint = appendIfBlank(nextPatient.chiefComplaint, getClinicalDocumentSection(draft, ["c.c", "cc", "chief"]));
-      nextPatient.admissionChiefConcern = appendIfBlank(nextPatient.admissionChiefConcern, nextPatient.chiefComplaint);
-      nextPatient.presentIllnessOrHPI = appendIfBlank(nextPatient.presentIllnessOrHPI, getClinicalDocumentSection(draft, ["hpi", "pi", "present illness"]));
-      nextPatient.hpiOrAdmissionStory = appendIfBlank(nextPatient.hpiOrAdmissionStory, nextPatient.presentIllnessOrHPI);
-    }
-
-    if (documentType === "admissionSummary") {
-      nextPatient.generatedAdmissionSummary = editableText;
-      nextPatient.admissionBriefFreeText = editableText;
-      nextPatient.oneLiner = appendIfBlank(nextPatient.oneLiner, summary);
-    }
-
-    if (documentType === "dischargeHospitalCourse") {
-      nextPatient.generatedDischargeSummary = editableText;
-      nextPatient.hospitalCourseHighlights = appendIfBlank(nextPatient.hospitalCourseHighlights, summary || editableText);
-    }
-
-    if (documentType === "weeklySummary") {
-      nextPatient.generatedWeeklySummary = editableText;
-    }
-
-    if (documentType === "isbar") {
-      nextPatient.generatedSbarNote = editableText;
-    }
+    const patientPatch = reviewedAiDocumentPatientPatch(saveDocumentType, editableText, now);
+    const nextPatient: Patient = { ...savePatient, ...patientPatch };
 
     try {
-      await onSavePatient(nextPatient);
-      setStatusMessage(`${selectedDocumentLabel(documentType)} saved to ${selectedPatient.bed || selectedPatient.patientCode}.`);
+      const audit = buildAiDocumentAuditWrite({
+        patientId: savePatient.id,
+        documentType: saveDocumentType,
+        auditDate: dateTo || todayKey(),
+        dateFrom,
+        dateTo,
+        sourceText: rawText,
+        storeSourceText: storeRawText,
+        baselineText,
+        candidateText,
+        finalText: editableText,
+        aiDraftId: draftId,
+        model,
+        qualityMode,
+      });
+      await onSavePatient(nextPatient, {
+        audit,
+        expectedPatientUpdatedAt: persistedPatientUpdatedAt(savePatient),
+        patientPatch,
+      });
+      setStatusMessage(
+        isDemoMode
+          ? `${selectedDocumentLabel(saveDocumentType)} saved in demo memory. Candidate-to-final audit behavior was validated but no Firestore audit record was written.`
+          : `${selectedDocumentLabel(saveDocumentType)} saved to ${savePatient.bed || savePatient.patientCode} with an append-only candidate-to-final audit record.`,
+      );
     } catch (nextError) {
       setError(getErrorMessage(nextError));
     } finally {
@@ -392,12 +541,10 @@ function AiDocumentsPage({ patients, dailyNotesByPatient = {}, onSavePatient }: 
             Patient
             <select
               value={effectivePatientId}
+              disabled={loading || saving}
               onChange={(event) => {
                 setPatientId(event.target.value);
-                setDraft(null);
-                setEditableText("");
-                setDraftId("");
-                setModel("");
+                clearDraftReview();
                 setStatusMessage("");
                 setError("");
               }}
@@ -414,10 +561,14 @@ function AiDocumentsPage({ patients, dailyNotesByPatient = {}, onSavePatient }: 
             AI document
             <select
               value={documentType}
+              disabled={loading || saving}
               onChange={(event) => {
                 const nextType = event.target.value as AiDocumentType;
                 setDocumentType(nextType);
                 setQualityMode(recommendedQualityForDocument(nextType));
+                clearDraftReview();
+                setStatusMessage("");
+                setError("");
               }}
             >
               {documentOptions.map((option) => (
@@ -429,7 +580,11 @@ function AiDocumentsPage({ patients, dailyNotesByPatient = {}, onSavePatient }: 
           </label>
           <label>
             Model quality
-            <select value={qualityMode} onChange={(event) => setQualityMode(event.target.value as AiQualityMode)}>
+            <select
+              value={qualityMode}
+              disabled={loading || saving}
+              onChange={(event) => setQualityMode(event.target.value as AiQualityMode)}
+            >
               {qualityModeOptions.map((option) => (
                 <option key={option.value} value={option.value}>
                   {option.label}
@@ -441,11 +596,11 @@ function AiDocumentsPage({ patients, dailyNotesByPatient = {}, onSavePatient }: 
             <>
               <label>
                 From
-                <input type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} />
+                <input type="date" value={dateFrom} disabled={loading || saving} onChange={(event) => setDateFrom(event.target.value)} />
               </label>
               <label>
                 To
-                <input type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} />
+                <input type="date" value={dateTo} disabled={loading || saving} onChange={(event) => setDateTo(event.target.value)} />
               </label>
             </>
           )}
@@ -466,15 +621,30 @@ function AiDocumentsPage({ patients, dailyNotesByPatient = {}, onSavePatient }: 
             />
           </label>
           <DeidNotice span2 />
+          {usesExternalAi && (
+            <label className="checkbox-label span-2">
+              <input
+                type="checkbox"
+                checked={deidentifiedConfirmed}
+                onChange={(event) =>
+                  setConfirmedPrivacyFingerprint(
+                    bindDeidentifiedConfirmation(event.target.checked, privacyContextFingerprint),
+                  )
+                }
+              />
+              I confirm the pasted source and selected patient/SOAP context contain no direct identifiers and may be sent to external AI.
+            </label>
+          )}
           <details className="advanced-fold span-2">
             <summary>Advanced</summary>
             <label className="checkbox-label">
               <input
                 type="checkbox"
                 checked={storeRawText}
+                disabled={loading || saving}
                 onChange={(event) => setStoreRawText(event.target.checked)}
               />
-              Store full raw text in aiDrafts (de-identified only)
+              Retain the exact de-identified pasted source in the AI draft/audit for up to 30 days
             </label>
           </details>
           <p className="muted span-2">
@@ -492,7 +662,7 @@ function AiDocumentsPage({ patients, dailyNotesByPatient = {}, onSavePatient }: 
       {error && <p className="error-message">{error}</p>}
       {statusMessage && <p className="status-message">{statusMessage}</p>}
 
-      {draft && (
+      {draft && draftMatchesSelection && (
         <section className="panel ai-document-review">
           <div className="section-heading">
             <div>
@@ -503,7 +673,7 @@ function AiDocumentsPage({ patients, dailyNotesByPatient = {}, onSavePatient }: 
               </p>
             </div>
             {!isOtherPatient && (
-              <button type="button" disabled={saving || !editableText.trim()} onClick={saveReviewedDraft}>
+              <button type="button" disabled={saving || loading || !editableText.trim()} onClick={saveReviewedDraft}>
                 {saving ? "Saving..." : "Save reviewed draft"}
               </button>
             )}

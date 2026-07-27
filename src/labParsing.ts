@@ -890,7 +890,9 @@ function collectLabObservations(patient: Patient, notes: DailyNote[] = []) {
         value: String(item.value ?? ""),
         unit: String(item.unit ?? ""),
         previousValue: String(item.previousValue ?? ""),
-        date: normalizeDateKey(date || todayKey()),
+        // Missing patient-master dates must remain visibly missing instead of
+        // being relabelled as today's result.
+        date: normalizeDateKey(date, ""),
         item,
       });
     });
@@ -905,10 +907,10 @@ function collectLabObservations(patient: Patient, notes: DailyNote[] = []) {
     if (parsed.length > 0) addItems(parsed, date);
   }
 
-  addReports(patient.labReports, patient.labDate || todayKey());
-  if (patient.labReports.length === 0) addItems(patient.parsedLabItems, patient.labDate || todayKey());
+  addReports(patient.labReports, patient.labDate);
+  if (patient.labReports.length === 0) addItems(patient.parsedLabItems, patient.labDate);
   if (patient.labReports.length === 0 && patient.parsedLabItems.length === 0) {
-    addRawText([patient.rawLabText, patient.newLabs].filter(Boolean).join("\n"), patient.labDate || todayKey());
+    addRawText([patient.rawLabText, patient.newLabs].filter(Boolean).join("\n"), patient.labDate);
   }
   notes.forEach((note) => {
     addReports(note.labReports, note.labDate || note.date);

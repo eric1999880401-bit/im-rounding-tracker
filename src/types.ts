@@ -592,6 +592,77 @@ export interface SoapEditTrace {
   truncated: boolean;
 }
 
+export type ClinicalAuditOperation = "soap.save" | "ditto.copy" | "patient.update" | "bulk.import.apply" | "ai.document.save";
+export type ClinicalAuditEntrypoint = "board.soap" | "detail.soap" | "detail.ditto" | "board.bulk" | "ai.documents" | "unknown";
+export type ClinicalAuditPayloadKind = "source" | "baseline" | "candidate" | "final";
+
+/** Append-only metadata kept after the short-lived clinical text payload expires. */
+export interface ClinicalAuditEvent {
+  id: string;
+  schemaVersion: 1;
+  patientId: string;
+  dailyNoteDate: string;
+  sourceDate: string;
+  operation: ClinicalAuditOperation;
+  entrypoint: ClinicalAuditEntrypoint;
+  /** Populated for AI Documents saves; blank/absent for SOAP-only events. */
+  documentType?: AiDocumentType | "";
+  sourceKind: "ai" | "manual" | "ditto" | "import";
+  workflowMode: SoapEditWorkflowMode | "";
+  aiDraftId: string;
+  model: string;
+  qualityMode: "fast" | "balanced" | "highAccuracy" | "";
+  baseSoapVersion: number;
+  savedSoapVersion: number;
+  sourceChars: number;
+  sourceStored: boolean;
+  payloadKinds: ClinicalAuditPayloadKind[];
+  payloadExpiresAt: string;
+  changedSections: SoapEditSection[];
+  changes: SoapEditLineChange[];
+  stats: SoapEditTrace["stats"];
+  acceptedAiDraftWithoutEdits: boolean;
+  truncated: boolean;
+  createdAt: string;
+}
+
+/** Clinical text is split into bounded documents so no audit document approaches Firestore's size limit. */
+export interface ClinicalAuditPayload {
+  id: string;
+  eventId: string;
+  patientId: string;
+  kind: ClinicalAuditPayloadKind;
+  text: string;
+  chars: number;
+  truncated: boolean;
+  createdAt: string;
+  expiresAt: string;
+}
+
+export interface ClinicalAuditWrite {
+  event: ClinicalAuditEvent;
+  payloads: ClinicalAuditPayload[];
+}
+
+export interface SaveDailyNoteOptions {
+  audit?: ClinicalAuditWrite;
+  /** SOAP transaction must reject a stale client instead of overwriting a newer note. */
+  expectedSoapVersion?: number;
+  /** Allowlisted compatibility fields written atomically with the canonical note. */
+  patientPatch?: Partial<Patient>;
+  /** Reject the write if another client changed the patient after this editor loaded. */
+  expectedPatientUpdatedAt?: string;
+}
+
+/** Options for an explicit patient-document save that must commit with audit metadata. */
+export interface SavePatientOptions {
+  audit?: ClinicalAuditWrite;
+  /** Reject the write if another client changed the patient after generation/review. */
+  expectedPatientUpdatedAt?: string;
+  /** Only the reviewed patient fields that belong to this audited operation. */
+  patientPatch?: Partial<Patient>;
+}
+
 export type DailyNotesByPatient = Record<string, DailyNote[]>;
 
 export type ThemePreference = "light" | "dark" | "system";
@@ -773,4 +844,6 @@ export interface Patient {
   aiThinkingPrompts: AiThinkingPrompt[];
   updatedAt: string;
   createdAt: string;
+  /** Client-only Firestore revision baseline. patientService removes this before writes. */
+  persistedUpdatedAt?: string;
 }

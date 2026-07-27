@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import DeidNotice from "./DeidNotice";
 import {
   applyClinicalKnowledgeToText,
@@ -11,6 +11,18 @@ import { generateClinicalDocument } from "../firebase/aiService";
 import { formatSoapBasedIsbar } from "../soapSbar";
 import type { AiDocumentDraft, AiDocumentType, DailyNote, GeneratedClinicalPlan, Patient } from "../types";
 import { getAdmissionSummaryText, nowIso } from "../utils";
+import { recentDailyNotesOnOrBefore, sortDailyNotesDesc } from "../clinicalDataSafety";
+import {
+  bindDeidentifiedConfirmation,
+  createAiPrivacyContextFingerprint,
+  isDeidentifiedConfirmationCurrent,
+} from "../aiPrivacyConfirmation";
+import {
+  canApplyDocumentContextRequest,
+  isDocumentReviewBoundToContext,
+  isLatestRequest,
+  type DocumentContextRequestIdentity,
+} from "../asyncRequestGuard";
 
 interface ClinicalDocumentQuickActionsProps {
   patient: Patient;
@@ -52,9 +64,11 @@ function hasClinicalRuleSignal(plan: GeneratedClinicalPlan) {
 
 function notesForDocument(notes: DailyNote[], documentType: QuickDocumentType, dateFrom: string, selectedDate: string) {
   if (documentType !== "weeklySummary") {
-    return notes.filter((note) => note.date <= selectedDate).slice(-2);
+    return recentDailyNotesOnOrBefore(notes, selectedDate, 2);
   }
-  return notes.filter((note) => (!dateFrom || note.date >= dateFrom) && note.date <= selectedDate);
+  return sortDailyNotesDesc(
+    notes.filter((note) => (!dateFrom || note.date >= dateFrom) && note.date <= selectedDate),
+  );
 }
 
 function patientRuleContext(patient: Patient, selectedNotes: DailyNote[]) {
@@ -126,22 +140,104 @@ function ClinicalDocumentQuickActions({
   const [statusMessage, setStatusMessage] = useState("");
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
+  const [confirmedPrivacyFingerprint, setConfirmedPrivacyFingerprint] = useState("");
+  const [draftBinding, setDraftBinding] = useState<DocumentContextRequestIdentity<QuickDocumentType> | null>(null);
+  const latestGenerationRequestRef = useRef(0);
+  const currentDocumentContextRef = useRef<{
+    patientId: string;
+    contextKeys: Record<QuickDocumentType, string>;
+  }>({ patientId: "", contextKeys: { weeklySummary: "", isbar: "" } });
 
   const dateFrom = useMemo(() => dateDaysBefore(selectedDate, 6), [selectedDate]);
+  const weeklyNotes = useMemo(
+    () => notesForDocument(notes, "weeklySummary", dateFrom, selectedDate),
+    [notes, dateFrom, selectedDate],
+  );
   const weeklyNoteCount = useMemo(
     () => notes.filter((note) => (!dateFrom || note.date >= dateFrom) && note.date <= selectedDate).length,
     [notes, dateFrom, selectedDate],
   );
+  const isbarNotes = useMemo(
+    () => notesForDocument(notes, "isbar", dateFrom, selectedDate),
+    [notes, dateFrom, selectedDate],
+  );
+  const documentContextKeys = useMemo<Record<QuickDocumentType, string>>(
+    () => ({
+      weeklySummary: createAiPrivacyContextFingerprint(patient, weeklyNotes, dateFrom, selectedDate, "weeklySummary"),
+      isbar: createAiPrivacyContextFingerprint(patient, isbarNotes, selectedDate, "isbar"),
+    }),
+    [patient, weeklyNotes, isbarNotes, dateFrom, selectedDate],
+  );
+  const privacyContextFingerprint = documentContextKeys.weeklySummary;
+  const deidentifiedConfirmed = isDeidentifiedConfirmationCurrent(
+    confirmedPrivacyFingerprint,
+    privacyContextFingerprint,
+  );
+  currentDocumentContextRef.current = { patientId: patient.id, contextKeys: documentContextKeys };
+  const draftMatchesContext = Boolean(
+    draftBinding &&
+      draft &&
+      draft.documentType === draftBinding.documentType &&
+      isDocumentReviewBoundToContext(
+        draftBinding,
+        patient.id,
+        draftBinding.documentType,
+        documentContextKeys[draftBinding.documentType],
+      ),
+  );
+
+  useEffect(() => {
+    latestGenerationRequestRef.current += 1;
+    setLoadingType("");
+    setDraft(null);
+    setDraftBinding(null);
+    setEditableText("");
+    setStatusMessage("");
+    setError("");
+    setConfirmedPrivacyFingerprint("");
+  }, [documentContextKeys.isbar, privacyContextFingerprint]);
 
   async function generateDraft(documentType: QuickDocumentType) {
+    const requestPatient = patient;
+    const requestSelectedDate = selectedDate;
+    const requestDateFrom = dateFrom;
+    const selectedNotes = documentType === "weeklySummary" ? weeklyNotes : isbarNotes;
+    const requestContextKey = documentContextKeys[documentType];
+    const request: DocumentContextRequestIdentity<QuickDocumentType> = {
+      requestId: latestGenerationRequestRef.current + 1,
+      patientId: requestPatient.id,
+      documentType,
+      contextKey: requestContextKey,
+    };
+    latestGenerationRequestRef.current = request.requestId;
+    const canApplyRequest = () =>
+      canApplyDocumentContextRequest(
+        request,
+        latestGenerationRequestRef.current,
+        currentDocumentContextRef.current.patientId,
+        request.documentType,
+        currentDocumentContextRef.current.contextKeys[request.documentType],
+      );
     setError("");
     setStatusMessage("");
+    const requestDeidentifiedConfirmed = isDeidentifiedConfirmationCurrent(
+      confirmedPrivacyFingerprint,
+      requestContextKey,
+    );
+    if (documentType === "weeklySummary" && !requestDeidentifiedConfirmed) {
+      setLoadingType("");
+      setError("Confirm that the selected patient and SOAP context are de-identified before sending them to external AI.");
+      return;
+    }
 
+    setDraft(null);
+    setDraftBinding(null);
+    setEditableText("");
     setLoadingType(documentType);
     try {
-      const selectedNotes = notesForDocument(notes, documentType, dateFrom, selectedDate);
       if (documentType === "isbar") {
-        const formatted = formatSoapBasedIsbar(patient, selectedNotes, selectedDate);
+        const formatted = formatSoapBasedIsbar(requestPatient, selectedNotes, requestSelectedDate);
+        if (!canApplyRequest()) return;
         if (/^insufficient reviewed SOAP\/context/i.test(formatted)) {
           setError(formatted);
           return;
@@ -173,27 +269,34 @@ function ClinicalDocumentQuickActions({
           printSummary: "",
           sbarRecommendation: "",
         }));
+        setDraftBinding(request);
         setEditableText(formatted);
         setStatusMessage("SBAR drafted from reviewed SOAP. Review, edit, then save.");
         return;
       }
-      const rulePlan = applyClinicalKnowledgeToText(patientRuleContext(patient, selectedNotes), {
-        pmh: [patient.underlyingDiseases, patient.admissionPMH].filter(Boolean),
-        activeProblems: [patient.activeProblems, patient.primaryDiagnosis].filter(Boolean),
+      const rulePlan = applyClinicalKnowledgeToText(patientRuleContext(requestPatient, selectedNotes), {
+        pmh: [requestPatient.underlyingDiseases, requestPatient.admissionPMH].filter(Boolean),
+        activeProblems: [requestPatient.activeProblems, requestPatient.primaryDiagnosis].filter(Boolean),
       });
       const ruleFormatted = formatRuleReviewedDocument(documentType, rulePlan);
       const result = await generateClinicalDocument({
-        patientId: patient.id,
+        patientId: requestPatient.id,
         documentType,
         rawText: "",
-        dateFrom: documentType === "weeklySummary" ? dateFrom : "",
-        dateTo: documentType === "weeklySummary" ? selectedDate : "",
-        deidentifiedConfirmed: true,
+        dateFrom: documentType === "weeklySummary" ? requestDateFrom : "",
+        dateTo: documentType === "weeklySummary" ? requestSelectedDate : "",
+        deidentifiedConfirmed: requestDeidentifiedConfirmed,
         storeRawText: false,
       });
+      if (!canApplyRequest()) return;
+      if (result.draft.documentType !== documentType) {
+        setError("Generated document type did not match the requested type. Nothing was applied; generate again.");
+        return;
+      }
       const aiHasReasoning = hasClinicalReasoning(result.draft.clinicalReasoning);
       const formatted = !aiHasReasoning && ruleFormatted ? ruleFormatted : formatClinicalDocumentDraft(result.draft);
       setDraft(result.draft);
+      setDraftBinding(request);
       setEditableText(formatted);
       setStatusMessage(
         aiHasReasoning
@@ -201,14 +304,15 @@ function ClinicalDocumentQuickActions({
           : `${documentLabel(documentType)} drafted with local Clinical Knowledge review. Review, edit, then save.`,
       );
     } catch (nextError) {
-      const selectedNotes = notesForDocument(notes, documentType, dateFrom, selectedDate);
-      const rulePlan = applyClinicalKnowledgeToText(patientRuleContext(patient, selectedNotes), {
-        pmh: [patient.underlyingDiseases, patient.admissionPMH].filter(Boolean),
-        activeProblems: [patient.activeProblems, patient.primaryDiagnosis].filter(Boolean),
+      if (!canApplyRequest()) return;
+      const rulePlan = applyClinicalKnowledgeToText(patientRuleContext(requestPatient, selectedNotes), {
+        pmh: [requestPatient.underlyingDiseases, requestPatient.admissionPMH].filter(Boolean),
+        activeProblems: [requestPatient.activeProblems, requestPatient.primaryDiagnosis].filter(Boolean),
       });
       const ruleFormatted = formatRuleReviewedDocument(documentType, rulePlan);
       if (ruleFormatted) {
         setDraft(localClinicalDraft(documentType, ruleFormatted, rulePlan));
+        setDraftBinding(request);
         setEditableText(ruleFormatted);
         setStatusMessage(
           `${documentLabel(documentType)} drafted locally because AI generation was unavailable. Review, edit, then save.`,
@@ -217,18 +321,38 @@ function ClinicalDocumentQuickActions({
         setError(getErrorMessage(nextError));
       }
     } finally {
-      setLoadingType("");
+      if (isLatestRequest(request, latestGenerationRequestRef.current)) setLoadingType("");
     }
   }
 
   async function saveReviewedDraft() {
-    if (!draft || !editableText.trim()) return;
+    if (
+      !draft ||
+      !draftBinding ||
+      !editableText.trim() ||
+      draft.documentType !== draftBinding.documentType ||
+      !isDocumentReviewBoundToContext(
+        draftBinding,
+        currentDocumentContextRef.current.patientId,
+        draftBinding.documentType,
+        currentDocumentContextRef.current.contextKeys[draftBinding.documentType],
+      )
+    ) {
+      setError("This document review belongs to a different patient, date, or SOAP context. Nothing was saved; generate again.");
+      return;
+    }
+    if (patient.id !== draftBinding.patientId) {
+      setError("The selected patient changed after this document was generated. Nothing was saved; generate again.");
+      return;
+    }
+    const savePatient = patient;
+    const saveDocumentType = draftBinding.documentType;
     setSaving(true);
     setError("");
     setStatusMessage("");
     try {
-      await onSavePatient(saveDocumentToPatient(patient, draft.documentType as QuickDocumentType, editableText));
-      setStatusMessage(`${documentLabel(draft.documentType as QuickDocumentType)} saved to this patient.`);
+      await onSavePatient(saveDocumentToPatient(savePatient, saveDocumentType, editableText));
+      setStatusMessage(`${documentLabel(saveDocumentType)} saved to this patient.`);
     } catch (nextError) {
       setError(getErrorMessage(nextError));
     } finally {
@@ -246,10 +370,23 @@ function ClinicalDocumentQuickActions({
 
       <DeidNotice />
 
+      <label className="checkbox-label ai-checkbox">
+        <input
+          type="checkbox"
+          checked={deidentifiedConfirmed}
+          onChange={(event) =>
+            setConfirmedPrivacyFingerprint(
+              bindDeidentifiedConfirmation(event.target.checked, privacyContextFingerprint),
+            )
+          }
+        />
+        I confirm this patient and selected SOAP context contain no direct identifiers and may be sent to external AI for the weekly summary.
+      </label>
+
       <div className="clinical-doc-action-grid">
         <button
           type="button"
-          disabled={Boolean(loadingType)}
+          disabled={Boolean(loadingType) || saving || !deidentifiedConfirmed}
           onClick={() => void generateDraft("weeklySummary")}
         >
           {loadingType === "weeklySummary" ? "Generating..." : "Generate Weekly Summary"}
@@ -260,7 +397,7 @@ function ClinicalDocumentQuickActions({
 
         <button
           type="button"
-          disabled={Boolean(loadingType)}
+          disabled={Boolean(loadingType) || saving}
           onClick={() => void generateDraft("isbar")}
         >
           {loadingType === "isbar" ? "Generating..." : "Generate SBAR"}
@@ -271,7 +408,7 @@ function ClinicalDocumentQuickActions({
       {error && <p className="error-message">{error}</p>}
       {statusMessage && <p className="status-message">{statusMessage}</p>}
 
-      {draft && (
+      {draft && draftMatchesContext && (
         <label>
           Reviewed {documentLabel(draft.documentType as QuickDocumentType)}
           <textarea
@@ -282,9 +419,9 @@ function ClinicalDocumentQuickActions({
         </label>
       )}
 
-      {draft && (
+      {draft && draftMatchesContext && (
         <div className="form-actions">
-          <button type="button" disabled={saving || !editableText.trim()} onClick={() => void saveReviewedDraft()}>
+          <button type="button" disabled={saving || Boolean(loadingType) || !editableText.trim()} onClick={() => void saveReviewedDraft()}>
             {saving ? "Saving..." : `Save reviewed ${documentLabel(draft.documentType as QuickDocumentType)}`}
           </button>
         </div>
