@@ -8,6 +8,7 @@ import {
   emptyPatient,
   getActiveAttendingNames,
   getActivePatients,
+  getPatientPmhText,
   getPatientDisplaySummary,
   hasChronicRenalContext,
   hasUpcomingDischarge,
@@ -217,7 +218,7 @@ function importDraftToPatient(sourceDraft: PatientImportDraft, existingPatient?:
   const now = nowIso();
   const base = existingPatient ?? emptyPatient();
   const isExistingInpatientImport = importMode === "existingInpatient";
-  const underlyingDiseases = uniqueLines(base.underlyingDiseases, draft.underlyingDiseases);
+  const underlyingDiseases = uniqueLines(getPatientPmhText(base), draft.underlyingDiseases);
   const activeProblems = uniqueLines(base.activeProblems, draft.activeProblems);
   const hospitalCourseHighlights = uniqueLines(
     base.hospitalCourseHighlights,
@@ -256,6 +257,7 @@ function importDraftToPatient(sourceDraft: PatientImportDraft, existingPatient?:
     generatedWeeklySummary: base.generatedWeeklySummary,
     underlyingDiseases,
     underlyingDiseaseItems: textToItems(underlyingDiseases),
+    admissionPMH: underlyingDiseases,
     activeProblems,
     activeProblemItems: textToItems(activeProblems),
     hospitalCourseHighlights: isExistingInpatientImport ? uniqueLines(hospitalCourseHighlights, admissionSummary) : hospitalCourseHighlights,
@@ -383,7 +385,7 @@ function selectedPatientContext(patient: Patient, rawText: string) {
     "A target patient was selected locally. Do not infer or return identity fields.",
     patient.age ? `Age/Sex: ${patient.age}/${patient.sex}` : "",
     patient.primaryDiagnosis ? `Dx: ${patient.primaryDiagnosis}` : "",
-    patient.underlyingDiseases ? `PMH: ${patient.underlyingDiseases}` : "",
+    getPatientPmhText(patient) ? `PMH: ${getPatientPmhText(patient)}` : "",
     patient.activeProblems ? `Active problems: ${patient.activeProblems}` : "",
     "",
     "Pasted update/report for this target patient:",
@@ -406,7 +408,7 @@ function applyTargetPatientToDraft(draft: PatientImportDraft, targetPatient?: Pa
     teamOrService: draft.teamOrService || targetPatient.teamOrService,
     primaryDiagnosis: draft.primaryDiagnosis || targetPatient.primaryDiagnosis,
     oneLiner: draft.oneLiner || targetPatient.oneLiner || targetPatient.primaryDiagnosis,
-    underlyingDiseases: draft.underlyingDiseases || targetPatient.underlyingDiseases,
+    underlyingDiseases: draft.underlyingDiseases || getPatientPmhText(targetPatient),
     activeProblems: draft.activeProblems || targetPatient.activeProblems,
     uncertainty: uniqueLines(...draft.uncertainty, "Target patient selected on Board; verify before saving.").split("\n"),
   };
@@ -566,7 +568,7 @@ function localTargetPatientUpdateDraft(patient: Patient, rawText: string): Patie
       : "",
     imageText: reportLike ? rawText : fragments.filter((line) => /\b(image|impression|report|ct|mri|cxr|echo|sono|ultrasound|x-ray|xray|ercp)\b/i.test(line)).join("\n"),
     admissionSummary: courseLike && !reportLike && !labLike ? fragments.slice(0, 5).join(" ").slice(0, 700) : "",
-    underlyingDiseases: patient.underlyingDiseases,
+    underlyingDiseases: getPatientPmhText(patient),
     activeProblems: patient.activeProblems,
     hospitalCourseHighlights: courseLike && !reportLike && !labLike ? fragments.slice(0, 6).join("\n") : "",
     importantRedFlags: fragments
@@ -1217,6 +1219,7 @@ function PatientBoardPage({
           submitLabel="Create Patient"
           showClinicalSections={false}
           showHistoryFields={false}
+          showPmhField={true}
           showBriefToggle={false}
           showTeamService={false}
           showStatus={false}
@@ -1460,7 +1463,7 @@ function PatientBoardPage({
                     />
                   </label>
                   <label>
-                    Underlying disease / PMH
+                    PHx / PMH / Underlying disease
                     <textarea
                       value={draft.underlyingDiseases}
                       onChange={(event) => updateBulkDraft(draft.id, { underlyingDiseases: event.target.value })}

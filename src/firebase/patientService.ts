@@ -13,7 +13,9 @@ import {
 } from "firebase/firestore";
 import {
   normalizeOptionalDateKey,
+  normalizePmhForExplicitWrite,
   normalizeSoapVersion,
+  resolveCanonicalPmhText,
   resolveLegacyDailyNoteLabDate,
   sortDailyNotesDesc,
   sortPatientsByBed,
@@ -266,8 +268,11 @@ function normalizeDailyNote(date: string, data: Partial<DailyNote>): DailyNote {
   };
 }
 
-function normalizePatient(patientId: string, data: Partial<Patient>): Patient {
+function normalizePatient(patientId: string, data: Partial<Patient>, useLegacyPmhFallback = true): Patient {
   const patientLabDate = normalizeOptionalDateKey(data.labDate);
+  const underlyingDiseases = useLegacyPmhFallback
+    ? resolveCanonicalPmhText(data.underlyingDiseases, data.admissionPMH)
+    : String(data.underlyingDiseases ?? "").trim();
   return {
     // Firestore document identity is authoritative for all later writes.
     id: patientId,
@@ -276,10 +281,10 @@ function normalizePatient(patientId: string, data: Partial<Patient>): Patient {
     oneLiner: data.oneLiner ?? "",
     age: data.age ?? 0,
     sex: data.sex === "M" || data.sex === "F" || data.sex === "Other" ? data.sex : "Other",
-    underlyingDiseases: data.underlyingDiseases ?? "",
+    underlyingDiseases,
     underlyingDiseaseItems: Array.isArray(data.underlyingDiseaseItems)
       ? data.underlyingDiseaseItems
-      : textToItems(data.underlyingDiseases ?? ""),
+      : textToItems(underlyingDiseases),
     attending: data.attending ?? "",
     teamOrService: data.teamOrService ?? "",
     admissionDate: data.admissionDate ?? "",
@@ -387,7 +392,13 @@ function sanitizeForFirestore(value: unknown): unknown {
 }
 
 function preparePatientForFirestore(patient: Patient): Record<string, unknown> {
-  const persistablePatient = { ...normalizePatient(patient.id, patient) };
+  // Read-time fallback must not resurrect a legacy admissionPMH after the
+  // clinician explicitly clears the canonical PHx field.
+  const persistablePatient = { ...normalizePatient(patient.id, patient, false) };
+  Object.assign(
+    persistablePatient,
+    normalizePmhForExplicitWrite(patient.underlyingDiseases, patient.admissionPMH),
+  );
   delete persistablePatient.persistedUpdatedAt;
   return sanitizeForFirestore(persistablePatient) as Record<string, unknown>;
 }

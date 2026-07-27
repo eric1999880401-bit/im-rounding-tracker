@@ -841,6 +841,7 @@ function PatientDetailPage({
       ...currentPatient,
       underlyingDiseases: value,
       underlyingDiseaseItems: textToItems(value),
+      admissionPMH: value,
       updatedAt: nowIso(),
     });
   }

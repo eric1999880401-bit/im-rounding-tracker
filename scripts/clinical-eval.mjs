@@ -4299,6 +4299,28 @@ try {
   if (textForm !== "DM, HTN, HLD") {
     throw new Error(`PMH text dedupe produced: ${textForm}`);
   }
+  const heartFailureForm = dedupeDiseaseItems(["HFrEF", "HF", "HFrEF"]);
+  if (heartFailureForm.length !== 1 || heartFailureForm[0] !== "HFrEF") {
+    throw new Error(`PMH heart-failure dedupe must keep the specific subtype: ${heartFailureForm.join(" | ")}`);
+  }
+  const distinctHeartFailureFacts = dedupeDiseaseItems([
+    "HFrEF EF35%",
+    "HFpEF EF60%",
+    "HFrEF EF25%",
+    "HF",
+  ]);
+  if (
+    distinctHeartFailureFacts.length !== 3
+    || !distinctHeartFailureFacts.includes("HFrEF EF35%")
+    || !distinctHeartFailureFacts.includes("HFpEF EF60%")
+    || !distinctHeartFailureFacts.includes("HFrEF EF25%")
+  ) {
+    throw new Error(`PMH dedupe lost conflicting HF phenotype/EF facts: ${distinctHeartFailureFacts.join(" | ")}`);
+  }
+  const parentheticalHeartFailure = dedupeDiseaseItems(["HF", "HFrEF (EF 35%)"]);
+  if (parentheticalHeartFailure.length !== 1 || parentheticalHeartFailure[0] !== "HFrEF (EF 35%)") {
+    throw new Error(`PMH dedupe did not prefer a parenthetical HF subtype: ${parentheticalHeartFailure.join(" | ")}`);
+  }
   const pmhPatient = {
     ...emptyPatient("pmh-header-dedupe"),
     bed: "7A-01",
@@ -4309,6 +4331,28 @@ try {
   const pmhHeader = patientToSoapDraft(pmhPatient, [], "2026-07-10").header.find((line) => /^PMH:/i.test(line)) ?? "";
   if ((pmhHeader.match(/\bDM\b/gi) ?? []).length !== 1 || /type 2 DM.*\bDM\b/i.test(pmhHeader)) {
     throw new Error(`SOAP header PMH kept synonymous duplicates: ${pmhHeader}`);
+  }
+  const hfPmhPatient = {
+    ...emptyPatient("pmh-hf-header-dedupe"),
+    bed: "7A-02",
+    patientCode: "FAKE-PMH-HF",
+    underlyingDiseases: "T2DM, CKD3, AF, HFrEF",
+  };
+  const hfPmhHeader = patientToSoapDraft(hfPmhPatient, [], "2026-07-10").header.find((line) => /^PMH:/i.test(line)) ?? "";
+  if ((hfPmhHeader.match(/\bHFrEF\b/gi) ?? []).length !== 1 || /(?:^|[,;]\s*)HF(?:[,;]|$)/i.test(hfPmhHeader)) {
+    throw new Error(`SOAP header duplicated specific and generic heart failure PMH: ${hfPmhHeader}`);
+  }
+  const driftedPmhPatient = {
+    ...emptyPatient("pmh-representation-drift"),
+    bed: "7A-03",
+    patientCode: "FAKE-PMH-DRIFT",
+    underlyingDiseases: "HTN",
+    underlyingDiseaseItems: ["HTN", "myasthenia gravis"],
+    admissionPMH: "old CVA",
+  };
+  const driftedPmhHeader = patientToSoapDraft(driftedPmhPatient, [], "2026-07-10").header.find((line) => /^PMH:/i.test(line)) ?? "";
+  if (!/HTN/i.test(driftedPmhHeader) || !/myasthenia gravis/i.test(driftedPmhHeader) || !/old CVA/i.test(driftedPmhHeader)) {
+    throw new Error(`SOAP header lost a divergent PMH representation: ${driftedPmhHeader}`);
   }
   console.log("PASS PMH synonym dedupe collapses full-name/abbreviation duplicates without losing distinct diseases");
   supplementalPasses += 1;

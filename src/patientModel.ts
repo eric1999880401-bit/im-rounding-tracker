@@ -17,19 +17,27 @@ import type {
 import { createId, nowIso, todayKey, normalizeDateKey, formatDateLabel } from "./dates";
 import { getAdmissionSummaryText, textToItems, plainClinicalText, safeClinicalLine, compactClinicalText, summarizeItems, splitHighlightLines, stripColorMarkup, importantLines, cleanClinicalTail } from "./clinicalTextFormat";
 import { labSummary, parseLabText, getLabFocusSummary, keyLabItems } from "./labParsing";
-import { dedupeDiseaseItems } from "./aiPostprocess/diseaseDedupe";
+import { dedupeDiseaseText } from "./aiPostprocess/diseaseDedupe";
 
 export function getActivePatients(patients: Patient[]) {
   return patients.filter((patient) => patient.status === "active");
 }
 
 
+export function getPatientPmhText(patient: Patient) {
+  const sources = [
+    ...(patient.underlyingDiseaseItems ?? []),
+    patient.underlyingDiseases,
+    patient.admissionPMH,
+  ]
+    .map((value) => String(value ?? "").trim())
+    .filter(Boolean);
+  return dedupeDiseaseText(sources.join("\n"));
+}
+
 export function getUnderlyingDiseaseItems(patient: Patient) {
-  return dedupeDiseaseItems(
-    patient.underlyingDiseaseItems.length > 0
-      ? patient.underlyingDiseaseItems
-      : textToItems(patient.underlyingDiseases),
-  );
+  const pmhText = getPatientPmhText(patient);
+  return pmhText ? pmhText.split(/,\s*/).filter(Boolean) : [];
 }
 
 export function getActiveProblemItems(patient: Patient) {

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import path from "node:path";
 import ts from "typescript";
 
@@ -20,10 +20,12 @@ const {
   clinicalDataSnapshotsAreReady,
   markDailyNotesSnapshotReady,
   normalizeOptionalDateKey,
+  normalizePmhForExplicitWrite,
   normalizeSoapVersion,
   patientDailyNotesAreReady,
   recentDailyNotesOnOrBefore,
   reconcileDailyNotesReadiness,
+  resolveCanonicalPmhText,
   resolveLegacyDailyNoteLabDate,
   retargetSoapDateHeader,
   snapshotIsServerConfirmed,
@@ -80,6 +82,21 @@ assert.equal(normalizeSoapVersion(0), 1);
 assert.equal(normalizeSoapVersion(-2), 1);
 assert.equal(normalizeSoapVersion(Number.NaN), 1);
 assert.equal(normalizeSoapVersion(Number.POSITIVE_INFINITY), 1);
+assert.equal(
+  resolveCanonicalPmhText("T2DM, CKD3", "legacy HTN"),
+  "T2DM, CKD3",
+  "canonical PHx must win over a stale legacy admissionPMH value",
+);
+assert.equal(
+  resolveCanonicalPmhText("", "legacy CKD3, AF"),
+  "legacy CKD3, AF",
+  "legacy admissionPMH must remain visible when the canonical PHx field is absent",
+);
+assert.deepEqual(
+  normalizePmhForExplicitWrite("", "legacy CKD3, AF"),
+  { underlyingDiseases: "", admissionPMH: "" },
+  "an explicit canonical PHx clear must not be repopulated from a stale legacy alias",
+);
 
 const yesterdaySoap = [
   "Dx: Fake pneumonia",
@@ -102,6 +119,17 @@ assert.match(retargetedSoap, /Patient stated Date: uncertain/, "narrative Date t
 
 const patientServiceSource = await readFile(path.resolve(scriptDirectory, "../src/firebase/patientService.ts"), "utf8");
 assert.match(patientServiceSource, /const patientLabDate = normalizeOptionalDateKey\(data\.labDate\)/);
+assert.match(
+  patientServiceSource,
+  /useLegacyPmhFallback[\s\S]*resolveCanonicalPmhText\(data\.underlyingDiseases, data\.admissionPMH\)/,
+  "patient normalization must expose legacy admissionPMH through the canonical PHx field",
+);
+assert.match(
+  patientServiceSource,
+  /normalizePatient\(patient\.id, patient, false\)/,
+  "write serialization must not run the read-time legacy PMH fallback",
+);
+assert.match(patientServiceSource, /normalizePmhForExplicitWrite\(patient\.underlyingDiseases, patient\.admissionPMH\)/);
 assert.match(patientServiceSource, /soapVersion:\s*normalizeSoapVersion\(data\.soapVersion\)/);
 assert.doesNotMatch(
   patientServiceSource,
@@ -113,6 +141,54 @@ assert.match(
   datesSource,
   /const normalized = normalizeDateKey\(dateKey, ""\)/,
   "display formatting must not turn an absent clinical date into today",
+);
+
+const patientFormSource = await readFile(path.resolve(scriptDirectory, "../src/components/PatientForm.tsx"), "utf8");
+assert.match(patientFormSource, /value=\{patient\.underlyingDiseases\}/);
+assert.match(patientFormSource, /underlyingDiseaseItems:\s*textToItems\(value\)/);
+assert.match(patientFormSource, /admissionPMH:\s*value/);
+const admissionBriefSource = await readFile(path.resolve(scriptDirectory, "../src/components/AdmissionBriefForm.tsx"), "utf8");
+assert.match(admissionBriefSource, /PHx \/ PMH[\s\S]*value=\{patient\.underlyingDiseases\}/);
+assert.match(admissionBriefSource, /underlyingDiseaseItems:\s*textToItems\(value\)/);
+assert.match(admissionBriefSource, /admissionPMH:\s*value/);
+const patientDetailSource = await readFile(path.resolve(scriptDirectory, "../src/pages/PatientDetailPage.tsx"), "utf8");
+assert.match(patientDetailSource, /function updateUnderlyingDiseases[\s\S]*admissionPMH:\s*value/);
+const boardSource = await readFile(path.resolve(scriptDirectory, "../src/pages/PatientBoardPage.tsx"), "utf8");
+const addPatientStart = boardSource.indexOf("{showForm && (");
+const addPatientEnd = boardSource.indexOf("<details", addPatientStart);
+assert.ok(addPatientStart >= 0 && addPatientEnd > addPatientStart, "Add Patient form was not found");
+const addPatientForm = boardSource.slice(addPatientStart, addPatientEnd);
+assert.match(addPatientForm, /showPmhField=\{true\}/, "Add Patient must expose the canonical PHx field");
+assert.match(addPatientForm, /showHistoryFields=\{false\}/, "Adding PHx must not expose unrelated history fields");
+const printSource = await readFile(path.resolve(scriptDirectory, "../src/pages/PrintRoundingListPage.tsx"), "utf8");
+assert.match(printSource, /PHx \/ PMH[\s\S]*getPatientPmhText\(patient\)/);
+const patientModelSource = await readFile(path.resolve(scriptDirectory, "../src/patientModel.ts"), "utf8");
+assert.match(patientModelSource, /underlyingDiseaseItems[\s\S]*underlyingDiseases[\s\S]*admissionPMH/);
+const cleanupSource = await readFile(path.resolve(scriptDirectory, "../scripts/cleanup-patients.mjs"), "utf8");
+assert.match(cleanupSource, /function sameDiseaseIdentity/);
+assert.match(cleanupSource, /function heartFailureIdentity/);
+const { planPmhCleanup } = await import(pathToFileURL(path.resolve(scriptDirectory, "../scripts/cleanup-patients.mjs")).href);
+const dirtyPmhCleanup = planPmhCleanup({
+  underlyingDiseases: "HTN, myasthenia gravis",
+  underlyingDiseaseItems: ["HTN", "hypertension"],
+  admissionPMH: "old CVA",
+});
+assert.equal(dirtyPmhCleanup.changed, true);
+assert.equal(dirtyPmhCleanup.underlyingDiseases, "HTN, myasthenia gravis, old CVA");
+assert.deepEqual(dirtyPmhCleanup.underlyingDiseaseItems, ["HTN", "myasthenia gravis", "old CVA"]);
+assert.equal(
+  planPmhCleanup({
+    underlyingDiseases: dirtyPmhCleanup.underlyingDiseases,
+    underlyingDiseaseItems: dirtyPmhCleanup.underlyingDiseaseItems,
+    admissionPMH: "old CVA",
+  }).changed,
+  false,
+  "cleanup write planning must be idempotent even while a legacy alias remains",
+);
+assert.equal(
+  planPmhCleanup({ underlyingDiseases: "type 2 DM, DM", underlyingDiseaseItems: [] }).underlyingDiseases,
+  "type 2 DM",
+  "cleanup must collapse the DM alias without discarding the more specific type 2 qualifier",
 );
 
 const cacheOnly = markDailyNotesSnapshotReady(readiness, "new-patient", {

@@ -35,7 +35,7 @@ const uidArg = (args.find((a) => a.startsWith("--uid=")) || "").split("=")[1] ||
 
 // --- Disease synonym dedupe (kept in sync with src/aiPostprocess/diseaseDedupe.ts) ---
 const DISEASE_SYNONYMS = [
-  [/^(?:type\s*(?:2|ii)\s*)?diabetes(?:\s+mellitus)?(?:\s*type\s*(?:2|ii))?$|^t2dm$|^dm$|^dm\s*type\s*(?:2|ii)$/i, "dm"],
+  [/^(?:type\s*(?:2|ii)\s*)?diabetes(?:\s+mellitus)?(?:\s*type\s*(?:2|ii))?$|^t2dm$|^dm$|^type\s*(?:2|ii)\s*dm$|^dm\s*type\s*(?:2|ii)$/i, "dm"],
   [/^hypertension$|^htn$/i, "htn"],
   [/^hyperlipidemia$|^dyslipidemia$|^hld$/i, "hld"],
   [/^coronary artery disease$|^cad$/i, "cad"],
@@ -59,7 +59,49 @@ function diseaseKey(item) {
   return "";
 }
 
+function heartFailureIdentity(item) {
+  const clean = item.trim().replace(/^and\s+/i, "").replace(/[.\u3002;\uff1b]+$/, "");
+  if (/^(?:congestive\s+)?heart failure$|^chf$|^hf$/i.test(clean)) {
+    return { phenotype: "generic", ef: "" };
+  }
+  const specific = clean.match(/^hf(r|p|mr)ef(?:\s*[([]?\s*(?:ef\s*)?(\d+(?:\.\d+)?)\s*%?\s*[)\]]?)?$/i);
+  if (!specific) return undefined;
+  return {
+    phenotype: specific[1].toLowerCase(),
+    ef: specific[2] ? String(Number(specific[2])) : "",
+  };
+}
+
+function normalizedExactDiseaseItem(item) {
+  return item
+    .trim()
+    .replace(/^and\s+/i, "")
+    .replace(/[.\u3002;\uff1b]+$/, "")
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+}
+
+function sameDiseaseIdentity(a, b) {
+  const aHeartFailure = heartFailureIdentity(a);
+  const bHeartFailure = heartFailureIdentity(b);
+  if (aHeartFailure || bHeartFailure) {
+    if (!aHeartFailure || !bHeartFailure) return false;
+    if (aHeartFailure.phenotype === "generic" || bHeartFailure.phenotype === "generic") return true;
+    if (aHeartFailure.phenotype !== bHeartFailure.phenotype) return false;
+    return !(aHeartFailure.ef && bHeartFailure.ef && aHeartFailure.ef !== bHeartFailure.ef);
+  }
+
+  const aKey = diseaseKey(a);
+  const bKey = diseaseKey(b);
+  if (aKey || bKey) return Boolean(aKey && aKey === bKey);
+  return normalizedExactDiseaseItem(a) === normalizedExactDiseaseItem(b);
+}
+
 function preferredDuplicate(a, b) {
+  const aHeartFailure = heartFailureIdentity(a);
+  const bHeartFailure = heartFailureIdentity(b);
+  if (aHeartFailure?.phenotype === "generic" && bHeartFailure?.phenotype !== "generic") return b;
+  if (bHeartFailure?.phenotype === "generic" && aHeartFailure?.phenotype !== "generic") return a;
   const aInfo = /[\d()]/.test(a);
   const bInfo = /[\d()]/.test(b);
   if (aInfo !== bInfo) return aInfo ? a : b;
@@ -68,19 +110,12 @@ function preferredDuplicate(a, b) {
 
 function dedupeDiseaseItems(items) {
   const kept = [];
-  const byKey = new Map();
   items
     .map((item) => item.trim())
     .filter(Boolean)
     .forEach((item) => {
-      const key = diseaseKey(item);
-      if (!key) {
-        kept.push(item);
-        return;
-      }
-      const existingIndex = byKey.get(key);
-      if (existingIndex === undefined) {
-        byKey.set(key, kept.length);
+      const existingIndex = kept.findIndex((existing) => sameDiseaseIdentity(existing, item));
+      if (existingIndex < 0) {
         kept.push(item);
         return;
       }
@@ -96,6 +131,37 @@ function itemsFromField(text, items) {
     .flatMap((line) => line.split(/[,，、;；]/))
     .map((token) => token.trim().replace(/^and\s+/i, ""))
     .filter(Boolean);
+}
+
+function itemsFromStoredPmh(text, items, legacyText) {
+  return [
+    ...(Array.isArray(items) ? items.map(String) : []),
+    String(text || ""),
+    String(legacyText || ""),
+  ]
+    .flatMap((value) => itemsFromField(value.replace(/[,\uFF0C\u3001;\uFF1B]/g, "\n"), []));
+}
+
+export function planPmhCleanup(data) {
+  const sourceItems = itemsFromStoredPmh(
+    data?.underlyingDiseases,
+    data?.underlyingDiseaseItems,
+    data?.admissionPMH,
+  );
+  const underlyingDiseaseItems = dedupeDiseaseItems(sourceItems);
+  const underlyingDiseases = underlyingDiseaseItems.join(", ");
+  const currentItems = Array.isArray(data?.underlyingDiseaseItems)
+    ? data.underlyingDiseaseItems.map((item) => String(item ?? "").trim()).filter(Boolean)
+    : [];
+  const changed = underlyingDiseases !== String(data?.underlyingDiseases ?? "").trim()
+    || underlyingDiseaseItems.length !== currentItems.length
+    || underlyingDiseaseItems.some((item, index) => item !== currentItems[index]);
+  return {
+    changed,
+    sourceItems,
+    underlyingDiseases,
+    underlyingDiseaseItems,
+  };
 }
 
 async function main() {
@@ -118,9 +184,10 @@ async function main() {
 
   for (const doc of snap.docs) {
     const data = doc.data();
-    const sourceItems = itemsFromField(data.underlyingDiseases, data.underlyingDiseaseItems);
-    const cleaned = dedupeDiseaseItems(sourceItems);
-    if (cleaned.length === sourceItems.length && cleaned.join("|") === sourceItems.join("|")) continue;
+    const plan = planPmhCleanup(data);
+    const sourceItems = plan.sourceItems;
+    const cleaned = plan.underlyingDiseaseItems;
+    if (!plan.changed) continue;
 
     changed += 1;
     const bed = data.bed || data.patientCode || doc.id;
@@ -150,7 +217,9 @@ async function main() {
   process.exit(0);
 }
 
-main().catch((error) => {
-  console.error("Cleanup failed:", error.message || error);
-  process.exit(1);
-});
+if (path.resolve(process.argv[1] ?? "") === fileURLToPath(import.meta.url)) {
+  main().catch((error) => {
+    console.error("Cleanup failed:", error.message || error);
+    process.exit(1);
+  });
+}

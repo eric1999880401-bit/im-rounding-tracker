@@ -16,6 +16,7 @@ import {
   getActiveAttendingNames,
   getActivePatients,
   getAdmissionSummaryText,
+  getPatientPmhText,
   getPatientDisplaySummary,
   groupPatientsByAttending,
   dischargePrepText,
@@ -597,8 +598,8 @@ function PrintRoundingListPage({
             </div>
           )}
           <div>
-            <strong>Key PMH</strong>
-            <ClinicalText value={patient.admissionPMH || patient.underlyingDiseases} keywordRules={preferences.keywordHighlightRules} />
+            <strong>PHx / PMH</strong>
+            <ClinicalText value={getPatientPmhText(patient)} keywordRules={preferences.keywordHighlightRules} />
           </div>
           <div>
             <strong>Key Labs / Images</strong>

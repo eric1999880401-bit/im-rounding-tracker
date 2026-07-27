@@ -111,7 +111,7 @@ function compactPatientHeader(patient: Patient) {
 
 function specificPmh(patient: Patient, fallbackRisks: string[]) {
   const pmhItems = getUnderlyingDiseaseItems(patient);
-  const source = [...pmhItems, patient.underlyingDiseases, ...fallbackRisks].join("\n");
+  const source = [...pmhItems, ...fallbackRisks].join("\n");
   const cancerSource = [
     patient.primaryDiagnosis,
     patient.oneLiner,

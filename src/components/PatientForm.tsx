@@ -11,6 +11,7 @@ interface PatientFormProps {
   submitLabel: string;
   showClinicalSections?: boolean;
   showHistoryFields?: boolean;
+  showPmhField?: boolean;
   showBriefToggle?: boolean;
   showTeamService?: boolean;
   showStatus?: boolean;
@@ -27,6 +28,7 @@ function PatientForm({
   submitLabel,
   showClinicalSections = true,
   showHistoryFields = true,
+  showPmhField,
   showBriefToggle = true,
   showTeamService = true,
   showStatus = true,
@@ -36,12 +38,18 @@ function PatientForm({
   onCompositionEnd,
 }: PatientFormProps) {
   const t = useT();
+  const shouldShowPmhField = showPmhField ?? showHistoryFields;
   function updateField<K extends keyof Patient>(field: K, value: Patient[K]) {
     onChange({ ...patient, [field]: value });
   }
 
   function updateUnderlyingDiseases(value: string) {
-    onChange({ ...patient, underlyingDiseases: value, underlyingDiseaseItems: textToItems(value) });
+    onChange({
+      ...patient,
+      underlyingDiseases: value,
+      underlyingDiseaseItems: textToItems(value),
+      admissionPMH: value,
+    });
   }
 
   function updateActiveProblems(value: string) {
@@ -191,31 +199,31 @@ function PatientForm({
         </label>
       )}
 
-      {showHistoryFields && (
-        <>
-          <label className="span-2">
-            {t("field.pmh")}
-            <textarea
-              value={patient.underlyingDiseases}
-              onChange={(event) => updateUnderlyingDiseases(event.target.value)}
-              onBlur={commitOnBlur}
-              onCompositionStart={onCompositionStart}
-              onCompositionEnd={handleCompositionEnd}
-              placeholder="Example: DM, HTN, CKD, CAD, old CVA"
-            />
-          </label>
+      {shouldShowPmhField && (
+        <label className="span-2">
+          {t("field.pmh")}
+          <textarea
+            value={patient.underlyingDiseases}
+            onChange={(event) => updateUnderlyingDiseases(event.target.value)}
+            onBlur={commitOnBlur}
+            onCompositionStart={onCompositionStart}
+            onCompositionEnd={handleCompositionEnd}
+            placeholder="Example: DM, HTN, CKD, CAD, old CVA"
+          />
+        </label>
+      )}
 
-          <label className="span-2">
-            {t("field.primaryDiagnosis")}
-            <input
-              value={patient.primaryDiagnosis}
-              onChange={(event) => updateField("primaryDiagnosis", event.target.value)}
-              onBlur={commitOnBlur}
-              onCompositionStart={onCompositionStart}
-              onCompositionEnd={handleCompositionEnd}
-            />
-          </label>
-        </>
+      {showHistoryFields && (
+        <label className="span-2">
+          {t("field.primaryDiagnosis")}
+          <input
+            value={patient.primaryDiagnosis}
+            onChange={(event) => updateField("primaryDiagnosis", event.target.value)}
+            onBlur={commitOnBlur}
+            onCompositionStart={onCompositionStart}
+            onCompositionEnd={handleCompositionEnd}
+          />
+        </label>
       )}
 
       {showClinicalSections && (

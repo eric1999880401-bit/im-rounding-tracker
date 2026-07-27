@@ -31,9 +31,55 @@ function diseaseKey(item: string) {
   return "";
 }
 
+interface HeartFailureIdentity {
+  phenotype: "generic" | "r" | "p" | "mr";
+  ef: string;
+}
+
+function heartFailureIdentity(item: string): HeartFailureIdentity | undefined {
+  const clean = item.trim().replace(/^and\s+/i, "").replace(/[.\u3002;\uff1b]+$/, "");
+  if (/^(?:congestive\s+)?heart failure$|^chf$|^hf$/i.test(clean)) {
+    return { phenotype: "generic", ef: "" };
+  }
+  const specific = clean.match(/^hf(r|p|mr)ef(?:\s*[([]?\s*(?:ef\s*)?(\d+(?:\.\d+)?)\s*%?\s*[)\]]?)?$/i);
+  if (!specific) return undefined;
+  return {
+    phenotype: specific[1].toLowerCase() as HeartFailureIdentity["phenotype"],
+    ef: specific[2] ? String(Number(specific[2])) : "",
+  };
+}
+
+function normalizedExactDiseaseItem(item: string) {
+  return item
+    .trim()
+    .replace(/^and\s+/i, "")
+    .replace(/[.\u3002;\uff1b]+$/, "")
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+}
+
+function sameDiseaseIdentity(a: string, b: string) {
+  const aHeartFailure = heartFailureIdentity(a);
+  const bHeartFailure = heartFailureIdentity(b);
+  if (aHeartFailure || bHeartFailure) {
+    if (!aHeartFailure || !bHeartFailure) return false;
+    if (aHeartFailure.phenotype === "generic" || bHeartFailure.phenotype === "generic") return true;
+    if (aHeartFailure.phenotype !== bHeartFailure.phenotype) return false;
+    return !(aHeartFailure.ef && bHeartFailure.ef && aHeartFailure.ef !== bHeartFailure.ef);
+  }
+
+  const aKey = diseaseKey(a);
+  const bKey = diseaseKey(b);
+  if (aKey || bKey) return Boolean(aKey && aKey === bKey);
+  return normalizedExactDiseaseItem(a) === normalizedExactDiseaseItem(b);
+}
+
 function preferredDuplicate(a: string, b: string) {
   // Keep the more informative form (digits/dates/qualifiers), otherwise the
   // shorter abbreviation-style form the user writes by hand.
+  const aHeartFailureSubtype = /^hf(?:r|p|mr)ef\b/i.test(a);
+  const bHeartFailureSubtype = /^hf(?:r|p|mr)ef\b/i.test(b);
+  if (aHeartFailureSubtype !== bHeartFailureSubtype) return aHeartFailureSubtype ? a : b;
   const aInfo = /[\d()]/.test(a);
   const bInfo = /[\d()]/.test(b);
   if (aInfo !== bInfo) return aInfo ? a : b;
@@ -42,19 +88,12 @@ function preferredDuplicate(a: string, b: string) {
 
 export function dedupeDiseaseItems(items: string[]) {
   const kept: string[] = [];
-  const byKey = new Map<string, number>();
   items
     .map((item) => item.trim())
     .filter(Boolean)
     .forEach((item) => {
-      const key = diseaseKey(item);
-      if (!key) {
-        kept.push(item);
-        return;
-      }
-      const existingIndex = byKey.get(key);
-      if (existingIndex === undefined) {
-        byKey.set(key, kept.length);
+      const existingIndex = kept.findIndex((existing) => sameDiseaseIdentity(existing, item));
+      if (existingIndex < 0) {
         kept.push(item);
         return;
       }

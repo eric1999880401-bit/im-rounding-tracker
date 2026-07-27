@@ -9,7 +9,7 @@ import {
   isDeidentifiedConfirmationCurrent,
 } from "../aiPrivacyConfirmation";
 import { applyVisibleAdmissionSummaryEdit } from "../admissionBriefPersistence";
-import { stripMarkdownEmphasis } from "../utils";
+import { stripMarkdownEmphasis, textToItems } from "../utils";
 import type { Patient } from "../types";
 import ColorMarkupTextarea from "./ColorMarkupTextarea";
 import DeidNotice from "./DeidNotice";
@@ -66,6 +66,16 @@ function AdmissionBriefForm({
 
   function updateField<K extends keyof Patient>(field: K, value: Patient[K]) {
     onChange({ ...patient, [field]: value, updatedAt: new Date().toISOString() });
+  }
+
+  function updateUnderlyingDiseases(value: string) {
+    onChange({
+      ...patient,
+      underlyingDiseases: value,
+      underlyingDiseaseItems: textToItems(value),
+      admissionPMH: value,
+      updatedAt: new Date().toISOString(),
+    });
   }
 
   function commitOnBlur() {
@@ -265,6 +275,18 @@ function AdmissionBriefForm({
           {generationError && <p className="error-message">{generationError}</p>}
           {generationStatus && <p className="status-message">{generationStatus}</p>}
         </div>
+
+        <label className="span-2">
+          PHx / PMH
+          <textarea
+            value={patient.underlyingDiseases}
+            onChange={(event) => updateUnderlyingDiseases(event.target.value)}
+            onBlur={commitOnBlur}
+            onCompositionStart={onCompositionStart}
+            onCompositionEnd={handleCompositionEnd}
+            placeholder="Example: T2DM, HTN, CKD3, CAD, old CVA"
+          />
+        </label>
 
         <label className="span-2">
           Admission Summary

@@ -27,6 +27,24 @@ export function normalizeOptionalDateKey(value: unknown) {
   return normalizedDate(value);
 }
 
+/**
+ * `underlyingDiseases` is the canonical patient-level PHx field. Older
+ * records may contain only `admissionPMH`; expose that value without writing
+ * a migration until the clinician explicitly saves the patient.
+ */
+export function resolveCanonicalPmhText(underlyingDiseases: unknown, legacyAdmissionPmh: unknown) {
+  return sortText(underlyingDiseases) || sortText(legacyAdmissionPmh);
+}
+
+/** Explicitly clearing canonical PHx also retires the legacy fallback. */
+export function normalizePmhForExplicitWrite(underlyingDiseases: unknown, legacyAdmissionPmh: unknown) {
+  const canonical = sortText(underlyingDiseases);
+  return {
+    underlyingDiseases: canonical,
+    admissionPMH: canonical ? sortText(legacyAdmissionPmh) : "",
+  };
+}
+
 function sortableDate(value: unknown) {
   return normalizedDate(value);
 }
