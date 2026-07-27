@@ -1,6 +1,6 @@
 import { extractActiveAntibioticNames } from "./antibioticPlan";
 import { classifyClinicalLine, type ClinicalLineKind } from "./clinicalLineClassifier";
-import { buildCanonicalLabDataset, labSelectionKeysFromText } from "./labDataset";
+import { buildCanonicalLabDataset, canonicalLabSelectionKey, labSelectionKeysFromText } from "./labDataset";
 import {
   buildCanonicalImageDataset,
   canonicalImageFallbackLines,
@@ -9,6 +9,7 @@ import { formatLabVisualSummaryLinesFromText, formatLabVisualTimelineLines } fro
 import { normalizeObjectiveLabExportLines, objectiveKindFromLine } from "./objectiveLineSanitizer";
 import { splitGuidedSoapSource } from "./soapDraft";
 import {
+  applyAiHighlightHintsToEditorDraft,
   editorDraftToSoapText,
   parseCanonicalSoapTextToEditorDraft,
   parseSoapTextToEditorDraft,
@@ -17,6 +18,7 @@ import {
   type SoapEditorLine,
   type SoapEditorProblem,
 } from "./soapEditorDraft";
+import { conciseSoapDiagnosisForDisplay } from "./soapDisplay";
 import type { RoundSoapSourceFields, RoundSoapWorkflowMode, SoapDeltaReview, SoapDeltaSection } from "./soapDeltaGuardrails";
 import type { StructuredRoundSoapDraft } from "./types";
 import { createId, stripColorMarkup } from "./utils";
@@ -216,9 +218,57 @@ export function isVitalsOnlyDailySource(fields: RoundSoapSourceFields) {
 }
 
 function looksLikeLabs(value: string) {
-  const labels = value.match(/\b(?:WBC|Neu|Hb|Hgb|Hct|Plt|BUN|Cr|eGFR|Na|K|Cl|Ca|Mg|Phos|AST|ALT|ALP|T-?Bil|Alb|PT|INR|CRP|PCT|lactate|ABG|VBG|pH|pCO2|pO2|HCO3|BE|troponin|BNP)\b/gi) ?? [];
+  const labels = value.match(/\b(?:WBC|Neu|Hb|Hgb|Hct|Plt|BUN|Cr|eGFR|Na|K|Cl|Ca|Mg|Phos|AST|ALT|ALP|T-?Bil|Alb|PT|INR|CRP|hsCRP|PCT|ESR|lactate|U\/?A|urinalysis|nitrite|leukocyte esterase|ABG|VBG|pH|pCO2|pO2|HCO3|BE|troponin|BNP)\b/gi) ?? [];
   const numbers = value.match(/(?:^|\s|[:=])([<>]?-?\d+(?:\.\d+)?)(?=\s|[,;/%)]|$)/gm) ?? [];
   return labels.length >= 2 && numbers.length >= 2;
+}
+
+function clinicallyRequiredLabLabels(
+  dataset: ReturnType<typeof buildCanonicalLabDataset>,
+  preferredItemIds: string[],
+  preferredLabels: string[],
+  context: string,
+) {
+  const available = new Map(dataset.latestItems.map((item) => [
+    canonicalLabSelectionKey(item.name || item.label),
+    item.name || item.label,
+  ]));
+  const preferredKeys = new Set([
+    ...preferredLabels.map(canonicalLabSelectionKey),
+    ...dataset.latestItems
+      .filter((item) => preferredItemIds.includes(item.id))
+      .map((item) => canonicalLabSelectionKey(item.name || item.label)),
+  ]);
+  const required = new Set<string>();
+  const addAvailable = (labels: string[]) => labels.forEach((label) => {
+    const key = canonicalLabSelectionKey(label);
+    const display = available.get(key);
+    if (display) required.add(display);
+  });
+  const anyAvailable = (labels: string[]) => labels.some((label) => available.has(canonicalLabSelectionKey(label)));
+  const anyPreferred = (labels: string[]) => labels.some((label) => preferredKeys.has(canonicalLabSelectionKey(label)));
+
+  // Small orientation sets are deterministic safety anchors. AI sourceIds add
+  // problem-specific labs; these anchors prevent a clinically absurd omission
+  // such as hiding WBC in sepsis or K in AKI.
+  if (anyAvailable(["WBC", "Hb", "Plt"])) addAvailable(["WBC", "Hb", "Plt"]);
+  if (anyAvailable(["Cr", "Na", "K"])) addAvailable(["Cr", "Na", "K"]);
+
+  const infectionLabels = ["CRP", "hsCRP", "PCT", "Lactate", "ESR"];
+  const infectionContext = /\b(?:infection|sepsis|septic|pna|pneumonia|uti|pyelonephritis|meningitis|cholangitis|cellulitis|abscess|osteomyelitis|fever|bacteremia|culture|cx)\b/i.test(context);
+  if (infectionContext || anyPreferred(infectionLabels)) addAvailable(infectionLabels);
+
+  const urineLabels = ["UA WBC", "UA RBC", "LE", "Nitrite", "Bacteria", "Protein", "Glucose urine", "Ketone", "Specific gravity", "pH urine", "Cast"];
+  if (anyAvailable(urineLabels) || /\b(?:uti|pyuria|urinary|urine|u\/?a|urinalysis)\b/i.test(context)) addAvailable(urineLabels);
+
+  const liverLabels = ["AST", "ALT", "ALP", "GGT", "T-Bil", "D-Bil", "Alb", "PT", "INR", "aPTT"];
+  if (anyPreferred(liverLabels) || /\b(?:liver|hepatic|hepatitis|transaminitis|coagulopathy|cirrhosis|jaundice)\b/i.test(context)) {
+    addAvailable(liverLabels);
+  } else if (anyPreferred(["AST", "ALT"])) {
+    addAvailable(["AST", "ALT"]);
+  }
+
+  return [...required];
 }
 
 function looksLikeImage(value: string) {
@@ -244,6 +294,12 @@ function sourceLabEditorLines(
   const selectedIdLabels = currentDataset.latestItems
     .filter((item) => preferredItemIds.includes(item.id))
     .map((item) => item.name || item.label);
+  const requiredLabels = clinicallyRequiredLabLabels(
+    currentDataset,
+    preferredItemIds,
+    [...preferredLabels, ...selectedIdLabels],
+    `${sourceText(fields)}\n${baselineText}`,
+  );
   const baselineLabText = baselineText
     ? parseCanonicalSoapTextToEditorDraft(baselineText).oLines
         .filter((line) => line.kind === "lab" && !isMicrobiologyLabLine(line))
@@ -252,7 +308,10 @@ function sourceLabEditorLines(
     : "";
   const summaryOptions = {
     includePlain: true,
+    selectionMode: "aiFocused" as const,
+    preferredItemIds,
     preferredLabels: [...preferredLabels, ...selectedIdLabels],
+    requiredLabels,
   };
   const lines = baselineLabText
     ? formatLabVisualTimelineLines(currentSource, baselineLabText, summaryOptions)
@@ -350,14 +409,14 @@ function sanitizeGeneratedObjectiveOther(lines: SoapEditorLine[], source: string
   })).slice(0, 4);
 }
 
-function sanitizeGeneratedHeader(lines: SoapEditorLine[]) {
-  return uniqueEditorLines(lines.flatMap((line) => {
-    const text = stripColorMarkup(line.text)
-      .split(/\s+(?=(?:PMH|PHx|CC|HPI|PI|V\/S|VS|Lab|Image|A\/P|Tasks?|DC)\s*:)/i)[0]
-      .trim();
-    if (!text) return [];
-    return [{ ...line, text }];
-  })).slice(0, 2);
+function sanitizeGeneratedHeader(lines: SoapEditorLine[], problems: SoapEditorProblem[]) {
+  const diagnosis = conciseSoapDiagnosisForDisplay({
+    headerLines: lines.map((line) => line.text),
+    apTitles: problems.map((problem) => problem.title),
+    maxItems: 2,
+    maxChars: 110,
+  });
+  return diagnosis ? [editorLine(`Dx: ${diagnosis}`, "header")] : [];
 }
 
 function tokenSet(value: string) {
@@ -659,7 +718,7 @@ export function acceptStructuredRoundSoap(params: {
   // and orders instead of rejecting an otherwise useful draft.
   const repairedGenerated: SoapEditorDraft = {
     ...generated,
-    headerLines: sanitizeGeneratedHeader(generated.headerLines),
+    headerLines: sanitizeGeneratedHeader(generated.headerLines, groundedProblems),
     oLines: [
       ...(sourceOwnedVitals.length > 0 ? sourceOwnedVitals : generatedO.vs),
       ...sanitizeGeneratedPe(generatedO.pe),
@@ -702,8 +761,8 @@ export function acceptStructuredRoundSoap(params: {
 
   const fatalErrors: string[] = [];
   const candidateText = editorDraftToSoapText(generated);
-  const acceptedText = editorDraftToSoapText(accepted);
-  const finalDraft = accepted;
+  const finalDraft = applyAiHighlightHintsToEditorDraft(accepted, params.value.highlightHints);
+  const acceptedText = editorDraftToSoapText(finalDraft);
   const changed = changedSections(baseline, finalDraft);
   const warnings = actionableModelWarnings(params.value.warnings);
   return {

@@ -6,7 +6,7 @@ import {
   makeRoundNoteLineView,
   type RoundNoteLineView,
 } from "../roundNoteViewModel";
-import { soapHeaderLinesForDisplay } from "../soapDisplay";
+import { conciseSoapDiagnosisForDisplay, soapHeaderLinesForDisplay } from "../soapDisplay";
 import { deriveSoapEvidence, type SoapSourceFields } from "../soapEvidence";
 import type { KeywordHighlightRule, RoundingLayoutPreferences } from "../types";
 import {
@@ -92,9 +92,15 @@ export function SoapVisualPreview({
 }: SoapVisualPreviewProps) {
   const view = useMemo(() => buildRoundNoteViewModel(value, { chronicRenal }), [chronicRenal, value]);
   const evidence = useMemo(() => deriveSoapEvidence(value, sourceFields), [sourceFields, value]);
+  const diagnosis = conciseSoapDiagnosisForDisplay({
+    headerLines: view.header.map((line) => line.raw),
+    apTitles: view.assessmentPlan.map((problem) => problem.title.text),
+    maxItems: 2,
+    maxChars: compact ? 100 : 120,
+  });
   const headerLines = soapHeaderLinesForDisplay(
     view.header.map((line) => line.raw).filter((line) => isSoapHeaderLineVisible(line, layoutPreferences)),
-    { dx: view.assessmentPlan.slice(0, 2).map((problem) => problem.title.text).filter(Boolean).join(" / ") },
+    { dx: diagnosis },
     { maxLines: 4, maxChars: compact ? 110 : 140 },
   );
   const sLines = isLayoutSectionVisible(layoutPreferences, "subjective") ? view.subjective : [];

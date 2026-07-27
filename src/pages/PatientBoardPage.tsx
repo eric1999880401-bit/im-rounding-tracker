@@ -38,7 +38,7 @@ import {
 import { useT } from "../i18n";
 import { getPatientHeadline, getRoundingDigest } from "../roundingDigest";
 import { fallbackSoapTextFromPatient, getCanonicalSoapText, patientToSoapDraft } from "../soapDraft";
-import { soapHeaderLinesForDisplay } from "../soapDisplay";
+import { conciseSoapDiagnosisForDisplay, soapHeaderLinesForDisplay } from "../soapDisplay";
 import { buildCarriedForwardKeys, isCarriedForwardLine } from "../soapLineDelta";
 import {
   buildRoundNoteViewModelFromDraft,
@@ -1381,8 +1381,13 @@ function PatientBoardPage({
             const digest = getRoundingDigest(patient, patientNotes, { mode: "board", hideCompletedTasks: true });
             const chronicRenal = hasChronicRenalContext(patient);
             const roundView = buildRoundNoteViewModelFromDraft(soap, { chronicRenal });
-            const canonicalDiagnosis = soap.header.find((line) => /^Dx\s*:/i.test(line))?.replace(/^Dx\s*:\s*/i, "") ?? "";
-            const fallbackDiagnosis = canonicalDiagnosis || roundView.assessmentPlan[0]?.title.text || patient.primaryDiagnosis || (hasReviewedSoap ? "" : digest.diagnosis) || safeClinicalLine(patient.oneLiner, 120);
+            const fallbackDiagnosis = conciseSoapDiagnosisForDisplay({
+              headerLines: soap.header,
+              apTitles: roundView.assessmentPlan.map((problem) => problem.title.text),
+              fallbacks: [patient.primaryDiagnosis, hasReviewedSoap ? "" : digest.diagnosis, patient.oneLiner],
+              maxItems: 2,
+              maxChars: 110,
+            });
             const headline = hasReviewedSoap ? null : getPatientHeadline(patient, patientNotes);
             const carriedKeys = buildCarriedForwardKeys(patientNotes, todayKey());
             const redFlagLine = isLayoutSectionVisible(roundingLayout, "redFlags")

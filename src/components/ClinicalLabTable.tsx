@@ -24,22 +24,12 @@ function sourceLine(value: string | RoundNoteLineView) {
   return typeof value === "string" ? value : value.raw || value.text;
 }
 
-function visibleGroups(groups: LabVisualGroup[], density: ClinicalLabTableDensity) {
-  if (density === "detail") return groups;
-  const limit = density === "board" ? 5 : 6;
-  const mandatory = new Set(groups.filter((group) => group.tone !== "plain").map((group) => group.id));
-  const selected = new Set(mandatory);
-  groups.forEach((group) => {
-    if (selected.size < limit) selected.add(group.id);
-  });
-  return groups.filter((group) => selected.has(group.id));
-}
-
 const compactGroupLabels: Record<LabVisualGroup["id"], string> = {
   cbc: "CBC",
   renalLyte: "Renal/Lyte",
   liverCoag: "Liver/Coag",
   infxPerfusion: "Infx",
+  urinalysis: "U/A",
   gas: "Gas",
   cardiac: "Cardiac",
   other: "Other",
@@ -113,7 +103,7 @@ function LabItemContent({
       </span>
       {display.previous && (
         <span className="clinical-lab-item-previous" aria-label={`previous ${display.previous.slice(1, -1)}`}>
-          {display.previous}
+          <span aria-hidden="true">prev </span>{display.previous.slice(1, -1)}
         </span>
       )}
       {labReferenceDisplay === "inline" && reference && (
@@ -144,7 +134,10 @@ export function ClinicalLabTable({
     }),
     [density, source],
   );
-  const groups = visibleGroups(summary.groups, density);
+  // The contract layer has already selected the clinically relevant facts.
+  // Display surfaces must not perform a second clinical filter: that was why
+  // plain-but-important orientation values such as WBC disappeared on Board.
+  const groups = summary.groups;
 
   if (groups.length === 0) return <span className="clinical-lab-table-empty">{emptyText}</span>;
 

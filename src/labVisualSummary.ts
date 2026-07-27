@@ -12,6 +12,7 @@ export type LabVisualGroupId =
   | "renalLyte"
   | "liverCoag"
   | "infxPerfusion"
+  | "urinalysis"
   | "gas"
   | "cardiac"
   | "other";
@@ -54,6 +55,8 @@ export interface LabVisualSummaryOptions {
   includeLabPrefix?: boolean;
   preferredItemIds?: string[];
   preferredLabels?: string[];
+  requiredLabels?: string[];
+  selectionMode?: "complete" | "aiFocused";
 }
 
 interface LabSourceLine {
@@ -68,6 +71,7 @@ const labGroupOrder: Array<{ id: LabVisualGroupId; label: string; keys: string[]
   { id: "renalLyte", label: "Chem/Renal", keys: ["BUN", "Cr", "eGFR", "Na", "K", "Cl", "Ca", "Mg", "P", "Uric acid", "Osm"] },
   { id: "liverCoag", label: "Liver/Coag", keys: ["AST", "ALT", "ALP", "GGT", "T-Bil", "D-Bil", "Alb", "PT", "INR", "aPTT", "D-dimer", "Fibrinogen", "FDP"] },
   { id: "infxPerfusion", label: "Infx/Perfusion", keys: ["CRP", "hsCRP", "PCT", "Lactate", "ESR", "Blood culture", "Sputum culture", "Urine culture", "Microbiology"] },
+  { id: "urinalysis", label: "U/A", keys: ["UA WBC", "UA RBC", "LE", "Nitrite", "Bacteria", "Protein", "Glucose urine", "Ketone", "Specific gravity", "pH urine", "Cast"] },
   { id: "gas", label: "ABG/VBG", keys: ["pH", "pCO2", "pO2", "HCO3", "BE", "SaO2", "SpO2"] },
   { id: "cardiac", label: "Cardiac", keys: ["Troponin I", "Troponin T", "Troponin", "CK", "CK-MB", "BNP", "NT-proBNP"] },
   { id: "other", label: "Other", keys: [] },
@@ -78,6 +82,7 @@ const coreDisplayKeys: Record<LabVisualGroupId, string[]> = {
   renalLyte: ["BUN", "Cr", "eGFR", "Na", "K", "Mg", "Ca", "P"],
   liverCoag: ["AST", "ALT", "ALP", "T-Bil", "Alb", "PT", "INR", "aPTT"],
   infxPerfusion: ["CRP", "hsCRP", "PCT", "Lactate", "ESR", "Blood culture", "Sputum culture", "Urine culture", "Microbiology"],
+  urinalysis: ["UA WBC", "UA RBC", "LE", "Nitrite", "Bacteria", "Protein"],
   gas: ["pH", "pCO2", "pO2", "HCO3", "BE", "SaO2", "SpO2"],
   cardiac: ["Troponin I", "Troponin T", "Troponin", "BNP", "NT-proBNP", "CK-MB"],
   other: [],
@@ -88,6 +93,7 @@ const defaultGroupItemLimits: Record<LabVisualGroupId, number> = {
   renalLyte: 11,
   liverCoag: 8,
   infxPerfusion: 8,
+  urinalysis: 8,
   gas: 7,
   cardiac: 6,
   other: 4,
@@ -288,6 +294,7 @@ function groupIdForItem(item: ParsedLabItem): LabVisualGroupId {
   if (dictionaryGroup === "Renal / Electrolytes") return "renalLyte";
   if (dictionaryGroup === "Liver / GI" || dictionaryGroup === "Coagulation") return "liverCoag";
   if (dictionaryGroup === "Inflammation / Infection") return "infxPerfusion";
+  if (dictionaryGroup === "Urinalysis") return "urinalysis";
   if (dictionaryGroup === "ABG / VBG") return "gas";
   if (dictionaryGroup === "Cardiac") return "cardiac";
   return "other";
@@ -307,7 +314,14 @@ function toneForText(label: string, value: string, item: ParsedLabItem, chronicR
     if ((label === "AST" || label === "ALT") && numeric >= 200) return "critical";
     if (label === "INR" && numeric >= 3) return "critical";
     if (label === "Lactate" && numeric >= 4) return "critical";
+    if ((label === "UA WBC" || label === "UA RBC") && numeric > 5) return "important";
+    if (label === "ESR" && numeric > 30) return "important";
+    if ((label === "CRP" || label === "hsCRP" || label === "PCT") && numeric > 0) {
+      if (referenceDirection(label, value)) return "important";
+    }
   }
+  if (/^(?:LE|Nitrite|Bacteria|Protein|Ketone|Glucose urine)$/i.test(label) &&
+      /(?:positive|pos|reactive|detected|present|many|moderate|trace|[1-4]\+)/i.test(`${value} ${item.note ?? ""}`)) return "important";
   if (/\babnormal\b/i.test(String(item.note ?? ""))) return "important";
   if (item.important || item.isImportant) return "important";
   if (previousValue && trendDirection(label, value, previousValue)) return "important";
@@ -439,9 +453,11 @@ function buildGroupsFromVisualItems(items: LabVisualItem[], options: LabVisualSu
   const groups = new Map<LabVisualGroupId, LabVisualItem[]>();
   const preferredItemIds = new Set((options.preferredItemIds ?? []).map((value) => String(value).trim()).filter(Boolean));
   const preferredLabels = new Set((options.preferredLabels ?? []).map(canonicalLabSelectionKey).filter(Boolean));
+  const requiredLabels = new Set((options.requiredLabels ?? []).map(canonicalLabSelectionKey).filter(Boolean));
   const hasAiSelection = preferredItemIds.size > 0 || preferredLabels.size > 0;
   const isPreferred = (item: LabVisualItem) =>
     Boolean(item.sourceId && preferredItemIds.has(item.sourceId)) || preferredLabels.has(canonicalLabSelectionKey(item.label));
+  const isRequired = (item: LabVisualItem) => requiredLabels.has(canonicalLabSelectionKey(item.label));
 
   dedupeNarrativeItems(items).forEach((item) => {
     const parsedLikeItem = { label: item.label, name: item.label, value: item.value } satisfies ParsedLabItem;
@@ -474,12 +490,12 @@ function buildGroupsFromVisualItems(items: LabVisualItem[], options: LabVisualSu
           const rightOrder = displayOrder.get(`${group.id}|${right.label}`) ?? 99;
           return leftOrder - rightOrder || right.score - left.score || left.label.localeCompare(right.label);
         });
-      const focusedItems = orderedItems.filter((item) =>
-        isPreferred(item) ||
-        item.tone !== "plain" ||
-        (group.id !== "other" && coreOrder.has(item.label)) ||
-        (!hasAiSelection && group.id === "other" && item.label !== "Other"),
-      );
+      const focusedItems = orderedItems.filter((item) => {
+        if (isPreferred(item) || isRequired(item) || item.tone !== "plain" || item.explicitMark) return true;
+        if (options.selectionMode === "aiFocused") return false;
+        return (group.id !== "other" && coreOrder.has(item.label)) ||
+          (!hasAiSelection && group.id === "other" && item.label !== "Other");
+      });
       const selectedItems = new Set(focusedItems.filter((item) => item.tone !== "plain" || item.explicitMark));
       focusedItems.forEach((item) => {
         if (selectedItems.size < maxItems) selectedItems.add(item);
@@ -518,7 +534,17 @@ export function buildLabVisualSummaryFromItems(items: ParsedLabItem[], options: 
 
 export function buildLabVisualSummaryFromText(value: string, options: LabVisualSummaryOptions = {}) {
   const chronicRenal = hasChronicRenalContext(options.patient);
-  const dataset = buildCanonicalLabDataset(value);
+  // Canonical SOAP lines already carry a `Lab:` section prefix. Remove only
+  // that display prefix before the broad HIS/LIS parser runs; otherwise a
+  // clean `Lab: CBC/DC: WBC ...` line can be mistaken for another report
+  // heading and silently lose its plain orientation values.
+  const canonicalInput = splitInputLines(value).map((line) => {
+    const { body: withoutImportantPrefix, important } = splitImportantPrefix(line);
+    const stripped = stripLabLinePrefix(withoutImportantPrefix);
+    if (!stripped.hasLabPrefix) return line;
+    return `${important ? "! " : ""}${stripped.body}`;
+  }).join("\n");
+  const dataset = buildCanonicalLabDataset(canonicalInput);
   const sourceLines = splitInputLines(dataset.normalizedText)
     .map((line) => labSourceLineFrom(line, false))
     .filter((line): line is LabSourceLine => Boolean(line));

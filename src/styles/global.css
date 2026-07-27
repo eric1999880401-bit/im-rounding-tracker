@@ -2364,7 +2364,8 @@ tbody tr:last-child td {
 }
 
 .clinical-lab-table {
-  border-collapse: collapse;
+  border-collapse: separate;
+  border-spacing: 0;
   table-layout: fixed;
   width: 100%;
 }
@@ -2372,13 +2373,14 @@ tbody tr:last-child td {
 .clinical-lab-table th,
 .clinical-lab-table td {
   border-bottom: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
-  padding: 4px 6px;
+  padding: 5px 7px;
   text-align: left;
-  vertical-align: baseline;
+  vertical-align: middle;
 }
 
 .clinical-lab-table th {
-  background: transparent;
+  background: color-mix(in srgb, var(--surface-muted) 72%, transparent);
+  border-right: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
 }
 
 .clinical-lab-table tr:last-child th,
@@ -2388,11 +2390,11 @@ tbody tr:last-child td {
 
 .clinical-lab-table th {
   color: var(--text-subtle);
-  font-size: 9.5px;
+  font-size: 9.7px;
   font-weight: 800;
   letter-spacing: 0;
   line-height: 1.2;
-  padding-left: 0;
+  padding-left: 6px;
   text-transform: none;
   white-space: nowrap;
   width: 80px;
@@ -2405,35 +2407,55 @@ tbody tr:last-child td {
 }
 
 .clinical-lab-items {
-  align-items: baseline;
+  align-items: stretch;
   display: flex;
   flex-wrap: wrap;
-  gap: 4px 14px;
+  gap: 5px 0;
   min-width: 0;
 }
 
 .clinical-lab-item {
-  align-items: baseline;
-  column-gap: 3px;
-  display: inline-flex;
-  flex-wrap: wrap;
-  font-size: 11.7px;
+  column-gap: 5px;
+  display: inline-grid;
+  font-size: 12px;
   font-variant-numeric: tabular-nums;
-  line-height: 1.32;
+  grid-template-areas:
+    "name name"
+    "value previous";
+  grid-template-columns: auto auto;
+  line-height: 1.2;
+  margin-right: 9px;
   max-width: 100%;
+  min-width: 48px;
   overflow-wrap: break-word;
+  padding: 1px 10px 2px 0;
+  position: relative;
   white-space: nowrap;
+}
+
+.clinical-lab-item:not(:last-child)::after {
+  background: color-mix(in srgb, var(--border) 66%, transparent);
+  bottom: 2px;
+  content: "";
+  position: absolute;
+  right: 0;
+  top: 2px;
+  width: 1px;
 }
 
 .clinical-lab-item-name {
   color: var(--text-subtle);
-  font-size: 0.82em;
-  font-weight: 760;
+  font-size: 9px;
+  font-weight: 800;
+  grid-area: name;
+  line-height: 1;
 }
 
 .clinical-lab-item-value {
   color: var(--text);
-  font-weight: 780;
+  font-size: 12.4px;
+  font-weight: 800;
+  grid-area: value;
 }
 
 .clinical-lab-item-value-clickable {
@@ -2449,13 +2471,23 @@ tbody tr:last-child td {
 
 .clinical-lab-item-previous {
   color: var(--text-muted);
-  font-size: 0.78em;
+  font-size: 9px;
   font-weight: 650;
+  grid-area: previous;
+  line-height: 1.2;
+  white-space: nowrap;
 }
 
 .clinical-lab-item-long {
+  display: block;
   flex-basis: 100%;
+  margin-right: 0;
+  padding-right: 0;
   white-space: normal;
+}
+
+.clinical-lab-item-long::after {
+  display: none;
 }
 
 .clinical-lab-item-long .clinical-lab-item-value {
@@ -2487,8 +2519,8 @@ tbody tr:last-child td {
 
 .clinical-lab-table-board th {
   color: var(--text-muted);
-  font-size: 9.5px;
-  width: 70px;
+  font-size: 9.7px;
+  width: 66px;
 }
 
 .clinical-lab-table-board .clinical-lab-table th,
@@ -2498,11 +2530,11 @@ tbody tr:last-child td {
 }
 
 .clinical-lab-table-board .clinical-lab-item {
-  font-size: 11.7px;
+  font-size: 12px;
 }
 
 .clinical-lab-table-board .clinical-lab-item-name {
-  font-size: 0.86em;
+  font-size: 9px;
 }
 
 .clinical-lab-table-print th {
@@ -2517,12 +2549,24 @@ tbody tr:last-child td {
 }
 
 .clinical-lab-table-print .clinical-lab-item {
-  font-size: 10px;
-  line-height: 1.15;
+  font-size: 9.5px;
+  line-height: 1.05;
+  margin-right: 5px;
+  min-width: 36px;
+  padding-right: 6px;
 }
 
 .clinical-lab-table-print .clinical-lab-items {
-  gap: 2px 8px;
+  gap: 2px 0;
+}
+
+.clinical-lab-table-print .clinical-lab-item-name,
+.clinical-lab-table-print .clinical-lab-item-previous {
+  font-size: 7px;
+}
+
+.clinical-lab-table-print .clinical-lab-item-value {
+  font-size: 9.5px;
 }
 
 .board-visual-line-s {

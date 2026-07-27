@@ -85,7 +85,7 @@ const {
   restoreSoapDeltaSection,
 } = await server.ssrLoadModule("/src/soapDeltaGuardrails.ts");
 const { classifyPrintVisualItem, displayPrintLine, selectPriorityPrintItems } = await server.ssrLoadModule("/src/printPriority.ts");
-const { cleanInlineClinicalMarkers, soapHeaderLinesForDisplay } = await server.ssrLoadModule("/src/soapDisplay.ts");
+const { cleanInlineClinicalMarkers, conciseSoapDiagnosisForDisplay, soapHeaderLinesForDisplay } = await server.ssrLoadModule("/src/soapDisplay.ts");
 const { applyClinicalColorMarkup, applyUserKeywordHighlights, clearClinicalColorMarkupAtSelection } = await server.ssrLoadModule("/src/clinicalColorMarkup.ts");
 const { labReferenceText, parseClinicalLabTokens } = await server.ssrLoadModule("/src/labReference.ts");
 const { boardDischargeTasks, hasBoardDischargeSoonSignal, isBoardNewAdmission } = await server.ssrLoadModule("/src/boardCockpit.ts");
@@ -5137,6 +5137,27 @@ try {
 }
 
 try {
+  const conciseDiagnosis = conciseSoapDiagnosisForDisplay({
+    headerLines: [
+      "Dx: 83F PHx: remote ICH s/p VP shunt CC: fever and vomiting ED Lab: WBC 36 Image: CXR RLL opacity Imp: sepsis",
+    ],
+    apTitles: ["PNA / sepsis", "AKI", "Prior AF, resolved"],
+    fallbacks: ["83F PHx: remote ICH CC: fever Lab: WBC 36"],
+    maxItems: 2,
+    maxChars: 100,
+  });
+  if (conciseDiagnosis !== "PNA / sepsis | AKI") {
+    throw new Error(`concise diagnosis selector retained polluted header text: ${conciseDiagnosis}`);
+  }
+  const aliasDedupedDiagnosis = conciseSoapDiagnosisForDisplay({
+    headerLines: ["Dx: PNA"],
+    apTitles: ["CAP improving on antibiotics", "AKI, improving"],
+    maxItems: 3,
+    maxChars: 100,
+  });
+  if (aliasDedupedDiagnosis !== "PNA | AKI") {
+    throw new Error(`diagnosis concept aliases or trajectory tails were not deduped: ${aliasDedupedDiagnosis}`);
+  }
   const displayHeader = soapHeaderLinesForDisplay(
     [
       "SYN-BED SYN-HEADER 83/F",
@@ -5413,6 +5434,104 @@ try {
 }
 
 try {
+  const mixedUrineAndBloodTable = [
+    "[\u5c3f\u6db2]",
+    "\u5831\u544a\u6642\u9593 WBC RBC LE Nitrite Bacteria Protein",
+    "2026-07-27 >1000 50 positive positive 3+ 2+",
+    "[\u8840\u6db2]",
+    "\u5831\u544a\u6642\u9593 WBC Hb PLT AST ALT CRP E.S.R",
+    "2026-07-25 15.2 12.6 280 22 41 7.1 50",
+    "2026-07-26 22.4 12.8 310 34 58 12.4 83",
+  ].join("\n");
+  const dataset = buildCanonicalLabDataset(mixedUrineAndBloodTable);
+  const byLabel = new Map(dataset.latestItems.map((item) => [item.name || item.label, item]));
+  if (byLabel.get("WBC")?.value !== "22.4" || byLabel.get("UA WBC")?.value !== ">1000") {
+    throw new Error(`blood and urine WBC were not kept as separate source facts: ${JSON.stringify(dataset.latestItems)}`);
+  }
+  if (byLabel.get("ALT")?.value !== "58" || byLabel.get("ALT")?.previousValue !== "41" || byLabel.get("AST")?.previousValue !== "22") {
+    throw new Error(`AST/ALT trend values crossed analyte keys: ${JSON.stringify(dataset.latestItems)}`);
+  }
+  for (const label of ["CRP", "ESR", "LE", "Nitrite", "Bacteria"]) {
+    if (!byLabel.has(label)) throw new Error(`${label} disappeared from the canonical Lab source.`);
+  }
+
+  const crpId = byLabel.get("CRP")?.id ?? "";
+  const uaIds = [byLabel.get("UA WBC")?.id, byLabel.get("Nitrite")?.id].filter(Boolean);
+  const accepted = acceptStructuredRoundSoap({
+    value: {
+      headerLines: ["F99-001 62/F", "Dx: complicated UTI w/ sepsis"],
+      subjectiveLines: ["dysuria improved"],
+      objective: {
+        vitalSigns: [],
+        physicalExam: [],
+        labs: [
+          { panel: "Infx/Perfusion", values: "CRP selected", sourceIds: [crpId] },
+          { panel: "Urinalysis", values: "pyuria selected", sourceIds: uaIds },
+        ],
+        microbiology: [],
+        imaging: [],
+        pathology: [],
+        other: [],
+      },
+      assessmentPlan: [{
+        problemTitle: "Complicated UTI / sepsis",
+        status: "improving",
+        summary: "Pyuria with inflammatory response.",
+        plan: "Continue source-directed treatment; f/u U/C.",
+        sourceEvidence: ["UTI", "UA WBC >1000", "CRP 12.4"],
+      }],
+      orders: [],
+      tasks: ["f/u U/C"],
+      discharge: [],
+      warnings: [],
+      highlightHints: [],
+    },
+    baselineText: "",
+    sourceFields: {
+      labs: mixedUrineAndBloodTable,
+      other: "Complicated UTI w/ sepsis; U/C pending.",
+      rawSource: mixedUrineAndBloodTable,
+    },
+    workflowMode: "newSoap",
+  });
+  const acceptedText = editorDraftToSoapText(accepted.draft);
+  if (accepted.fatalErrors.length > 0) throw new Error(accepted.fatalErrors.join(" | "));
+  if (!/Lab: CBC\/DC:[^\n]*WBC 22\.4[^\n]*Hb 12\.8[^\n]*Plt 310/i.test(acceptedText)) {
+    throw new Error(`AI-guided Lab selection lost the deterministic CBC orientation: ${acceptedText}`);
+  }
+  if (!/Lab: Infx\/Perfusion:[^\n]*CRP 12\.4[^\n]*ESR 83/i.test(acceptedText)) {
+    throw new Error(`infection-aware Lab selection lost CRP/ESR: ${acceptedText}`);
+  }
+  if (!/Lab: U\/A:[^\n]*UA WBC >1000[^\n]*Nitrite positive[^\n]*Bacteria 3\+/i.test(acceptedText)) {
+    throw new Error(`UTI-aware Lab selection lost urinalysis evidence: ${acceptedText}`);
+  }
+  if (!/Lab: Liver\/Coag:[^\n]*ALT 58[^\n]*41/i.test(acceptedText) || /ALT 58[^\n]*\(34\)/i.test(acceptedText)) {
+    throw new Error(`ALT displayed the AST value as its prior value: ${acceptedText}`);
+  }
+
+  const labLines = parseSoapText(acceptedText).oLines.filter((line) => /^(?:!{1,2}\s*)?Lab:/i.test(line));
+  const renderedTables = ["board", "print"].map((density) => ({
+    density,
+    html: renderToStaticMarkup(React.createElement(ClinicalLabTable, { density, lines: labLines })),
+  }));
+  renderedTables.forEach(({ density, html }) => {
+    if (!/clinical-lab-item-name[^>]*>ALT</.test(html) || !/>prev <\/span>41</.test(html) || !/clinical-lab-group/.test(html)) {
+      throw new Error(`${density} Lab renderer did not separate analyte/current/previous cells: ${html}`);
+    }
+    for (const label of ["WBC", "CRP", "ESR", "UA WBC", "Nitrite", "Bacteria"]) {
+      if (!html.includes(`>${label}<`)) {
+        throw new Error(`${density} Lab renderer omitted ${label}. SOAP: ${acceptedText} Canonical O: ${labLines.join(" | ")} Renderer: ${html}`);
+      }
+    }
+  });
+  console.log("PASS AI-guided Lab selection keeps exact source values, U/A context, CRP/ESR, and same-analyte trends");
+  supplementalPasses += 1;
+} catch (error) {
+  failures.push({ name: "AI-guided source-owned Lab selection", error: error instanceof Error ? error.message : String(error) });
+  console.error(`FAIL AI-guided source-owned Lab selection: ${failures[failures.length - 1].error}`);
+}
+
+try {
   const baseline = [
     "S:",
     "- stable overnight",
@@ -5616,7 +5735,7 @@ try {
     tasks: ["f/u B/C"],
     discharge: [],
     warnings: [],
-    highlightHints: ["Na 150", "meropenem"],
+    highlightHints: ["Na 150", "meropenem", "RLL opacity"],
   };
   const sourceFields = {
     vitals: "T 37.2 C BP 112/68 HR 92 RR 18 SpO2 96% NC 1 L",
@@ -5645,6 +5764,11 @@ try {
   }
   if (!/# Hypernatremia[\s\S]*Na 150/.test(acceptedText) || /# .*anemia/i.test(acceptedText)) {
     throw new Error(`A/P significance gate failed:\n${acceptedText}`);
+  }
+  const highlightedNa = accepted.draft.oLines.find((line) => /\bNa 150\b/i.test(line.text));
+  const highlightedImage = accepted.draft.oLines.find((line) => /RLL opacity/i.test(line.text));
+  if (!highlightedNa || highlightedNa.tone === "plain" || !highlightedImage || highlightedImage.tone === "plain") {
+    throw new Error(`AI highlight hints were discarded after structured acceptance:\n${acceptedText}`);
   }
 
   const equivalentFormattingDraft = structuredClone(structuredDraft);

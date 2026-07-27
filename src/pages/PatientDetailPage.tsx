@@ -35,7 +35,8 @@ import {
   todayKey,
 } from "../utils";
 import { getRoundingDigest } from "../roundingDigest";
-import { fallbackSoapTextFromPatient, getCanonicalSoapText, soapPreviewTextFromPatient, soapTextToPatientPatch } from "../soapDraft";
+import { fallbackSoapTextFromPatient, getCanonicalSoapText, parseSoapText, soapPreviewTextFromPatient, soapTextToPatientPatch } from "../soapDraft";
+import { conciseSoapDiagnosisForDisplay } from "../soapDisplay";
 import { normalizeRoundingLayoutPreferences } from "../userPreferences";
 import {
   canRedo,
@@ -890,6 +891,14 @@ function PatientDetailPage({
     hideCompletedTasks: true,
   });
   const headerSoap = getCanonicalSoapText(currentPatient, patientNotes, selectedDate).text;
+  const headerSoapDraft = parseSoapText(headerSoap);
+  const headerDiagnosis = conciseSoapDiagnosisForDisplay({
+    headerLines: headerSoapDraft.header,
+    apTitles: headerSoapDraft.apProblems.map((problem) => problem.title),
+    fallbacks: [currentPatient.primaryDiagnosis, headerDigest.diagnosis, currentPatient.oneLiner],
+    maxItems: 2,
+    maxChars: 120,
+  });
   const headerRedFlags = simpleDetailRedFlags(
     headerSoap
       .split(/\r?\n/)
@@ -966,7 +975,7 @@ function PatientDetailPage({
           {currentPatient.attending && <span>Att: {currentPatient.attending}</span>}
         </div>
         <div className="detail-header-grid">
-          {headerDigest.diagnosis && <div><strong>Dx:</strong> {headerDigest.diagnosis}</div>}
+          {headerDiagnosis && <div><strong>Dx:</strong> {headerDiagnosis}</div>}
           <div className="detail-dc-target">
             <strong>{currentPatient.dischargeTargetDate ? `DC ${currentPatient.dischargeTargetDate}` : "DC TBD"}</strong>
             <input

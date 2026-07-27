@@ -291,7 +291,7 @@ export const roundSoapDraftSchema = {
             additionalProperties: false,
             required: ["panel", "values", "sourceIds"],
             properties: {
-              panel: { type: "string", enum: ["CBC/DC", "Chem/Renal", "Liver/Coag", "Infx/Perfusion", "ABG/VBG", "Cardiac", "Other"] },
+              panel: { type: "string", enum: ["CBC/DC", "Chem/Renal", "Liver/Coag", "Infx/Perfusion", "Urinalysis", "ABG/VBG", "Cardiac", "Other"] },
               values: stringSchema,
               sourceIds: { type: "array", items: stringSchema },
             },

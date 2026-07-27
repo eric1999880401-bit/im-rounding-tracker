@@ -1,5 +1,5 @@
 import { stripClinicalMarkup } from "./clinicalLineClassifier";
-import { findLabDictionaryItem } from "./data/labDictionary";
+import { findLabDictionaryItem, type LabValueType } from "./data/labDictionary";
 
 export type ObjectiveLineKind = "vs" | "pe" | "lab" | "image" | "other";
 
@@ -142,6 +142,15 @@ export function isLabReportHeaderNoise(value: string) {
 interface PositionalLabColumn {
   raw: string;
   label: string;
+  valueType: LabValueType;
+}
+
+function labTableSectionGroup(value: string) {
+  const body = plainObjectiveBody(value);
+  const match = body.match(/^\[([^\]]{1,32})\]$/);
+  if (!match) return "";
+  if (/(?:\u5c3f\u6db2|urine|urinalysis|U\/?A)/i.test(match[1])) return "Urinalysis";
+  return "";
 }
 
 function positionalLabHeaderTokens(value: string) {
@@ -159,19 +168,46 @@ function positionalLabHeaderTokens(value: string) {
   return tokens;
 }
 
-function positionalLabColumns(value: string): PositionalLabColumn[] {
+function positionalLabColumns(value: string, sectionGroup = ""): PositionalLabColumn[] {
   return positionalLabHeaderTokens(value).map((raw) => {
     if (!raw || /^(?:flag|abn|abnormal|unit|units?|ref|reference|range|status|comment|note|\u55ae\u4f4d|\u53c3\u8003\u503c|\u7570\u5e38|\u5099\u8a3b)$/i.test(raw)) {
-      return { raw, label: "" };
+      return { raw, label: "", valueType: "text" as const };
     }
-    const dictionary = findLabDictionaryItem(raw);
+    const compact = raw.toLowerCase().replace(/[^a-z0-9]+/g, "");
+    const urinalysisLabel = sectionGroup === "Urinalysis"
+      ? ({
+          wbc: "UA WBC",
+          rbc: "UA RBC",
+          glucose: "Glucose urine",
+          glu: "Glucose urine",
+          ph: "pH urine",
+        } as Record<string, string>)[compact] ?? raw
+      : raw;
+    const dictionary = findLabDictionaryItem(urinalysisLabel);
     const fallback = canonicalLabLabels[raw.toLowerCase()] ?? "";
     const generic = /^[A-Za-z][A-Za-z0-9.+/%_-]{0,23}$/.test(raw) ? raw.replace(/\.$/, "") : "";
-    return { raw, label: dictionary?.displayName || fallback || generic };
+    return {
+      raw,
+      label: dictionary?.displayName || fallback || generic,
+      valueType: dictionary?.valueType ?? "number",
+    };
   });
 }
 
-function positionalLabRow(value: string, columns: PositionalLabColumn[]) {
+function positionalLabCell(value: string, column: PositionalLabColumn) {
+  const clean = value.trim();
+  if (!clean || /^(?:N\/?A|NA|not\s+done|pending)$/i.test(clean)) return false;
+  if (positionalLabValuePattern.test(clean)) return true;
+  if (column.valueType === "positiveNegative") {
+    return /^(?:positive|negative|pos|neg|reactive|nonreactive|detected|not[- ]?detected|[+-]{1,4}|\d+\+)$/i.test(clean);
+  }
+  if (column.valueType === "text" || column.valueType === "culture") {
+    return /^(?:none|few|moderate|many|rare|trace|present|absent|[+-]{1,4}|\d+\+|[A-Za-z][A-Za-z0-9.+/-]{0,24})$/i.test(clean);
+  }
+  return false;
+}
+
+function positionalLabRow(value: string, columns: PositionalLabColumn[], sectionGroup = "") {
   const body = plainObjectiveBody(value);
   const date = body.match(/^\s*(20\d{2}[-/]\d{1,2}[-/]\d{1,2}|\d{1,2}\/\d{1,2})\b/)?.[1] ?? "";
   const tabDelimited = body.includes("\t");
@@ -193,9 +229,9 @@ function positionalLabRow(value: string, columns: PositionalLabColumn[]) {
     }
     tokens.push(token);
   });
-  const numericCount = tokens.filter((token) => positionalLabValuePattern.test(token)).length;
-  if (columns.length < 2 || numericCount < (tabDelimited ? 1 : 2)) return "";
-  if (!tabDelimited && numericCount < Math.min(columns.length, tokens.length) * 0.5) return "";
+  const resultCount = tokens.filter((token, index) => positionalLabCell(token, columns[index] ?? { raw: "", label: "", valueType: "text" })).length;
+  if (columns.length < 2 || resultCount < (tabDelimited ? 1 : 2)) return "";
+  if (!tabDelimited && resultCount < Math.min(columns.length, tokens.length) * 0.5) return "";
   // Space-delimited exports cannot represent empty cells. If the counts do
   // not match, positional assignment would silently shift every later value.
   // Reject that ambiguous row rather than display a confidently wrong lab.
@@ -204,13 +240,14 @@ function positionalLabRow(value: string, columns: PositionalLabColumn[]) {
   const items = columns.flatMap((column, index) => {
     const label = column.label;
     const rawValue = tokens[index] ?? "";
-    if (!label || !positionalLabValuePattern.test(rawValue)) return [];
+    if (!label || !positionalLabCell(rawValue, column)) return [];
     const markedAbnormal = /\*|[HL\u2191\u2193\u2197\u2198]$/i.test(rawValue);
     const cleanValue = rawValue.replace(/\*+|[HL\u2191\u2193\u2197\u2198]$/gi, "");
     return cleanValue ? [`${label} ${cleanValue}${markedAbnormal ? "*" : ""}`] : [];
   });
   if (items.length < (tabDelimited ? 1 : 2)) return "";
-  return `${date ? `${date} ` : ""}${items.join(", ")}`.trim();
+  const groupPrefix = sectionGroup === "Urinalysis" ? "U/A: " : "";
+  return `${date ? `${date} ` : ""}${groupPrefix}${items.join(", ")}`.trim();
 }
 
 function isLabTableSectionHeading(value: string) {
@@ -252,6 +289,7 @@ export function normalizeLabTableSourceText(value: string) {
   const rejected: string[] = [];
   let pendingColumns: PositionalLabColumn[] = [];
   let pendingRows: string[] = [];
+  let pendingSectionGroup = "";
 
   const flushPendingRows = () => {
     accepted.push(...pendingRows.sort((left, right) => datedLabRowSortKey(right) - datedLabRowSortKey(left)));
@@ -262,12 +300,15 @@ export function normalizeLabTableSourceText(value: string) {
     const line = normalizeCompactBloodGasLine(rawLine.trim());
     if (!line) return;
     if (isLabTableSectionHeading(line)) {
+      flushPendingRows();
+      pendingColumns = [];
+      pendingSectionGroup = labTableSectionGroup(line);
       rejected.push(line);
       return;
     }
     if (isLabReportHeaderNoise(line)) {
       flushPendingRows();
-      pendingColumns = positionalLabColumns(line);
+      pendingColumns = positionalLabColumns(line, pendingSectionGroup);
       rejected.push(line);
       return;
     }
@@ -276,7 +317,7 @@ export function normalizeLabTableSourceText(value: string) {
         rejected.push(line);
         return;
       }
-      const reconstructed = positionalLabRow(line, pendingColumns);
+      const reconstructed = positionalLabRow(line, pendingColumns, pendingSectionGroup);
       if (reconstructed) {
         pendingRows.push(reconstructed);
         return;

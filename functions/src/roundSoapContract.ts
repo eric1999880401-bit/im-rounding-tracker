@@ -3,6 +3,7 @@ export type RoundSoapObjectivePanel =
   | "Chem/Renal"
   | "Liver/Coag"
   | "Infx/Perfusion"
+  | "Urinalysis"
   | "ABG/VBG"
   | "Cardiac"
   | "Other";
@@ -51,6 +52,7 @@ const objectivePanels = new Set<RoundSoapObjectivePanel>([
   "Chem/Renal",
   "Liver/Coag",
   "Infx/Perfusion",
+  "Urinalysis",
   "ABG/VBG",
   "Cardiac",
   "Other",

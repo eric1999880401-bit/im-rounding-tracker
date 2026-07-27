@@ -831,10 +831,10 @@
 }
 
 .print-section-objective .clinical-lab-table th {
-  background: transparent;
+  background: #f3f4f6;
   color: #475569;
   font-size: var(--print-chip-font-size);
-  width: 50px;
+  width: 46px;
 }
 
 .print-section-objective .clinical-lab-table td,
@@ -846,11 +846,23 @@
 
 .print-section-objective .clinical-lab-item {
   font-size: var(--print-font-size);
-  line-height: var(--print-line-height);
+  line-height: 1.05;
+  margin-right: 5px;
+  min-width: 34px;
+  padding-right: 6px;
 }
 
 .print-section-objective .clinical-lab-items {
-  gap: 1px 6px;
+  gap: 2px 0;
+}
+
+.print-section-objective .clinical-lab-item-name,
+.print-section-objective .clinical-lab-item-previous {
+  font-size: calc(var(--print-chip-font-size) * 0.88);
+}
+
+.print-section-objective .clinical-lab-item-value {
+  font-size: var(--print-font-size);
 }
 
 .print-section-ap .print-visual-text,

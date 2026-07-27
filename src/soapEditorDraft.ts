@@ -233,6 +233,61 @@ function soapDraftToEditorDraft(draft: SoapDraft, options: { sanitizeLegacy: boo
   return result;
 }
 
+function highlightKey(value: string) {
+  return stripClinicalMarkup(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9+/.\-\u4e00-\u9fff]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function hintMatchesLine(hint: string, line: string) {
+  const needle = highlightKey(hint);
+  const haystack = highlightKey(line);
+  if (needle.length < 4 || !haystack) return false;
+  if (haystack.includes(needle) || needle.includes(haystack)) return true;
+  const tokens = needle.split(" ").filter((token) => token.length > 1);
+  if (tokens.length < 2) return false;
+  const matched = tokens.filter((token) => haystack.includes(token)).length;
+  return matched / tokens.length >= 0.75;
+}
+
+function promotedTone(line: SoapEditorLine) {
+  if (line.tone === "critical" || line.tone === "important") return line.tone;
+  const classified = classifyClinicalLine(line.text, { fallbackKind: line.kind, lockKind: true });
+  return classified.tone === "critical" ? "critical" : "important";
+}
+
+function promoteLineFromHints(line: SoapEditorLine, hints: string[]) {
+  if (!hints.some((hint) => hintMatchesLine(hint, line.text))) return line;
+  return { ...line, tone: promotedTone(line) };
+}
+
+/**
+ * AI highlightHints are presentation guidance, not new clinical facts. Promote
+ * matching accepted lines without adding text or replacing clinician colors.
+ */
+export function applyAiHighlightHintsToEditorDraft(draft: SoapEditorDraft, values: string[] = []): SoapEditorDraft {
+  const hints = [...new Set(values.map((value) => stripClinicalMarkup(value).trim()).filter((value) => value.length >= 4))].slice(0, 8);
+  if (hints.length === 0) return draft;
+  const lines = (items: SoapEditorLine[]) => items.map((line) => promoteLineFromHints(line, hints));
+  return {
+    ...draft,
+    headerLines: lines(draft.headerLines),
+    sLines: lines(draft.sLines),
+    oLines: lines(draft.oLines),
+    apProblems: draft.apProblems.map((problem) => {
+      const titleLine: SoapEditorLine = { id: problem.id, text: problem.title, tone: problem.tone, kind: "ap" };
+      const promotedTitle = promoteLineFromHints(titleLine, hints);
+      return { ...problem, tone: promotedTitle.tone, lines: lines(problem.lines) };
+    }),
+    taskLines: lines(draft.taskLines),
+    dcLines: lines(draft.dcLines),
+    warnings: lines(draft.warnings),
+    unsortedLines: lines(draft.unsortedLines),
+  };
+}
+
 // Untrusted AI/raw/legacy text gets one explicit normalization pass before it
 // enters the editor. Do not use this for already reviewed dailyNote.soapText.
 export function parseSoapTextToEditorDraft(text: string): SoapEditorDraft {

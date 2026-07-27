@@ -30,7 +30,7 @@ import { ClinicalLabTable } from "../components/ClinicalLabTable";
 import { useT } from "../i18n";
 import { getPatientHeadline, getRoundingDigest } from "../roundingDigest";
 import { getCanonicalSoapText, patientToSoapDraft } from "../soapDraft";
-import { soapHeaderLinesForDisplay } from "../soapDisplay";
+import { conciseSoapDiagnosisForDisplay, soapHeaderLinesForDisplay } from "../soapDisplay";
 import {
   buildRoundNoteViewModelFromDraft,
   makeRoundNoteLineView,
@@ -285,18 +285,24 @@ function PrintRoundingListPage({
   function patientContextText(patient: Patient, view: RoundNoteViewModel, hasReviewedSoap: boolean) {
     const notes = dailyNotesByPatient[patient.id] ?? [];
     const digest = hasReviewedSoap ? null : getRoundingDigest(patient, notes, { mode: "rounds", hideCompletedTasks });
+    const diagnosis = conciseSoapDiagnosisForDisplay({
+      headerLines: view.header.map((line) => line.raw),
+      apTitles: view.assessmentPlan.map((problem) => problem.title.text),
+      fallbacks: [patient.primaryDiagnosis, digest?.diagnosis ?? "", patient.oneLiner],
+      maxItems: 2,
+      maxChars: 120,
+    });
     const headerLines = soapHeaderLinesForDisplay(
       view.header.map((line) => line.raw).filter((line) => isSoapHeaderLineVisible(line, roundingLayout) && !/^Red flags:|^Date:|^Attending:/i.test(line)),
       {
-        dx: view.assessmentPlan[0]?.title.text || patient.primaryDiagnosis || digest?.diagnosis || patient.oneLiner,
+        dx: diagnosis,
         issues: digest?.issues ?? "",
         pmh: digest?.risks ?? "",
       },
       { maxLines: 5, maxChars: 150 },
     ).filter((line) => !patient.patientCode || !line.includes(patient.patientCode));
     if (headerLines.length === 0) {
-      const fallbackDiagnosis = view.assessmentPlan[0]?.title.text || patient.primaryDiagnosis || digest?.diagnosis || "";
-      return fallbackDiagnosis ? displayPrintLine(`Dx: ${fallbackDiagnosis}`) : "";
+      return diagnosis ? displayPrintLine(`Dx: ${diagnosis}`) : "";
     }
     return removePrintEllipsis(headerLines.slice(0, 4).map(displayPrintLine).filter(Boolean).join(" | "));
   }

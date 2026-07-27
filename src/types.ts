@@ -227,6 +227,7 @@ export type RoundSoapLabPanel =
   | "Chem/Renal"
   | "Liver/Coag"
   | "Infx/Perfusion"
+  | "Urinalysis"
   | "ABG/VBG"
   | "Cardiac"
   | "Other";
