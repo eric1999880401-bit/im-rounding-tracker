@@ -7,7 +7,7 @@ export interface SoapHeaderDisplayFallbacks {
   pmh?: string;
 }
 
-const HEADER_PREFIX = /^(Dx|Issues|PMH|PHx|Code|Allergy|Isolation|Attending|Date|HD\/POD|Red flags)\s*:\s*/i;
+const HEADER_PREFIX = /^(Dx|Issues|PMH|PHx|Code|Allergy|Isolation|Attending|Date|HD\/POD|Carried from|Red flags)\s*:\s*/i;
 const EMBEDDED_SECTION = /\s+(?=(?:PHx|PMHx|PMH|CC|Chief complaint|PI|HPI|ED(?:\s+(?:Lab|course|treatment))?|Lab|Image|Imaging|Impression|Imp|Assessment|A\/P|AP|Plan|Tasks?|Orders?|Meds?|DC|Discharge|S|O|V\/S|VS|PE)\s*:)/i;
 const DIAGNOSIS_PREFIX = /^(?:Dx|Diagnosis|Impression|Imp)\s*:\s*/i;
 const LOW_VALUE_PROBLEM = /^(?:problem|active problem|monitoring|disposition|discharge|nutrition|deconditioning|prior|history of|resolved)\b/i;

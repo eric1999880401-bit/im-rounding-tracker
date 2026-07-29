@@ -91,8 +91,17 @@ const { cleanInlineClinicalMarkers, conciseSoapDiagnosisForDisplay, soapHeaderLi
 const { applyClinicalColorMarkup, applyUserKeywordHighlights, clearClinicalColorMarkupAtSelection } = await server.ssrLoadModule("/src/clinicalColorMarkup.ts");
 const { labReferenceText, parseClinicalLabTokens } = await server.ssrLoadModule("/src/labReference.ts");
 const { boardDischargeTasks, hasBoardDischargeSoonSignal, isBoardNewAdmission } = await server.ssrLoadModule("/src/boardCockpit.ts");
-const { buildLabVisualSummaryFromText, formatLabVisualSummaryFromLines, formatLabVisualSummaryLinesFromText } = await server.ssrLoadModule("/src/labVisualSummary.ts");
-const { buildCanonicalLabDataset, canonicalLabFactsForAi } = await server.ssrLoadModule("/src/labDataset.ts");
+const {
+  buildLabVisualSummaryFromText,
+  formatLabVisualSummaryFromLines,
+  formatLabVisualSummaryLinesFromText,
+  formatLabVisualTimelineLines,
+} = await server.ssrLoadModule("/src/labVisualSummary.ts");
+const {
+  buildCanonicalLabDataset,
+  buildCanonicalLabTimelineDataset,
+  canonicalLabFactsForAi,
+} = await server.ssrLoadModule("/src/labDataset.ts");
 const { buildCanonicalImageDataset, canonicalImageFactsForAi } = await server.ssrLoadModule("/src/imageDataset.ts");
 const { normalizeCompactBloodGasLine, normalizeLabTableSourceText } = await server.ssrLoadModule("/src/objectiveLineSanitizer.ts");
 const {
@@ -122,6 +131,7 @@ const { buildAiDocumentAuditWrite, buildSoapAuditWrite } = await server.ssrLoadM
 const { SoapVisualPreview } = await server.ssrLoadModule("/src/components/SoapVisualPreview.tsx");
 const { ClinicalLabTable } = await server.ssrLoadModule("/src/components/ClinicalLabTable.tsx");
 const { buildCorrectionContract, compactRoundSoapPromptHistory, makeRoundSoapPrompt } = await server.ssrLoadModule("/functions/src/roundSoapPrompt.ts");
+const { parseStructuredRoundSoapDraft } = await server.ssrLoadModule("/functions/src/roundSoapContract.ts");
 const {
   DEFAULT_BALANCED_MODEL,
   DEFAULT_FAST_MODEL,
@@ -158,7 +168,13 @@ const {
   isLatestRequest,
   isPatientReviewBoundToContext,
 } = await server.ssrLoadModule("/src/asyncRequestGuard.ts");
-const { matchExistingPatient } = await server.ssrLoadModule("/functions/src/sanitize.ts");
+const {
+  compactDailyNote,
+  compactPatientContext,
+  matchExistingPatient,
+  mergePatientContext,
+  sanitizePatientContext,
+} = await server.ssrLoadModule("/functions/src/sanitize.ts");
 const { clinicalSaveConflictReason } = await server.ssrLoadModule("/src/clinicalSaveGuard.ts");
 
 function haystack(plan) {
@@ -4959,8 +4975,8 @@ try {
   }
   const balancedDailyTuning = getResponseTuning("balanced", "roundSoapDaily");
   const balancedFullTuning = getResponseTuning("balanced", "roundSoapFull");
-  if (balancedDailyTuning.reasoning.effort !== "low") {
-    throw new Error("daily SOAP should reserve output headroom instead of spending it on hidden reasoning");
+  if (balancedDailyTuning.reasoning.effort !== "medium") {
+    throw new Error("balanced daily SOAP should keep the same clinical reasoning tier as full SOAP");
   }
   if (balancedDailyTuning.max_output_tokens !== 8_000 || balancedFullTuning.max_output_tokens !== 12_000) {
     throw new Error(`balanced SOAP output budgets no longer reserve enough visible daily JSON: daily=${balancedDailyTuning.max_output_tokens}, full=${balancedFullTuning.max_output_tokens}`);
@@ -4968,8 +4984,8 @@ try {
   if (getResponseTuning("highAccuracy", "roundSoapFull").reasoning.effort !== "high") {
     throw new Error("high-accuracy SOAP should use high reasoning");
   }
-  if (getResponseTuning("highAccuracy", "roundSoapDaily").reasoning.effort !== "low") {
-    throw new Error("daily high-quality SOAP should use Sol with low hidden reasoning and preserve output headroom");
+  if (getResponseTuning("highAccuracy", "roundSoapDaily").reasoning.effort !== "high") {
+    throw new Error("daily high-quality SOAP should preserve high clinical reasoning instead of silently downgrading");
   }
   if (getRoundSoapMaxOutputTokens("highAccuracy", "transferHandoff", 34_000) < 12_000) {
     throw new Error("long high-accuracy transfer SOAP lacks reasoning/output headroom");
@@ -5195,6 +5211,11 @@ try {
     /SILENT FINAL CHECK BEFORE RETURNING JSON/i,
     /every current high-risk fact is present once/i,
     /Each lab object must include sourceIds/i,
+    /smallest monitoring set for each active lab-driven problem/i,
+    /Do not leave objective\.labs empty/i,
+    /immediately prior supplied result/i,
+    /neutropenic fever.*ANC/i,
+    /Lab trajectory: every selected disease-relevant current lab/i,
     /application will render the source value verbatim/i,
     /Each imaging object must cite sourceIds/i,
     /Comparison statements, technique\/protocol text, study titles without findings/i,
@@ -6201,6 +6222,285 @@ try {
 }
 
 try {
+  const emptyAiLabDraft = (problemTitle) => ({
+    headerLines: ["SYN-LAB 68/F", `Dx: ${problemTitle}`],
+    subjectiveLines: ["No new complaint"],
+    objective: {
+      vitalSigns: [],
+      physicalExam: [],
+      labs: [],
+      microbiology: [],
+      imaging: [],
+      pathology: [],
+      other: [],
+    },
+    assessmentPlan: [{
+      problemTitle,
+      status: "active",
+      summary: `${problemTitle} under active treatment.`,
+      plan: "Continue the source-grounded plan.",
+      sourceEvidence: [problemTitle],
+    }],
+    orders: [],
+    tasks: [],
+    discharge: [],
+    warnings: [],
+    highlightHints: [],
+  });
+
+  const dkaBaseline = [
+    "S:",
+    "- Nausea improving.",
+    "O:",
+    "- Lab: Other: Glucose 520",
+    "- Lab: Chem/Renal: Na 132, K 5.2",
+    "- Lab: ABG/VBG: pH 7.18, HCO3 12",
+    "A/P:",
+    "# DKA",
+    "- Insulin protocol under clinician review.",
+  ].join("\n");
+  const dkaReview = acceptStructuredRoundSoap({
+    value: emptyAiLabDraft("DKA"),
+    baselineText: dkaBaseline,
+    sourceFields: { labs: "Glucose 220, Na 138, K 4.0, pH 7.32, HCO3 20, TSH 2.0" },
+    workflowMode: "dailyUpdate",
+  });
+  const dkaText = editorDraftToSoapText(dkaReview.draft);
+  if (dkaReview.fatalErrors.length > 0) {
+    throw new Error(`DKA current labs were rejected: ${dkaReview.fatalErrors.join(" | ")}`);
+  }
+  for (const expected of [
+    /\bGlucose 220[^\n]*\(520\)/i,
+    /\bK 4\.0[^\n]*\(5\.2\)/i,
+    /\bpH 7\.32[^\n]*\(7\.18\)/i,
+    /\bHCO3 20[^\n]*\(12\)/i,
+  ]) {
+    if (!expected.test(dkaText)) throw new Error(`DKA lab trend ${expected} is missing:\n${dkaText}`);
+  }
+  if (/\bTSH\b/i.test(dkaText)) {
+    throw new Error(`unrelated normal TSH crowded the DKA lab display:\n${dkaText}`);
+  }
+
+  const nstemiReview = acceptStructuredRoundSoap({
+    value: emptyAiLabDraft("NSTEMI"),
+    baselineText: "S:\n- Chest pain resolved.\nO:\n- Lab: Cardiac: Troponin I 42\nA/P:\n# NSTEMI\n- Cardiology plan reviewed.",
+    sourceFields: { labs: "Troponin I 68, TSH 2.0" },
+    workflowMode: "dailyUpdate",
+  });
+  const nstemiText = editorDraftToSoapText(nstemiReview.draft);
+  if (!/\bTroponin I 68[^\n]*\(42\)/i.test(nstemiText) || /\bTSH\b/i.test(nstemiText)) {
+    throw new Error(`NSTEMI-specific troponin trend was not selected precisely:\n${nstemiText}`);
+  }
+
+  const diseasePackCases = [
+    {
+      problem: "DIC",
+      baselineLabs: "D-dimer 900, Fibrinogen 350",
+      currentLabs: "D-dimer 8000, Fibrinogen 110, TSH 2.0",
+      expected: [/\bD-dimer 8000[^\n]*\(900\)/i, /\bFibrinogen 110[^\n]*\(350\)/i],
+    },
+    {
+      problem: "Acute pancreatitis",
+      baselineLabs: "Lipase 300",
+      currentLabs: "Lipase 1200, TSH 2.0",
+      expected: [/\bLipase 1200[^\n]*\(300\)/i],
+    },
+  ];
+  diseasePackCases.forEach((testCase) => {
+    const review = acceptStructuredRoundSoap({
+      value: emptyAiLabDraft(testCase.problem),
+      baselineText: `S:\n- Stable.\nO:\n- Lab: Other: ${testCase.baselineLabs}\nA/P:\n# ${testCase.problem}\n- Active plan reviewed.`,
+      sourceFields: { labs: testCase.currentLabs },
+      workflowMode: "dailyUpdate",
+    });
+    const text = editorDraftToSoapText(review.draft);
+    if (review.fatalErrors.length > 0 || testCase.expected.some((pattern) => !pattern.test(text)) || /\bTSH\b/i.test(text)) {
+      throw new Error(`${testCase.problem} disease-specific Lab pack was incomplete or noisy:\n${text}`);
+    }
+  });
+
+  const neutropenicReview = acceptStructuredRoundSoap({
+    value: emptyAiLabDraft("Neutropenic fever"),
+    baselineText: [
+      "S:",
+      "- Fever under evaluation.",
+      "O:",
+      "- Lab: CBC/DC: WBC 1.2, Hb 9.2, Plt 110, ANC 80",
+      "A/P:",
+      "# Neutropenic fever",
+      "- Continue source-grounded evaluation and treatment.",
+    ].join("\n"),
+    sourceFields: { labs: "WBC 1.0, Hb 9.0, Plt 100, ANC 50, TSH 2.0" },
+    workflowMode: "dailyUpdate",
+  });
+  const neutropenicText = editorDraftToSoapText(neutropenicReview.draft);
+  if (neutropenicReview.fatalErrors.length > 0 ||
+      !/\bANC 50[^\n]*\(80\)/i.test(neutropenicText) ||
+      /\bTSH\b/i.test(neutropenicText)) {
+    throw new Error(`neutropenic fever lost the current/prior ANC or added an irrelevant lab:\n${neutropenicText}`);
+  }
+
+  const newSoapNeutropenicReview = acceptStructuredRoundSoap({
+    value: emptyAiLabDraft("Neutropenic fever"),
+    baselineText: "",
+    sourceFields: { labs: "WBC 1.5, Hb 9.0, Plt 100, ANC 800, TSH 2.0" },
+    workflowMode: "newSoap",
+  });
+  const newSoapNeutropenicText = editorDraftToSoapText(newSoapNeutropenicReview.draft);
+  if (newSoapNeutropenicReview.fatalErrors.length > 0 ||
+      !/\bANC 800\b/i.test(newSoapNeutropenicText) ||
+      /\bTSH\b/i.test(newSoapNeutropenicText)) {
+    throw new Error(`New SOAP did not use the AI active problem to retain a noncritical ANC:\n${newSoapNeutropenicText}`);
+  }
+
+  const plainCurrentReview = acceptStructuredRoundSoap({
+    value: emptyAiLabDraft("Diagnostic workup"),
+    baselineText: "S:\n- Stable.\nO:\n- Lab: CBC/DC: WBC 9.0, Hb 10.0, Plt 200\nA/P:\n# Diagnostic workup\n- Review results.",
+    sourceFields: { labs: "LDH 180" },
+    workflowMode: "dailyUpdate",
+  });
+  const plainCurrentText = editorDraftToSoapText(plainCurrentReview.draft);
+  if (!/\bLDH 180\b/i.test(plainCurrentText) || /\bWBC 9\.0\b/i.test(plainCurrentText)) {
+    throw new Error(`a current plain lab was lost while stale baseline labs remained:\n${plainCurrentText}`);
+  }
+
+  const routedDiseaseLabs = splitGuidedSoapSource([
+    "Lipase 1200 in acute pancreatitis.",
+    "D-dimer 8000, Fibrinogen 110 in DIC.",
+    "Troponin I 120, BNP 1800 in NSTEMI/ADHF.",
+  ].join("\n"));
+  if (!/Lipase 1200/i.test(routedDiseaseLabs.labs) ||
+      !/D-dimer 8000.*Fibrinogen 110/is.test(routedDiseaseLabs.labs) ||
+      !/Troponin I 120.*BNP 1800/is.test(routedDiseaseLabs.labs)) {
+    throw new Error(`disease-specific mixed-paste labs were not routed to Lab: ${JSON.stringify(routedDiseaseLabs)}`);
+  }
+  console.log("PASS Disease-relevant labs survive AI omission and compare with the immediately prior result");
+  supplementalPasses += 1;
+} catch (error) {
+  failures.push({ name: "Disease-relevant current/prior Lab coverage", error: error instanceof Error ? error.message : String(error) });
+  console.error(`FAIL Disease-relevant current/prior Lab coverage: ${failures[failures.length - 1].error}`);
+}
+
+try {
+  const currentDataset = buildCanonicalLabDataset("Glucose 220");
+  const timelineDataset = buildCanonicalLabTimelineDataset("Glucose 220", "Lab: Glucose 520");
+  const currentGlucose = currentDataset.latestItems.find((item) => item.label === "Glucose");
+  const timelineGlucose = timelineDataset.latestItems.find((item) => item.label === "Glucose");
+  const timelineFacts = canonicalLabFactsForAi(timelineDataset);
+  if (!currentGlucose || !timelineGlucose || currentGlucose.id !== timelineGlucose.id || timelineGlucose.previousValue !== "520") {
+    throw new Error(`canonical current source ID or prior Glucose was not preserved: ${JSON.stringify(timelineDataset)}`);
+  }
+  if (!timelineFacts.some((fact) => /Glucose 220.*previous 520/i.test(fact))) {
+    throw new Error(`AI did not receive the source-owned current/prior Lab fact: ${timelineFacts.join("\n")}`);
+  }
+
+  const unchangedImmediateDataset = buildCanonicalLabDataset([
+    "2026-07-27 Glucose 520",
+    "2026-07-28 Glucose 220",
+    "2026-07-29 Glucose 220",
+  ].join("\n"));
+  const unchangedImmediateGlucose = unchangedImmediateDataset.latestItems.find((item) => item.label === "Glucose");
+  if (unchangedImmediateGlucose?.value !== "220" || unchangedImmediateGlucose.previousValue !== "220") {
+    throw new Error(`canonical Lab skipped the unchanged immediately prior result: ${JSON.stringify(unchangedImmediateGlucose)}`);
+  }
+
+  const incompatibleUnitCases = [
+    {
+      current: "Troponin I 68 ng/L",
+      previous: "Troponin I 0.04 ng/mL",
+      forbidden: /\(0\.04\)/,
+    },
+    {
+      current: "Glucose 10 mmol/L",
+      previous: "Glucose 180 mg/dL",
+      forbidden: /\(180\)/,
+    },
+  ];
+  incompatibleUnitCases.forEach((testCase) => {
+    const dataset = buildCanonicalLabTimelineDataset(testCase.current, testCase.previous);
+    const lines = formatLabVisualTimelineLines(testCase.current, testCase.previous, {
+      includePlain: true,
+      selectionMode: "complete",
+    });
+    if (dataset.latestItems.some((item) => item.previousValue) || testCase.forbidden.test(lines.join("\n"))) {
+      throw new Error(`incompatible Lab units were rendered as a trend: ${JSON.stringify({ dataset, lines })}`);
+    }
+  });
+
+  const futurePriorDataset = buildCanonicalLabTimelineDataset(
+    "2026-07-20 Glucose 220",
+    "2026-07-21 Glucose 520",
+  );
+  const futurePriorLines = formatLabVisualTimelineLines(
+    "2026-07-20 Glucose 220",
+    "2026-07-21 Glucose 520",
+    { includePlain: true, selectionMode: "complete" },
+  );
+  if (futurePriorDataset.latestItems.some((item) => item.previousValue) || /\(520\)/.test(futurePriorLines.join("\n"))) {
+    throw new Error(`a future Lab result was treated as the immediately prior value: ${JSON.stringify({ futurePriorDataset, futurePriorLines })}`);
+  }
+
+  const sanitizedContext = sanitizePatientContext({
+    age: "",
+    sex: "",
+    pmh: "DM; CKD3\nHFrEF EF35%",
+    activeProblems: "DKA; AKI",
+    labFacts: ["[lab-glucose]; Glucose 220; previous 520"],
+  });
+  if (sanitizedContext?.pmh.length !== 3 || sanitizedContext.activeProblems.length !== 2) {
+    throw new Error(`string PMH/active problems were erased by the callable sanitizer: ${JSON.stringify(sanitizedContext)}`);
+  }
+  const mergedContext = mergePatientContext(
+    { age: 68, sex: "F", pmh: "stored PMH", activeProblems: "stored problem" },
+    sanitizePatientContext({ age: "", sex: "", pmh: [], activeProblems: [] }),
+  );
+  if (mergedContext.age !== 68 || mergedContext.pmh !== "stored PMH" || mergedContext.activeProblems !== "stored problem") {
+    throw new Error(`empty client context overwrote stored clinical context: ${JSON.stringify(mergedContext)}`);
+  }
+
+  const compactPatient = compactPatientContext({
+    newLabs: "",
+    rawLabText: "Cr 2.1",
+    parsedLabItems: [],
+    activeProblems: "",
+    activeProblemItems: ["DKA"],
+    activeProblemStructuredItems: [{ title: "AKI" }],
+  });
+  const compactNote = compactDailyNote("2026-07-20", { rawLabText: "", labSummary: "K 5.5" });
+  if (compactPatient.latestLabs !== "Cr 2.1" || compactNote.labs !== "K 5.5" || !/DKA/.test(compactPatient.activeProblems) || !/AKI/.test(compactPatient.activeProblems)) {
+    throw new Error(`empty strings hid the available Lab fallback: ${JSON.stringify({ compactPatient, compactNote })}`);
+  }
+
+  const sourceIdOnly = parseStructuredRoundSoapDraft({
+    headerLines: [],
+    subjectiveLines: [],
+    objective: {
+      vitalSigns: [],
+      physicalExam: [],
+      labs: [{ panel: "Other", values: "", sourceIds: ["lab-glucose"] }],
+      microbiology: [],
+      imaging: [],
+      pathology: [],
+      other: [],
+    },
+    assessmentPlan: [],
+    orders: [],
+    tasks: [],
+    discharge: [],
+    warnings: [],
+    highlightHints: [],
+  });
+  if (sourceIdOnly.objective.labs[0]?.sourceIds[0] !== "lab-glucose") {
+    throw new Error(`a valid source-owned Lab selection was discarded because explanatory values were blank: ${JSON.stringify(sourceIdOnly)}`);
+  }
+  console.log("PASS AI Lab context keeps active problems, current source IDs, and prior values");
+  supplementalPasses += 1;
+} catch (error) {
+  failures.push({ name: "AI Lab context and source ownership", error: error instanceof Error ? error.message : String(error) });
+  console.error(`FAIL AI Lab context and source ownership: ${failures[failures.length - 1].error}`);
+}
+
+try {
   const longLabLine = [
     "Lab: CBC/DC: WBC 18.7, Neu 91.2%, Hb 8.6(9.4) down, Plt 72(104) down",
     "Chem/Renal: BUN 68, Cr 3.42(2.71) up, eGFR 18, Na 151(146) up, K 5.7, Mg 1.8, Ca 7.4, P 5.9",
@@ -6544,6 +6844,312 @@ try {
 } catch (error) {
   failures.push({ name: "Canonical and audited SOAP safety", error: error instanceof Error ? error.message : String(error) });
   console.error(`FAIL Canonical and audited SOAP safety: ${failures[failures.length - 1].error}`);
+}
+
+try {
+  const baseline = [
+    "Dx: PNA / sepsis + AKI / hyperK",
+    "Code: DNR | Allergy: Penicillin | Isolation: Contact | HD/POD: HD 3",
+    "S:",
+    "- No fever overnight.",
+    "O:",
+    "- Lab: CBC/DC: WBC 13.0, Hb 10.0, Plt 180",
+    "- Lab: Chem/Renal: Cr 1.6, Na 140, K 5.5",
+    "A/P:",
+    "# PNA / sepsis",
+    "- Active, B/C pending.",
+    "- Ceftriaxone current; f/u B/C.",
+    "# AKI / hyperkalemia",
+    "- Active, Cr 1.6, K 5.5.",
+    "- ECG pending; avoid nephrotoxins.",
+    "Tasks:",
+    "- f/u B/C result",
+    "- f/u ECG",
+    "DC:",
+    "- Placement barrier unresolved.",
+  ].join("\n");
+  const emptyCandidate = () => ({
+    headerLines: ["Dx: PNA / sepsis + AKI / hyperK"],
+    subjectiveLines: [],
+    objective: {
+      vitalSigns: [],
+      physicalExam: [],
+      labs: [],
+      microbiology: [],
+      imaging: [],
+      pathology: [],
+      other: [],
+    },
+    assessmentPlan: [],
+    orders: [],
+    tasks: [],
+    discharge: [],
+    warnings: [],
+    highlightHints: [],
+  });
+  const completeCandidate = emptyCandidate();
+  completeCandidate.assessmentPlan = [
+    {
+      problemTitle: "AKI / hyperkalemia",
+      status: "worsening",
+      summary: "Cr 2.0 and K 6.1.",
+      plan: "Start urgent dialysis and stop all antibiotics.",
+      sourceEvidence: ["Cr 2.0 K 6.1"],
+    },
+    {
+      problemTitle: "PNA / sepsis",
+      status: "improving",
+      summary: "WBC 10.0.",
+      plan: "Continue ceftriaxone; f/u B/C.",
+      sourceEvidence: ["WBC 10.0"],
+    },
+  ];
+  const sparseCandidate = emptyCandidate();
+  sparseCandidate.assessmentPlan = [{
+    problemTitle: "AKI / hyperkalemia",
+    status: "stable",
+    summary: "Renal issue.",
+    plan: "Start urgent dialysis and stop all antibiotics.",
+    sourceEvidence: ["AKI"],
+  }];
+  const sourceFields = { labs: "WBC 10.0 Hb 9.8 Plt 175 Cr 2.0 Na 139 K 6.1" };
+  const acceptedVariants = [completeCandidate, sparseCandidate, emptyCandidate()].map((value) =>
+    acceptStructuredRoundSoap({
+      value,
+      baselineText: baseline,
+      sourceFields,
+      workflowMode: "dailyUpdate",
+    }),
+  );
+  const signatures = acceptedVariants.map((accepted, index) => {
+    if (accepted.fatalErrors.length > 0) {
+      throw new Error(`variant ${index} was rejected: ${accepted.fatalErrors.join(" | ")}`);
+    }
+    const text = editorDraftToSoapText(accepted.draft);
+    for (const required of [
+      /WBC 10\.0[^\n]*\(13\.0\)/i,
+      /Cr 2\.0[^\n]*\(1\.6\)/i,
+      /K 6\.1[^\n]*\(5\.5\)/i,
+      /# PNA \/ sepsis/i,
+      /# AKI \/ hyperkalemia/i,
+      /f\/u B\/C result/i,
+      /f\/u ECG/i,
+      /Placement barrier unresolved/i,
+    ]) {
+      if (!required.test(text)) throw new Error(`variant ${index} lost ${required}:\n${text}`);
+    }
+    if (/urgent dialysis|stop all antibiotics/i.test(text)) {
+      throw new Error(`variant ${index} accepted an unsupported high-risk plan:\n${text}`);
+    }
+    if ((text.match(/^# .*hyperkalemia/im) ?? []).length > 1) {
+      throw new Error(`variant ${index} duplicated a combined renal problem:\n${text}`);
+    }
+    const view = buildRoundNoteViewModel(text);
+    if (!/AKI|hyperkalemia/i.test(view.assessmentPlan[0]?.title.text ?? "")) {
+      throw new Error(`variant ${index} did not project the current renal threat first: ${view.assessmentPlan.map((problem) => problem.title.text).join(" | ")}`);
+    }
+    return JSON.stringify({
+      firstProblem: view.assessmentPlan[0]?.title.text,
+      problemTitles: view.assessmentPlan.map((problem) => problem.title.text).sort(),
+      hasCurrentCbc: /WBC 10\.0[^\n]*\(13\.0\)/i.test(text),
+      hasCurrentRenal: /Cr 2\.0[^\n]*\(1\.6\).*K 6\.1[^\n]*\(5\.5\)|K 6\.1[^\n]*\(5\.5\).*Cr 2\.0[^\n]*\(1\.6\)/i.test(text),
+      tasks: [/f\/u B\/C result/i, /f\/u ECG/i].map((pattern) => pattern.test(text)),
+      dc: /Placement barrier unresolved/i.test(text),
+    });
+  });
+  if (new Set(signatures).size !== 1) {
+    throw new Error(`same source produced different clinical safety signatures: ${signatures.join("\n")}`);
+  }
+  console.log("PASS Structured candidate matrix keeps the same source-owned labs, critical A/P priority, tasks, and DC barriers");
+  supplementalPasses += 1;
+} catch (error) {
+  failures.push({ name: "Structured candidate clinical stability matrix", error: error instanceof Error ? error.message : String(error) });
+  console.error(`FAIL Structured candidate clinical stability matrix: ${failures[failures.length - 1].error}`);
+}
+
+try {
+  const value = {
+    headerLines: ["Dx: sepsis + AKI"],
+    subjectiveLines: ["Weakness"],
+    objective: {
+      vitalSigns: [],
+      physicalExam: [],
+      labs: [],
+      microbiology: [],
+      imaging: [],
+      pathology: [],
+      other: [],
+    },
+    assessmentPlan: [
+      {
+        problemTitle: "Stable hypertension",
+        status: "stable",
+        summary: "BP controlled.",
+        plan: "Continue current regimen.",
+        sourceEvidence: ["Stable hypertension BP controlled continue current regimen"],
+      },
+      {
+        problemTitle: "PNA / sepsis",
+        status: "improving",
+        summary: "WBC improving.",
+        plan: "Continue ceftriaxone; f/u B/C.",
+        sourceEvidence: ["PNA sepsis WBC improving ceftriaxone B/C"],
+      },
+      {
+        problemTitle: "AKI / hyperkalemia",
+        status: "worsening",
+        summary: "Cr 2.0 and K 6.1.",
+        plan: "Start urgent dialysis and stop all antibiotics.",
+        sourceEvidence: ["AKI hyperkalemia Cr 2.0 K 6.1"],
+      },
+    ],
+    orders: ["ceftriaxone"],
+    tasks: ["f/u B/C"],
+    discharge: [],
+    warnings: ["Code status conflicting in source"],
+    highlightHints: [],
+  };
+  const accepted = acceptStructuredRoundSoap({
+    value,
+    baselineText: "",
+    sourceFields: {
+      labs: "WBC 10 Hb 9 Plt 170 Cr 2.0 Na 139 K 6.1",
+      orders: "continue ceftriaxone",
+      other: "PNA sepsis improving; B/C pending. AKI hyperkalemia worsening. Stable hypertension, BP controlled, continue current regimen. Code: DNR | Allergy: Penicillin | Isolation: Contact | HD/POD: HD 3",
+    },
+    workflowMode: "newSoap",
+  });
+  const text = editorDraftToSoapText(accepted.draft);
+  const akiIndex = text.search(/^!!?\s*# AKI \/ hyperkalemia/im);
+  const sepsisIndex = text.search(/^!!?\s*# PNA \/ sepsis/im);
+  const stableIndex = text.search(/^# Stable hypertension/im);
+  if (!(akiIndex >= 0 && sepsisIndex > akiIndex && stableIndex > sepsisIndex)) {
+    throw new Error(`A/P status priority was not deterministic:\n${text}`);
+  }
+  for (const status of [/\bWorsening\b/i, /\bimproving\b/i, /\bStable\b/i]) {
+    if (!status.test(text)) throw new Error(`structured status ${status} disappeared:\n${text}`);
+  }
+  for (const safety of ["Code: DNR", "Allergy: Penicillin", "Isolation: Contact", "HD/POD: HD 3"]) {
+    if (!text.includes(safety)) throw new Error(`source-grounded header safety field disappeared: ${safety}\n${text}`);
+  }
+  if (/urgent dialysis|stop all antibiotics/i.test(text)) {
+    throw new Error(`unsupported treatment survived the structured plan gate:\n${text}`);
+  }
+  const view = buildRoundNoteViewModel(text);
+  if (!view.header.some((line) => /^Red flags:.*Code status conflicting/i.test(line.raw))) {
+    throw new Error(`stored source conflict was not projected to the shared warning/header path: ${view.header.map((line) => line.raw).join(" | ")}`);
+  }
+  if (!/AKI|hyperkalemia/i.test(view.assessmentPlan[0]?.title.text ?? "")) {
+    throw new Error(`shared Board/Preview/Print projection did not rank worsening AKI first: ${view.assessmentPlan.map((problem) => problem.title.text).join(" | ")}`);
+  }
+  console.log("PASS Structured status, source-grounded safety header, warning projection, and unsupported-plan blocking");
+  supplementalPasses += 1;
+} catch (error) {
+  failures.push({ name: "Structured status and safety projection", error: error instanceof Error ? error.message : String(error) });
+  console.error(`FAIL Structured status and safety projection: ${failures[failures.length - 1].error}`);
+}
+
+try {
+  const date = "2026-07-29";
+  const sourceDate = "2026-07-27";
+  const patient = {
+    ...emptyPatient(),
+    id: "synthetic-carried-soap",
+    patientCode: "SYN-CARRY",
+    bed: "C-01",
+    age: 70,
+    sex: "F",
+  };
+  const historicalSoap = [
+    "Dx: AKI / electrolyte disorder",
+    "Code: Full | Allergy: NKDA",
+    "S:",
+    "- Fever overnight.",
+    "O:",
+    "- V/S: T 39 C",
+    "- Lab: Chem/Renal: BUN 30, Cr 2.1, eGFR 25, Na 130, K 5.8, Cl 100, Ca 8.0, Mg 1.8, P 5.2, Uric acid 9.0, Osm 310",
+    "A/P:",
+    "# AKI / electrolyte disorder",
+    "- Active.",
+    "Warnings:",
+    "- Code status conflicting in source.",
+  ].join("\n");
+  const note = {
+    ...emptyDailyNote(sourceDate),
+    soapText: historicalSoap,
+    soapStatus: "reviewed",
+    soapUpdatedAt: nowIso(),
+  };
+  const canonical = getCanonicalSoapText(patient, [note], date);
+  if (canonical.source !== "latest" || canonical.sourceDate !== sourceDate || canonical.isCurrentDate) {
+    throw new Error(`historical SOAP source metadata was wrong: ${JSON.stringify(canonical)}`);
+  }
+  const carriedDraft = patientToSoapDraft(patient, [note], date);
+  if (!carriedDraft.header.includes(`Carried from: ${sourceDate}`)) {
+    throw new Error(`historical S/O could still masquerade as current: ${JSON.stringify(carriedDraft.header)}`);
+  }
+  const carriedView = buildRoundNoteViewModel(formatSoapDraft(carriedDraft));
+  const displayedHeader = soapHeaderLinesForDisplay(carriedView.header.map((line) => line.raw), {}, { maxLines: 20 });
+  if (!displayedHeader.includes(`Carried from: ${sourceDate}`)) {
+    throw new Error(`shared display path hid the carried-forward date: ${JSON.stringify(displayedHeader)}`);
+  }
+  if (!carriedView.header.some((line) => /^Red flags:.*Code status conflicting/i.test(line.raw))) {
+    throw new Error(`stored warning disappeared from the historical shared projection: ${carriedView.header.map((line) => line.raw).join(" | ")}`);
+  }
+  const labLines = carriedDraft.oLines.filter((line) => /^!{0,2}\s*Lab:/i.test(line));
+  for (const density of ["detail", "board", "print"]) {
+    const html = renderToStaticMarkup(React.createElement(ClinicalLabTable, { density, lines: labLines }));
+    for (const label of ["BUN", "Cr", "eGFR", "Na", "K", "Cl", "Ca", "Mg", "P", "Uric acid", "Osm"]) {
+      if (!html.includes(`>${label}<`)) {
+        throw new Error(`${density} performed a second Lab truncation and hid ${label}: ${html}`);
+      }
+    }
+  }
+  console.log("PASS Historical SOAP is date-labeled and complete accepted Lab facts survive Detail, Board, and Print");
+  supplementalPasses += 1;
+} catch (error) {
+  failures.push({ name: "Historical SOAP and complete cross-surface Lab projection", error: error instanceof Error ? error.message : String(error) });
+  console.error(`FAIL Historical SOAP and complete cross-surface Lab projection: ${failures[failures.length - 1].error}`);
+}
+
+try {
+  const overflow = parseStructuredRoundSoapDraft({
+    headerLines: [],
+    subjectiveLines: [],
+    objective: {
+      vitalSigns: [],
+      physicalExam: [],
+      labs: [],
+      microbiology: [],
+      imaging: [],
+      pathology: [],
+      other: [],
+    },
+    assessmentPlan: Array.from({ length: 7 }, (_, index) => ({
+      problemTitle: index === 6 ? "Hyperkalemia K 6.8" : `Routine problem ${index + 1}`,
+      status: index === 6 ? "worsening" : "stable",
+      summary: index === 6 ? "K 6.8." : "Stable.",
+      plan: "",
+      sourceEvidence: index === 6 ? ["K 6.8"] : ["stable"],
+    })),
+    orders: [],
+    tasks: [],
+    discharge: [],
+    warnings: [],
+    highlightHints: [],
+  });
+  if (overflow.assessmentPlan.length !== 7 || !/Hyperkalemia/i.test(overflow.assessmentPlan[6]?.problemTitle ?? "")) {
+    throw new Error(`server parser silently truncated the critical seventh problem: ${JSON.stringify(overflow.assessmentPlan)}`);
+  }
+  const composerSource = readFileSync("src/components/RoundSoapComposer.tsx", "utf8");
+  if (!/Unvalidated AI SOAP was not applied/.test(composerSource) || !/structured source validation was unavailable/.test(composerSource)) {
+    throw new Error("cloud text-only SOAP no longer fails closed to the reviewed baseline");
+  }
+  console.log("PASS Critical overflow survives server parsing and cloud text-only AI fails closed");
+  supplementalPasses += 1;
+} catch (error) {
+  failures.push({ name: "Structured overflow and fail-closed legacy response", error: error instanceof Error ? error.message : String(error) });
+  console.error(`FAIL Structured overflow and fail-closed legacy response: ${failures[failures.length - 1].error}`);
 }
 
 await server.close();

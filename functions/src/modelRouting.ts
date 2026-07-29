@@ -64,15 +64,14 @@ export function getModelCandidates(model: string, qualityMode: AiQualityMode) {
 }
 
 export function getResponseTuning(qualityMode: AiQualityMode, workload: AiWorkload) {
-  // Daily delta updates need source fidelity and enough visible output budget,
-  // not prolonged hidden reasoning. Reserve high effort for first/transfer SOAP.
-  const reasoningEffort = workload === "roundSoapDaily"
+  // Quality mode must mean the same thing for a Daily delta and a full SOAP.
+  // Deterministic repair controls what may change; reasoning effort controls
+  // whether the model identifies the right clinical priorities before repair.
+  const reasoningEffort = qualityMode === "fast"
     ? "low"
-    : qualityMode === "fast"
-      ? "low"
-      : qualityMode === "highAccuracy"
-        ? "high"
-        : "medium";
+    : qualityMode === "highAccuracy"
+      ? "high"
+      : "medium";
   const maxOutputTokens = workload === "batch"
     ? 16000
     : workload === "document"
@@ -83,7 +82,7 @@ export function getResponseTuning(qualityMode: AiQualityMode, workload: AiWorklo
   return {
     reasoning: { effort: reasoningEffort },
     max_output_tokens: maxOutputTokens,
-    prompt_cache_key: `im-rounding:${workload}:v5`,
+    prompt_cache_key: `im-rounding:${workload}:v6`,
     textVerbosity: "low" as const,
   };
 }

@@ -84,7 +84,7 @@ export function parseStructuredRoundSoapDraft(value: unknown): StructuredRoundSo
               values: text(lab.values),
               sourceIds: lines(lab.sourceIds, 20),
             };
-          }).filter((item) => item.values).slice(0, 6)
+          }).filter((item) => item.values || item.sourceIds.length > 0).slice(0, 6)
         : [],
       microbiology: lines(objective.microbiology, 4),
       imaging: Array.isArray(objective.imaging)
@@ -112,7 +112,10 @@ export function parseStructuredRoundSoapDraft(value: unknown): StructuredRoundSo
             plan: text(problem.plan),
             sourceEvidence: lines(problem.sourceEvidence, 5),
           };
-        }).filter((item) => item.problemTitle).slice(0, 6)
+        // Preserve overflow long enough for the client-side clinical priority
+        // gate to rank it. Slicing model order here could silently delete a
+        // critical seventh problem before deterministic validation.
+        }).filter((item) => item.problemTitle).slice(0, 10)
       : [],
     orders: lines(draft.orders, 6),
     tasks: lines(draft.tasks, 6),

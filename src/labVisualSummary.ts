@@ -25,6 +25,9 @@ export interface LabVisualItem {
   label: string;
   value: string;
   previousValue: string;
+  unit: string;
+  date: string;
+  dateIsExplicit: boolean;
   text: string;
   tone: LabVisualTone;
   score: number;
@@ -67,7 +70,7 @@ interface LabSourceLine {
 }
 
 const labGroupOrder: Array<{ id: LabVisualGroupId; label: string; keys: string[] }> = [
-  { id: "cbc", label: "CBC/DC", keys: ["WBC", "Neu", "Hb", "Hct", "Plt", "RBC", "MCV", "RDW", "Lym", "Mono", "Eos", "Baso", "Band"] },
+  { id: "cbc", label: "CBC/DC", keys: ["WBC", "Neu", "ANC", "Hb", "Hct", "Plt", "RBC", "MCV", "RDW", "Lym", "Mono", "Eos", "Baso", "Band"] },
   { id: "renalLyte", label: "Chem/Renal", keys: ["BUN", "Cr", "eGFR", "Na", "K", "Cl", "Ca", "Mg", "P", "Uric acid", "Osm"] },
   { id: "liverCoag", label: "Liver/Coag", keys: ["AST", "ALT", "ALP", "GGT", "T-Bil", "D-Bil", "Alb", "PT", "INR", "aPTT", "D-dimer", "Fibrinogen", "FDP"] },
   { id: "infxPerfusion", label: "Infx/Perfusion", keys: ["CRP", "hsCRP", "PCT", "Lactate", "ESR", "Blood culture", "Sputum culture", "Urine culture", "Microbiology"] },
@@ -78,7 +81,7 @@ const labGroupOrder: Array<{ id: LabVisualGroupId; label: string; keys: string[]
 ];
 
 const coreDisplayKeys: Record<LabVisualGroupId, string[]> = {
-  cbc: ["WBC", "Neu", "Hb", "Plt", "Hct"],
+  cbc: ["WBC", "Neu", "ANC", "Hb", "Plt", "Hct"],
   renalLyte: ["BUN", "Cr", "eGFR", "Na", "K", "Mg", "Ca", "P"],
   liverCoag: ["AST", "ALT", "ALP", "T-Bil", "Alb", "PT", "INR", "aPTT"],
   infxPerfusion: ["CRP", "hsCRP", "PCT", "Lactate", "ESR", "Blood culture", "Sputum culture", "Urine culture", "Microbiology"],
@@ -100,11 +103,14 @@ const defaultGroupItemLimits: Record<LabVisualGroupId, number> = {
 };
 
 const trendEligibleLabels = new Set([
-  "WBC", "Neu", "Hb", "Hct", "Plt",
-  "BUN", "Cr", "eGFR", "Na", "K", "CRP", "hsCRP", "PCT", "Lactate",
+  "WBC", "Neu", "ANC", "Hb", "Hct", "Plt",
+  "BUN", "Cr", "eGFR", "Na", "K", "Mg", "Ca", "P", "Osm", "Uric acid",
+  "Glucose", "AC glucose", "PC glucose",
+  "CRP", "hsCRP", "PCT", "Lactate",
   "AST", "ALT", "T-Bil", "Alb", "PT", "INR", "aPTT",
+  "Amylase", "Lipase", "D-dimer", "Fibrinogen", "FDP",
   "pH", "pCO2", "pO2", "HCO3", "BE",
-  "Troponin I", "Troponin T", "BNP", "NT-proBNP",
+  "Troponin I", "Troponin T", "CK", "CK-MB", "BNP", "NT-proBNP", "LDH",
 ]);
 
 const groupOrderIndex = new Map(labGroupOrder.map((group, index) => [group.id, index]));
@@ -201,6 +207,9 @@ function markedVisualItemsFromText(value: string): LabVisualItem[] {
         label,
         value,
         previousValue: parsed ? String(parsed.previousValue ?? "").trim() : "",
+        unit: String(parsed?.unit ?? "").trim(),
+        date: "",
+        dateIsExplicit: false,
         // Keep the clinician's color markup verbatim so renderers show the chosen color.
         text: segment.markup,
         tone,
@@ -309,6 +318,11 @@ function toneForText(label: string, value: string, item: ParsedLabItem, chronicR
     if (label === "Hb" && numeric < 8) return "critical";
     if (label === "Plt" && numeric < 50) return "critical";
     if (label === "WBC" && (numeric < 2 || numeric > 20)) return "critical";
+    if (label === "ANC") {
+      const compactUnit = String(item.unit ?? "").replace(/\s+/g, "").toLowerCase();
+      const criticalThreshold = /(?:10\^3\/ul|10\^9\/l|k\/ul)/.test(compactUnit) ? 0.5 : 500;
+      if (numeric < criticalThreshold) return "critical";
+    }
     // ESRD/dialysis: elevated Cr/BUN is that patient's baseline, not critical.
     if (label === "Cr" && numeric >= 2) return chronicRenal ? "important" : "critical";
     if ((label === "AST" || label === "ALT") && numeric >= 200) return "critical";
@@ -343,6 +357,7 @@ function visualItemFromParsed(item: ParsedLabItem, sourceIndex = 0, chronicRenal
   if (!label || !value) return null;
 
   const previousValue = String(item.previousValue ?? "").trim();
+  const datedItem = item as ParsedLabItem & { date?: string; dateIsExplicit?: boolean };
   const leadingCurrentValue = previousValue
     ? value.match(/^\s*([<>]?\s*-?\d+(?:,\d{3})*(?:\.\d+)?)/)?.[1]?.replace(/\s+/g, "") ?? ""
     : "";
@@ -365,6 +380,9 @@ function visualItemFromParsed(item: ParsedLabItem, sourceIndex = 0, chronicRenal
     label,
     value,
     previousValue,
+    unit: String(item.unit ?? "").trim(),
+    date: String(datedItem.date ?? "").trim(),
+    dateIsExplicit: datedItem.dateIsExplicit === true,
     text,
     tone,
     score: scoreForItem(groupId, label, tone, sourceIndex),
@@ -387,6 +405,10 @@ function cleanOtherText(source: LabSourceLine) {
 
 function withPreviousVisualValue(current: LabVisualItem, previous: LabVisualItem) {
   if (current.explicitMark || current.previousValue || current.value === previous.value || !trendEligibleLabels.has(current.label)) return current;
+  const currentUnit = current.unit.replace(/\s+/g, "").toLowerCase();
+  const previousUnit = previous.unit.replace(/\s+/g, "").toLowerCase();
+  if (currentUnit !== previousUnit) return current;
+  if (current.dateIsExplicit && previous.dateIsExplicit && previous.date > current.date) return current;
   const direction = trendDirection(current.label, current.value, previous.value);
   if (!direction) return current;
   const tone: LabVisualTone = current.tone === "plain" ? "important" : current.tone;
@@ -493,6 +515,7 @@ function buildGroupsFromVisualItems(items: LabVisualItem[], options: LabVisualSu
       const focusedItems = orderedItems.filter((item) => {
         if (isPreferred(item) || isRequired(item) || item.tone !== "plain" || item.explicitMark) return true;
         if (options.selectionMode === "aiFocused") return false;
+        if (options.selectionMode === "complete") return item.label !== "Other";
         return (group.id !== "other" && coreOrder.has(item.label)) ||
           (!hasAiSelection && group.id === "other" && item.label !== "Other");
       });
@@ -558,6 +581,9 @@ export function buildLabVisualSummaryFromText(value: string, options: LabVisualS
       label: "Microbiology",
       value: source.body,
       previousValue: "",
+      unit: "",
+      date: "",
+      dateIsExplicit: false,
       text: source.body,
       tone: "important",
       score: scoreForItem("infxPerfusion", "Microbiology", "important", sourceIndex),
@@ -582,6 +608,9 @@ export function buildLabVisualSummaryFromText(value: string, options: LabVisualS
           label: "Other",
           value: text,
           previousValue: "",
+          unit: "",
+          date: "",
+          dateIsExplicit: false,
           text,
           tone: source.important ? "important" : "plain",
           score: scoreForItem("other", "Other", source.important ? "important" : "plain", sourceIndex),
@@ -600,15 +629,22 @@ export function buildLabVisualTimelineSummary(
   previousValue: string,
   options: LabVisualSummaryOptions = {},
 ) {
-  const unlimitedOptions = {
+  // Compare the complete current and prior datasets before applying AI focus.
+  // Otherwise a plain value (for example improving pH/HCO3 in DKA) is removed
+  // before its clinically meaningful trajectory can be recognized.
+  const comparisonOptions = {
     ...options,
+    selectionMode: "complete" as const,
+    preferredItemIds: [],
+    preferredLabels: [],
+    requiredLabels: [],
     maxGroups: Number.POSITIVE_INFINITY,
     maxItemsPerGroup: Number.POSITIVE_INFINITY,
   };
-  const currentGroups = buildLabVisualSummaryFromText(currentValue, unlimitedOptions);
+  const currentGroups = buildLabVisualSummaryFromText(currentValue, comparisonOptions);
   if (!previousValue.trim()) return buildGroupsFromVisualItems(currentGroups.flatMap((group) => group.items), options);
 
-  const previousItems = buildLabVisualSummaryFromText(previousValue, unlimitedOptions)
+  const previousItems = buildLabVisualSummaryFromText(previousValue, comparisonOptions)
     .flatMap((group) => group.items);
   const previousByKey = new Map(previousItems.map((item) => [item.key, item]));
   const timelineItems = currentGroups

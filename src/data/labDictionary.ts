@@ -33,6 +33,7 @@ export const labDictionary: LabDictionaryItem[] = [
   item("CBC / DC", "rdw", "RDW", [], ["%"]),
   item("CBC / DC", "plt", "Plt", ["Platelet", "PLT"], ["k/uL"]),
   item("CBC / DC", "neu", "Neu", ["Neutrophil", "N", "Seg"], ["%"]),
+  item("CBC / DC", "anc", "ANC", ["Absolute neutrophil count", "Absolute neutrophil", "Neutrophil absolute", "Neut abs"], ["/uL"]),
   item("CBC / DC", "lym", "Lym", ["Lymphocyte"], ["%"]),
   item("CBC / DC", "mono", "Mono", ["Monocyte"], ["%"]),
   item("CBC / DC", "eos", "Eos", ["Eosinophil"], ["%"]),

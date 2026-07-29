@@ -338,6 +338,7 @@ export function getCanonicalSoapText(patient: Patient, dailyNotes: DailyNote[] =
       text: canonicalSoap,
       source: "selected" as const,
       sourceDate: selectedNote?.date ?? selectedDate,
+      isCurrentDate: true,
     };
   }
 
@@ -346,6 +347,7 @@ export function getCanonicalSoapText(patient: Patient, dailyNotes: DailyNote[] =
       text: canonicalSoap,
       source: "latest" as const,
       sourceDate: canonicalNote.date,
+      isCurrentDate: canonicalNote.date === selectedDate,
     };
   }
 
@@ -353,6 +355,7 @@ export function getCanonicalSoapText(patient: Patient, dailyNotes: DailyNote[] =
     text: formatSoapDraft(patientToFallbackSoapDraft(patient, eligibleNotes, selectedDate)),
     source: "fallback" as const,
     sourceDate: selectedDate,
+    isCurrentDate: true,
   };
 }
 
@@ -835,7 +838,19 @@ export function patientToSoapDraft(patient: Patient, dailyNotes: DailyNote[] = [
   const canonical = getCanonicalSoapText(patient, eligibleNotes, selectedDate);
   // A complete reviewed SOAP is canonical. Re-injecting legacy patient/note
   // orders here made deleted or corrected orders reappear after Save.
-  if (canonical.source !== "fallback") return parseSoapText(canonical.text);
+  if (canonical.source !== "fallback") {
+    const draft = parseSoapText(canonical.text);
+    if (canonical.isCurrentDate || !canonical.sourceDate) return draft;
+    return {
+      ...draft,
+      header: uniqueSoapLines(
+        [...draft.header.filter((line) => !/^Carried from:/i.test(line)), `Carried from: ${canonical.sourceDate}`],
+        Math.max(8, draft.header.length + 1),
+        150,
+        false,
+      ),
+    };
+  }
   return patientToFallbackSoapDraft(patient, eligibleNotes, selectedDate);
 }
 

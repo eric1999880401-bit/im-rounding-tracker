@@ -293,7 +293,7 @@ export const roundSoapDraftSchema = {
             properties: {
               panel: { type: "string", enum: ["CBC/DC", "Chem/Renal", "Liver/Coag", "Infx/Perfusion", "Urinalysis", "ABG/VBG", "Cardiac", "Other"] },
               values: stringSchema,
-              sourceIds: { type: "array", items: stringSchema },
+              sourceIds: { type: "array", minItems: 1, items: stringSchema },
             },
           },
         },

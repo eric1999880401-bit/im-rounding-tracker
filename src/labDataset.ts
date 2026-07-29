@@ -6,6 +6,7 @@ import type { ParsedLabItem } from "./types";
 export interface CanonicalLabItem extends ParsedLabItem {
   id: string;
   date: string;
+  dateIsExplicit: boolean;
 }
 
 export interface CanonicalLabDataset {
@@ -30,6 +31,26 @@ function safeIdPart(value: string) {
   return String(value || "unknown").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "unknown";
 }
 
+function hasExplicitLeadingDate(value: string) {
+  return /^\s*!?\s*(?:20\d{2}[-/]\d{1,2}[-/]\d{1,2}|\d{1,2}\/\d{1,2})\b/.test(String(value ?? ""));
+}
+
+function normalizedLabUnit(value: unknown) {
+  return String(value ?? "").replace(/\s+/g, "").toLowerCase();
+}
+
+function comparableLabUnits(current: Pick<ParsedLabItem, "unit">, previous: Pick<ParsedLabItem, "unit">) {
+  return normalizedLabUnit(current.unit) === normalizedLabUnit(previous.unit);
+}
+
+function chronologicallyEligiblePrior(
+  current: Pick<CanonicalLabItem, "date" | "dateIsExplicit">,
+  previous: Pick<CanonicalLabItem, "date" | "dateIsExplicit">,
+) {
+  if (!current.dateIsExplicit || !previous.dateIsExplicit) return true;
+  return previous.date <= current.date;
+}
+
 function withStableIds(value: string) {
   const normalized = normalizeLabTableSourceText(
     String(value ?? "").split(/\r?\n/).map(normalizeCompactBloodGasLine).join("\n"),
@@ -49,6 +70,7 @@ function withStableIds(value: string) {
         id: `lab-${safeIdPart(key)}-${safeIdPart(report.date || "undated")}-${reportIndex}-${itemIndex}`,
         // Date remains internal display/AI context and is not a schema change.
         date: report.date,
+        dateIsExplicit: hasExplicitLeadingDate(report.rawText),
       });
     });
   });
@@ -75,8 +97,13 @@ export function buildCanonicalLabDataset(value: string): CanonicalLabDataset {
     const latest = sorted[0];
     if (!latest) return [];
     if (latest.previousValue) return [latest];
-    const previous = sorted.find((item) => item.value !== latest.value);
-    return [{ ...latest, previousValue: previous?.value ?? "" }];
+    // "Previous" is the immediately preceding observation, even when the
+    // value is unchanged. Never skip back to an older different result.
+    const previous = sorted[1];
+    if (!previous ||
+        !chronologicallyEligiblePrior(latest, previous) ||
+        !comparableLabUnits(latest, previous)) return [latest];
+    return [{ ...latest, previousValue: previous.value }];
   });
 
   return {
@@ -84,6 +111,32 @@ export function buildCanonicalLabDataset(value: string): CanonicalLabDataset {
     allItems,
     latestItems,
     rejectedMetadata: normalized.rejected,
+  };
+}
+
+export function buildCanonicalLabTimelineDataset(
+  currentValue: string,
+  previousValue: string,
+): CanonicalLabDataset {
+  const current = buildCanonicalLabDataset(currentValue);
+  if (!previousValue.trim() || current.latestItems.length === 0) return current;
+
+  const previous = buildCanonicalLabDataset(previousValue);
+  const previousByKey = new Map(
+    previous.latestItems.map((item) => [selectionKey(item), item]),
+  );
+  return {
+    ...current,
+    // Current source IDs stay unchanged so AI selections remain valid when the
+    // client later verifies them against today's pasted source.
+    latestItems: current.latestItems.map((item) => {
+      if (String(item.previousValue ?? "").trim()) return item;
+      const prior = previousByKey.get(selectionKey(item));
+      if (!prior ||
+          !chronologicallyEligiblePrior(item, prior) ||
+          !comparableLabUnits(item, prior)) return item;
+      return { ...item, previousValue: prior.value };
+    }),
   };
 }
 

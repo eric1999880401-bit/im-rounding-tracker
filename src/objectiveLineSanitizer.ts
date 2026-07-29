@@ -11,8 +11,8 @@ export interface SanitizedObjectiveLine {
 
 const objectivePrefixPattern = /^(?:O|Objective|Other|V\/S|VS|Vitals?|PE|Physical exam|Labs?|Image|Img)\s*[:\uFF1A]\s*/i;
 const explicitObjectivePrefixPattern = /^(V\/S|VS|Vitals?|PE|Physical exam|Labs?|Image|Img)\s*[:\uFF1A]\s*/i;
-const labLabelPattern = /\b(?:WBC|Neu|Neut|Lym|Mono|Eos|Baso|NRBC|RBC|Hb|Hgb|Hct|MCV|MCH|MCHC|RDW|Plt|Platelet|MPV|MDW|BUN|Cr|CRE|Creatinine|e?GFR|Na|K|Cl|Ca|Mg|Phos|P|Osm|AST|ALT|ALP|GGT|T-?Bil|D-?Bil|Alb|PT|INR|aPTT|CRP|hsCRP|PCT|Lactate|pH|pCO2|pO2|HCO3|BE)\b/gi;
-const labResultPattern = /\b(?:WBC|Neu|Neut|Lym|Mono|Eos|Baso|NRBC|RBC|Hb|Hgb|Hct|MCV|MCH|MCHC|RDW|Plt|Platelet|MPV|MDW|BUN|Cr|CRE|Creatinine|e?GFR|Na|K|Cl|Ca|Mg|Phos|P|Osm|AST|ALT|ALP|GGT|T-?Bil|D-?Bil|Alb|PT|INR|aPTT|CRP|hsCRP|PCT|Lactate|pH|pCO2|pO2|HCO3|BE)\s*(?:[:=]\s*)?[<>]?\s*-?\d+(?:\.\d+)?/i;
+const labLabelPattern = /\b(?:WBC|Neu|Neut|ANC|Lym|Mono|Eos|Baso|NRBC|RBC|Hb|Hgb|Hct|MCV|MCH|MCHC|RDW|Plt|Platelet|MPV|MDW|BUN|Cr|CRE|Creatinine|e?GFR|Na|K|Cl|Ca|Mg|Phos|P|Osm|Uric acid|Glucose|Glu|AC glucose|PC glucose|HbA1c|TSH|Free T4|Cortisol|AST|ALT|ALP|GGT|T-?Bil|D-?Bil|Alb|Amylase|Lipase|PT|INR|aPTT|D-?dimer|Fibrinogen|FDP|CRP|hsCRP|PCT|Lactate|Ketone|Troponin(?: I| T)?|TnI|TnT|CK(?:-?MB)?|BNP|NT-?proBNP|LDH|pH|pCO2|pO2|HCO3|BE)\b/gi;
+const labResultPattern = /\b(?:WBC|Neu|Neut|ANC|Lym|Mono|Eos|Baso|NRBC|RBC|Hb|Hgb|Hct|MCV|MCH|MCHC|RDW|Plt|Platelet|MPV|MDW|BUN|Cr|CRE|Creatinine|e?GFR|Na|K|Cl|Ca|Mg|Phos|P|Osm|Uric acid|Glucose|Glu|AC glucose|PC glucose|HbA1c|TSH|Free T4|Cortisol|AST|ALT|ALP|GGT|T-?Bil|D-?Bil|Alb|Amylase|Lipase|PT|INR|aPTT|D-?dimer|Fibrinogen|FDP|CRP|hsCRP|PCT|Lactate|Ketone|Troponin(?: I| T)?|TnI|TnT|CK(?:-?MB)?|BNP|NT-?proBNP|LDH|pH|pCO2|pO2|HCO3|BE)\s*(?:[:=]\s*)?[<>]?\s*-?\d+(?:\.\d+)?/i;
 const positionalLabValuePattern = /^[<>]?-?\d+(?:,\d{3})*(?:\.\d+)?%?(?:\*+|[HL]|[\u2191\u2193\u2197\u2198])?$/i;
 const compactBloodGasPattern = /\b(ABG|VBG)\s*[:=]?\s*([<>]?-?\d+(?:\.\d+)?)\s*\/\s*([<>]?-?\d+(?:\.\d+)?)\s*\/\s*([<>]?-?\d+(?:\.\d+)?)\s*\/\s*([<>]?-?\d+(?:\.\d+)?)(?:\s*\/\s*([<>]?-?\d+(?:\.\d+)?))?/i;
 

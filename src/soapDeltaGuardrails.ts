@@ -417,7 +417,7 @@ function sourceFragments(value: string) {
 
 function isUsableSourceLabLine(value: string) {
   const text = stripColorMarkup(String(value ?? ""));
-  const hasNumericResult = /\b(?:WBC|Neu|Neut|Lym|Mono|Eos|Baso|RBC|Hb|Hgb|Hct|MCV|MCH|MCHC|RDW|Plt|Platelet|MPV|MDW|BUN|Cr|CRE|Creatinine|e?GFR|Na|K|Cl|Ca|Mg|Phos|P|Osm|AST|ALT|ALP|GGT|T-?Bil|D-?Bil|Alb|PT|INR|aPTT|CRP|hsCRP|PCT|Lactate|pH|pCO2|pO2|HCO3|BE|Troponin|BNP)\s*(?:[:=]\s*)?[<>]?\s*-?\d+(?:\.\d+)?/i.test(text);
+  const hasNumericResult = /\b(?:WBC|Neu|Neut|ANC|Lym|Mono|Eos|Baso|RBC|Hb|Hgb|Hct|MCV|MCH|MCHC|RDW|Plt|Platelet|MPV|MDW|BUN|Cr|CRE|Creatinine|e?GFR|Na|K|Cl|Ca|Mg|Phos|P|Osm|Glucose|Sugar|Ketone|Uric acid|LDH|CK|Lipase|Amylase|AST|ALT|ALP|GGT|T-?Bil|D-?Bil|Alb|PT|INR|aPTT|D-?dimer|Fibrinogen|FDP|CRP|hsCRP|ESR|PCT|Lactate|pH|pCO2|pO2|HCO3|BE|Troponin(?:\s+[IT])?|CK-?MB|BNP|NT-?proBNP)\s*(?:[:=]\s*)?[<>]?\s*-?\d+(?:\.\d+)?/i.test(text);
   const hasMicroResult = /\b(?:blood|urine|sputum|CSF|stool)\s*(?:culture|Cx)\b.*\b(?:positive|negative|growth|isolated|NGTD|susceptib|resistan|pending)\b|\b(?:B\/C|BCx|U\/C|UCx)\b.*\b(?:positive|negative|growth|NGTD|pending)\b/i.test(text);
   const hasStoolResult = /\b(?:O\s*&\s*P|O\/P|occult blood|FOBT|C\.?\s*difficile|C\.?\s*diff)\b.*\b(?:positive|negative|neg\.?|detected|not detected)\b/i.test(text);
   return hasNumericResult || hasMicroResult || hasStoolResult;
@@ -447,8 +447,39 @@ function lineUsesSourceNumbers(line: string, sourceLines: string[]) {
   return candidateNumbers.every((value) => sourceNumbers.has(value));
 }
 
+function lineUsesCurrentLabValues(line: string, sourceLines: string[]) {
+  const sourceItems = parseLabReports(sourceLines.join("\n")).flatMap((report) => report.items);
+  const candidateItems = parseLabReports(line).flatMap((report) => report.items);
+  if (sourceItems.length === 0 || candidateItems.length === 0) return false;
+  const comparableValue = (value: unknown) => {
+    const normalized = labValueKey(String(value ?? "")).replace(/[↑↓?]/g, "");
+    const numeric = normalized.match(/^[<>]?\s*(-?\d+(?:\.\d+)?)/)?.[1];
+    if (numeric !== undefined) return String(Number(numeric));
+    return normalized.toLowerCase();
+  };
+  const currentByKey = new Map<string, string>();
+  sourceItems.forEach((item) => {
+    const key = labItemKey(item.name || item.label);
+    const value = comparableValue(item.value);
+    if (key && value) currentByKey.set(key, value);
+  });
+  let matched = 0;
+  for (const item of candidateItems) {
+    const key = labItemKey(item.name || item.label);
+    const sourceValue = currentByKey.get(key);
+    if (!sourceValue) continue;
+    matched += 1;
+    if (comparableValue(item.value) !== sourceValue) return false;
+  }
+  return matched > 0;
+}
+
 function sourceLabLines(value: string) {
-  const summary = formatLabVisualSummaryFromLines(value, { includeLabPrefix: true });
+  const summary = formatLabVisualSummaryFromLines(value, {
+    includeLabPrefix: true,
+    selectionMode: "complete",
+    maxItemsPerGroup: Number.POSITIVE_INFINITY,
+  });
   return uniqueLines(summary.lines.filter(isUsableSourceLabLine), 12);
 }
 
@@ -1426,7 +1457,17 @@ function draftForDailyUpdate(baseline: SoapDraft, candidate: SoapDraft, fields: 
         const exactCandidate = candidateObjective.vs.filter((line) => lineUsesSourceNumbers(line, sourceOwnedLines));
         nextObjective.vs = uniqueLines(exactCandidate.length > 0 ? exactCandidate : sourceOwnedLines, 4);
       } else if (section === "lab") {
-        nextObjective.lab = mergeLabLinesForDaily(baseObjective.lab, sourceOwnedLines, 12);
+        const canonicalCandidate = formatLabVisualSummaryFromLines(candidateObjective.lab, {
+          includeLabPrefix: true,
+          selectionMode: "complete",
+          maxItemsPerGroup: Number.POSITIVE_INFINITY,
+        }).lines;
+        const exactCandidate = canonicalCandidate.filter((line) => lineUsesCurrentLabValues(line, sourceOwnedLines));
+        nextObjective.lab = mergeLabLinesForDaily(
+          baseObjective.lab,
+          exactCandidate.length > 0 ? exactCandidate : sourceOwnedLines,
+          12,
+        );
       } else if (section === "image") {
         const incomingImages = newestImageStudyLines(sourceOwnedLines, 8);
         const incomingStudyKeys = new Set(incomingImages.map(imageStudyKey).filter(Boolean));
@@ -1529,7 +1570,26 @@ function draftForDailyUpdate(baseline: SoapDraft, candidate: SoapDraft, fields: 
         ...supplementalLines,
       ], 2);
     } else {
-      candidateApProblems.push(problem);
+      // Multiple current facts may belong to one reviewed combined problem
+      // (for example Cr rise + hyperkalemia under "AKI / hyperK"). Coalesce
+      // them before the one-to-one baseline assignment so model omission or
+      // ordering cannot create a duplicate seventh problem.
+      const baselineMatch = baseline.apProblems
+        .map((baselineProblem) => ({ baselineProblem, score: problemMatchScore(problem, baselineProblem) }))
+        .filter((item) => item.score > 0)
+        .sort((left, right) => right.score - left.score)[0]?.baselineProblem;
+      const existingForBaseline = baselineMatch
+        ? candidateApProblems.find((candidateProblem) => problemMatchScore(candidateProblem, baselineMatch) > 0)
+        : undefined;
+      if (baselineMatch && existingForBaseline) {
+        existingForBaseline.title = baselineMatch.title;
+        existingForBaseline.lines = uniqueLines([...existingForBaseline.lines, ...problem.lines], 3);
+      } else {
+        candidateApProblems.push({
+          ...problem,
+          title: baselineMatch?.title ?? problem.title,
+        });
+      }
     }
   });
   let nextApProblems = baseline.apProblems;
@@ -1630,6 +1690,7 @@ export function guardRoundSoapDelta({
   sourceFields,
   candidateWarnings = [],
   selectedDate = "",
+  candidateObjectiveIsSourceOwned = false,
 }: {
   workflowMode: RoundSoapWorkflowMode;
   baselineText: string;
@@ -1637,6 +1698,7 @@ export function guardRoundSoapDelta({
   sourceFields: RoundSoapSourceFields;
   candidateWarnings?: string[];
   selectedDate?: string;
+  candidateObjectiveIsSourceOwned?: boolean;
 }): SoapDeltaReview {
   const baselineSanitized = sanitizeDraftObjective(parseSoapText(baselineText));
   const candidateSanitized = sanitizeDraftObjective(parseSoapText(candidateText || baselineText));
@@ -1648,7 +1710,9 @@ export function guardRoundSoapDelta({
   const beforeAntibioticText = formatSoapDraft(significanceFiltered.draft).toLowerCase();
   const missingAntibiotics = activeAntibiotics.filter((name) => !beforeAntibioticText.includes(name));
   const antibioticGroundedCandidate = ensureAntibioticApInDraft(significanceFiltered.draft, sourceText, selectedDate);
-  const objectiveGrounded = ensureSourceObjectiveCoverage(antibioticGroundedCandidate, sourceFields);
+  const objectiveGrounded = candidateObjectiveIsSourceOwned
+    ? { draft: antibioticGroundedCandidate, warnings: [] as string[] }
+    : ensureSourceObjectiveCoverage(antibioticGroundedCandidate, sourceFields);
   const sourceGroundedCandidate = objectiveGrounded.draft;
   const afterAntibioticText = formatSoapDraft(sourceGroundedCandidate).toLowerCase();
   const restoredAntibiotics = missingAntibiotics.filter((name) => afterAntibioticText.includes(name));
