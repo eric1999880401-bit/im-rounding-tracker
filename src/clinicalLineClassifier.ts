@@ -1,3 +1,6 @@
+import { isBodyFluidSpecimen, isLabSpecimenHeading, labSpecimenIdentityFromText, specimenAwareLabSelectionKey, stripLeadingLabSpecimen } from "./labSpecimen";
+import { parseLabText } from "./labParsing";
+
 export type ClinicalLineTone = "critical" | "important" | "info" | "plain";
 
 export type ClinicalLineKind =
@@ -116,7 +119,21 @@ function inferredKind(text: string, fallbackKind: ClinicalLineKind) {
   const prefixed = prefixedKind(text, fallbackKind);
   if (prefixed.kind !== fallbackKind || prefixed.body !== stripClinicalMarkup(text)) return prefixed;
   const body = prefixed.body;
-  if (/\bBP\b|\bSpO2\b|\bHR\b|\bRR\b|\bT\s*\d/i.test(body)) return { kind: "vs" as const, body };
+  if (/^(?:CXR|CT|MRI|X-?ray|Echo|Sono|Ultrasound|US|PET|ERCP|EGD|Colonoscopy)\s*:/i.test(body)) {
+    return { kind: "image" as const, body };
+  }
+  if (/^(?:Procedure|Operation|Surgery|Bronchoscopy|Thoracentesis|Paracentesis)\s*:/i.test(body)) {
+    return { kind: "other" as const, body };
+  }
+  if (/\b(?:BP|blood pressure)\b|\bSpO2\b|\bHR\b|\bRR\b|\bT\s*[:=]?\s*(?:3[4-9]|4[0-2])(?:\.\d+)?\b/i.test(body)) return { kind: "vs" as const, body };
+  const specimen = labSpecimenIdentityFromText(body);
+  const leadingSpecimen = stripLeadingLabSpecimen(body);
+  const explicitSpecimenResult = specimen.explicit &&
+    (leadingSpecimen.body !== body || /^[^:]{1,80}:/.test(body)) &&
+    /(?:[<>]?\s*-?\d|\b(?:positive|negative|pos|neg|present|absent|detected|not detected|no growth)\b)/i.test(body);
+  if (isLabSpecimenHeading(body) || explicitSpecimenResult) {
+    return { kind: "lab" as const, body };
+  }
   if (/\b(wbc|hb|hgb|plt|cr|bun|na|k\b|ca|mg|phos|lactate|crp|pct|inr|pt|aptt|culture|b\/c|bcx|fobt|occult blood|o\s*&\s*p|o\/p|c\.?\s*diff)\b/i.test(body)) {
     return { kind: "lab" as const, body };
   }
@@ -134,24 +151,57 @@ function explicitTone(value: string): ClinicalLineTone | null {
   return null;
 }
 
+function numericLabResult(value: unknown) {
+  const match = String(value ?? "").replace(/,/g, "").match(/[<>]?\s*(-?\d+(?:\.\d+)?(?:e[+-]?\d+)?)/i);
+  if (!match) return null;
+  const numeric = Number(match[1]);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+function hasCriticalPeripheralBloodResult(text: string, chronicRenal: boolean) {
+  return parseLabText(text).some((item) => {
+    const key = specimenAwareLabSelectionKey(item);
+    const value = numericLabResult(item.value);
+    if (value === null) return false;
+    if (key === "blood|k") return value <= 2.9 || value >= 6;
+    if (key === "blood|hb") return value <= 7.9;
+    if (key === "blood|na") return value <= 119;
+    if (key === "blood|wbc") return value <= 2.9 || value >= 20;
+    if (key === "blood|plt") return value <= 49;
+    if (key === "blood|cr") return !chronicRenal && value >= 2;
+    return false;
+  });
+}
+
 function criticalSignal(text: string, kind: ClinicalLineKind, chronicRenal = false) {
   const resolvedContext = /\b(?:resolved|recovered|off pressor|completed|prior|history of|remote)\b/i.test(text);
   const activeCulture = /\b(?:blood|csf)\s*(?:culture|cx)\b[^.;\n]*\b(?:positive|growth|isolated)\b|\b(?:b\/c|bcx)\b[^.;\n]*\b(?:positive|growth|isolated)\b/i.test(text);
+  const specimenText = prefixedKind(text, kind).body;
+  const specimen = stripLeadingLabSpecimen(specimenText).identity;
+  // Blood thresholds are an allow-list: only peripheral blood may trigger
+  // systemic K/Hb/Na/WBC/Plt/Cr criticality.
+  const criticalGas = (specimen.key === "abg" || specimen.key === "vbg") && (
+    /\bpH\s*[:=]?\s*(?:[0-6](?:\.\d+)?|7\.(?:[01]\d*))\b/i.test(text) ||
+    /\bpCO2\s*[:=]?\s*(?:[6-9]\d|\d{3,})\b/i.test(text)
+  );
   return (
     (!resolvedContext && /\b(shock|sepsis|septic|hypotension|desat|hypox|active bleed|melena|hematemesis|stroke|ich|neutropenic fever)\b/i.test(text)) ||
     activeCulture ||
     /\b(norepi|norepinephrine|dopamine|dobutamine|vasopressin|epinephrine|insulin drip|heparin drip)\b/i.test(text) ||
     /\b(lactate\s*(?:[4-9]|\d{2,})|troponin\s*(?:\+|positive|elevated)|inr\s*(?:[3-9]|\d{2,}))\b/i.test(text) ||
-    (kind === "lab" && /\b(k\s*(?:[0-2](?:\.\d+)?|[6-9](?:\.\d+)?)|hb\s*(?:[0-7](?:\.\d+)?)|na\s*(?:1[01]\d|[0-9]\d)|wbc\s*(?:[2-9]\d|[0-2](?:\.\d+)?)|plt\s*(?:[0-4]\d))\b/i.test(text)) ||
-    (kind === "lab" && !chronicRenal && /\bcr\s*[:=]?\s*(?:[2-9](?:\.\d+)?|\d{2,})\b/i.test(text)) ||
+    criticalGas ||
+    (kind === "lab" && hasCriticalPeripheralBloodResult(specimenText, chronicRenal)) ||
     (kind === "vs" && /\b(bp\s*[5-8]\d\/|spo2\s*[0-8]\d|rr\s*[3-9]\d|t\s*3[89]\.|hr\s*1[3-9]\d)\b/i.test(text))
   );
 }
 
 function importantSignal(text: string, kind: ClinicalLineKind) {
+  const specimenText = prefixedKind(text, kind).body;
+  const specimen = stripLeadingLabSpecimen(specimenText).identity;
   return (
     /\b(teicoplanin|vancomycin|cefepime|ceftriaxone|cefazolin|zosyn|pip\/tazo|meropenem|ertapenem|levofloxacin|abx|antibiotic|culture|pending|f\/u|repeat|consult|source control|biopsy|operation|surgery|thoracentesis|paracentesis|tap|drain|j-tube|ng|dc|discharge|opd|certificate|placement|anticoag|antiplatelet|heparin|apixaban|warfarin|aspirin|clopidogrel|hold|resume|insulin|lasix|furosemide|steroid|methylpred|prednisolone|oxygen|bronchodilator|tube feed|ivf|kcl)\b/i.test(text) ||
     (kind === "image" && /\b(effusion|chylothorax|tumou?r|mass|metasta|obstruction|perforation|infarct|stenosis|pneumonia|abscess|edema)\b/i.test(text)) ||
+    (kind === "lab" && specimen.explicit && isBodyFluidSpecimen(specimen)) ||
     (kind === "task" || kind === "dc")
   );
 }

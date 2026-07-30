@@ -3,6 +3,13 @@ import { findLabDictionaryItem } from "./data/labDictionary";
 import { buildCanonicalLabDataset, canonicalLabSelectionKey } from "./labDataset";
 import { hasChronicRenalContext } from "./labParsing";
 import { labReferenceForLabel } from "./labReference";
+import {
+  isBodyFluidSpecimen,
+  labAnalyteLabelForItem,
+  labSpecimenIdentityForItem,
+  specimenAwareLabDisplayLabel,
+  specimenAwareLabSelectionKey,
+} from "./labSpecimen";
 import { parseLabReports, safeClinicalLine, safeClinicalLinePreservingMarks, stripColorMarkup } from "./utils";
 
 const labColorMarkPattern = /\[\[(red|orange|yellow|blue|green|purple)(?:-(?:highlight|text))?:([\s\S]*?)\]\]/gi;
@@ -14,6 +21,7 @@ export type LabVisualGroupId =
   | "infxPerfusion"
   | "urinalysis"
   | "gas"
+  | "fluid"
   | "cardiac"
   | "other";
 
@@ -33,6 +41,7 @@ export interface LabVisualItem {
   score: number;
   sourceIndex: number;
   explicitMark: boolean;
+  groupId: LabVisualGroupId;
 }
 
 export interface LabVisualGroup {
@@ -76,6 +85,7 @@ const labGroupOrder: Array<{ id: LabVisualGroupId; label: string; keys: string[]
   { id: "infxPerfusion", label: "Infx/Perfusion", keys: ["CRP", "hsCRP", "PCT", "Lactate", "ESR", "Blood culture", "Sputum culture", "Urine culture", "Microbiology"] },
   { id: "urinalysis", label: "U/A", keys: ["UA WBC", "UA RBC", "LE", "Nitrite", "Bacteria", "Protein", "Glucose urine", "Ketone", "Specific gravity", "pH urine", "Cast"] },
   { id: "gas", label: "ABG/VBG", keys: ["pH", "pCO2", "pO2", "HCO3", "BE", "SaO2", "SpO2"] },
+  { id: "fluid", label: "Fluid studies", keys: [] },
   { id: "cardiac", label: "Cardiac", keys: ["Troponin I", "Troponin T", "Troponin", "CK", "CK-MB", "BNP", "NT-proBNP"] },
   { id: "other", label: "Other", keys: [] },
 ];
@@ -87,6 +97,7 @@ const coreDisplayKeys: Record<LabVisualGroupId, string[]> = {
   infxPerfusion: ["CRP", "hsCRP", "PCT", "Lactate", "ESR", "Blood culture", "Sputum culture", "Urine culture", "Microbiology"],
   urinalysis: ["UA WBC", "UA RBC", "LE", "Nitrite", "Bacteria", "Protein"],
   gas: ["pH", "pCO2", "pO2", "HCO3", "BE", "SaO2", "SpO2"],
+  fluid: [],
   cardiac: ["Troponin I", "Troponin T", "Troponin", "BNP", "NT-proBNP", "CK-MB"],
   other: [],
 };
@@ -98,20 +109,10 @@ const defaultGroupItemLimits: Record<LabVisualGroupId, number> = {
   infxPerfusion: 8,
   urinalysis: 8,
   gas: 7,
+  fluid: 12,
   cardiac: 6,
   other: 4,
 };
-
-const trendEligibleLabels = new Set([
-  "WBC", "Neu", "ANC", "Hb", "Hct", "Plt",
-  "BUN", "Cr", "eGFR", "Na", "K", "Mg", "Ca", "P", "Osm", "Uric acid",
-  "Glucose", "AC glucose", "PC glucose",
-  "CRP", "hsCRP", "PCT", "Lactate",
-  "AST", "ALT", "T-Bil", "Alb", "PT", "INR", "aPTT",
-  "Amylase", "Lipase", "D-dimer", "Fibrinogen", "FDP",
-  "pH", "pCO2", "pO2", "HCO3", "BE",
-  "Troponin I", "Troponin T", "CK", "CK-MB", "BNP", "NT-proBNP", "LDH",
-]);
 
 const groupOrderIndex = new Map(labGroupOrder.map((group, index) => [group.id, index]));
 const displayOrder = new Map(labGroupOrder.flatMap((group) => group.keys.map((key, index) => [`${group.id}|${key}`, index])));
@@ -156,7 +157,7 @@ function dictionaryItemFor(label: string) {
 }
 
 function trustedLabItem(item: ParsedLabItem) {
-  return Boolean(dictionaryItemFor(item.name || item.label));
+  return labSpecimenIdentityForItem(item).explicit || Boolean(dictionaryItemFor(item.name || item.label));
 }
 
 function labSourceLineFrom(raw: string, requireLabSignal: boolean): LabSourceLine | null {
@@ -203,7 +204,7 @@ function markedVisualItemsFromText(value: string): LabVisualItem[] {
       const groupId = parsed ? groupIdForItem(parsed) : "other";
       items.push({
         sourceId: parsed?.id ?? "",
-        key: parsed ? label.toLowerCase() : `marked|${segment.inner.toLowerCase()}`,
+        key: parsed ? specimenAwareLabSelectionKey(parsed) : `marked|${segment.inner.toLowerCase()}`,
         label,
         value,
         previousValue: parsed ? String(parsed.previousValue ?? "").trim() : "",
@@ -216,6 +217,7 @@ function markedVisualItemsFromText(value: string): LabVisualItem[] {
         score: scoreForItem(groupId, label, tone, sourceIndex) + 500,
         sourceIndex,
         explicitMark: true,
+        groupId,
       });
     });
   });
@@ -223,7 +225,7 @@ function markedVisualItemsFromText(value: string): LabVisualItem[] {
 }
 
 function normalizeNumber(value: string) {
-  const match = String(value ?? "").replace(/,/g, "").match(/[<>]?\s*(-?\d+(?:\.\d+)?)/);
+  const match = String(value ?? "").replace(/,/g, "").match(/[<>]?\s*(-?\d+(?:\.\d+)?(?:e[+-]?\d+)?)/i);
   if (!match) return null;
   const parsed = Number(match[1]);
   return Number.isFinite(parsed) ? parsed : null;
@@ -250,7 +252,16 @@ function displayLabValue(label: string, value: string) {
   return clean;
 }
 
+function displayLabValueWithUnit(label: string, value: string, unit: string) {
+  const display = displayLabValue(label, value);
+  const normalizedUnit = String(unit ?? "").trim();
+  if (!normalizedUnit || String(value).toLowerCase().includes(normalizedUnit.toLowerCase())) return display;
+  if (normalizedUnit === "%") return String(value).includes("%") ? display : `${display}%`;
+  return `${display} ${normalizedUnit}`;
+}
+
 function labelForItem(item: ParsedLabItem) {
+  if (labSpecimenIdentityForItem(item).key !== "blood") return specimenAwareLabDisplayLabel(item);
   return dictionaryItemFor(item.name || item.label)?.displayName ?? item.name ?? item.label;
 }
 
@@ -297,6 +308,12 @@ function trendDirection(label: string, value: string, previousValue: string) {
 }
 
 function groupIdForItem(item: ParsedLabItem): LabVisualGroupId {
+  const specimen = labSpecimenIdentityForItem(item);
+  if (isBodyFluidSpecimen(specimen)) return "fluid";
+  if (specimen.key === "urine") return "urinalysis";
+  if (specimen.key === "abg" || specimen.key === "vbg") return "gas";
+  if (specimen.key === "stool") return "infxPerfusion";
+  if (specimen.key === "other-specimen") return "other";
   if (/^(?:Microbiology|Stool studies)$/i.test(String(item.name || item.label || ""))) return "infxPerfusion";
   const dictionaryGroup = dictionaryItemFor(item.name || item.label)?.group ?? "";
   if (dictionaryGroup === "CBC / DC") return "cbc";
@@ -310,8 +327,29 @@ function groupIdForItem(item: ParsedLabItem): LabVisualGroupId {
 }
 
 function toneForText(label: string, value: string, item: ParsedLabItem, chronicRenal = false): LabVisualTone {
+  const specimen = labSpecimenIdentityForItem(item);
+  const analyte = labAnalyteLabelForItem(item);
+  if (isBodyFluidSpecimen(specimen)) return "important";
   const previousValue = String(item.previousValue ?? "").trim();
-  const numeric = comparisonNumber(label, value);
+  const numeric = comparisonNumber(specimen.key === "blood" ? label : analyte, value);
+  if (specimen.key !== "blood") {
+    if (numeric !== null && (specimen.key === "abg" || specimen.key === "vbg")) {
+      if (analyte === "pH" && (numeric < 7.2 || numeric > 7.6)) return "critical";
+      if (/^pCO2$/i.test(analyte) && (numeric < 20 || numeric > 60)) return "critical";
+      if (/^pO2$/i.test(analyte) && numeric < 60) return "critical";
+      if (/^HCO3$/i.test(analyte) && (numeric < 15 || numeric > 40)) return "critical";
+      if (analyte === "pH" && (numeric < 7.35 || numeric > 7.45)) return "important";
+      if (/^pCO2$/i.test(analyte) && (numeric < 35 || numeric > 45)) return "important";
+      if (/^pO2$/i.test(analyte) && numeric < 80) return "important";
+      if (/^HCO3$/i.test(analyte) && (numeric < 22 || numeric > 26)) return "important";
+    }
+    if (/\babnormal\b/i.test(String(item.note ?? "")) || item.important || item.isImportant) return "important";
+    if (/^(?:LE|Nitrite|Bacteria|Protein|Ketone|Glucose)$/i.test(analyte) &&
+        /(?:positive|pos|reactive|detected|present|many|moderate|trace|[1-4]\+)/i.test(`${value} ${item.note ?? ""}`)) return "important";
+    if (previousValue && trendDirection(analyte, value, previousValue)) return "important";
+    if (noteDirection(item)) return "important";
+    return "plain";
+  }
   if (numeric !== null) {
     if (label === "K" && (numeric < 3 || numeric > 5.5)) return "critical";
     if (label === "Na" && (numeric < 130 || numeric > 150)) return "critical";
@@ -322,6 +360,8 @@ function toneForText(label: string, value: string, item: ParsedLabItem, chronicR
       const compactUnit = String(item.unit ?? "").replace(/\s+/g, "").toLowerCase();
       const criticalThreshold = /(?:10\^3\/ul|10\^9\/l|k\/ul)/.test(compactUnit) ? 0.5 : 500;
       if (numeric < criticalThreshold) return "critical";
+      const importantThreshold = /(?:10\^3\/ul|10\^9\/l|k\/ul)/.test(compactUnit) ? 1.5 : 1500;
+      if (numeric < importantThreshold) return "important";
     }
     // ESRD/dialysis: elevated Cr/BUN is that patient's baseline, not critical.
     if (label === "Cr" && numeric >= 2) return chronicRenal ? "important" : "critical";
@@ -352,7 +392,13 @@ function scoreForItem(groupId: LabVisualGroupId, label: string, tone: LabVisualT
 
 function visualItemFromParsed(item: ParsedLabItem, sourceIndex = 0, chronicRenal = false): LabVisualItem | null {
   const trusted = trustedLabItem(item);
-  const label = trusted ? labelForItem(item) : String(item.name || item.label || "").trim();
+  const specimen = labSpecimenIdentityForItem(item);
+  const analyte = labAnalyteLabelForItem(item);
+  const label = specimen.key !== "blood"
+    ? specimenAwareLabDisplayLabel(item)
+    : trusted
+      ? labelForItem(item)
+      : String(item.name || item.label || "").trim();
   const value = String(item.value ?? "").trim();
   if (!label || !value) return null;
 
@@ -361,13 +407,21 @@ function visualItemFromParsed(item: ParsedLabItem, sourceIndex = 0, chronicRenal
   const leadingCurrentValue = previousValue
     ? value.match(/^\s*([<>]?\s*-?\d+(?:,\d{3})*(?:\.\d+)?)/)?.[1]?.replace(/\s+/g, "") ?? ""
     : "";
-  const displayValue = displayLabValue(label, leadingCurrentValue || value);
+  const displayKey = label;
+  const comparisonKey = specimen.key === "blood" ? label : analyte;
+  const displayValue = displayLabValue(displayKey, leadingCurrentValue || value);
   // Non-dictionary labs (custom entries, ACTH, ...) still display under Other;
   // they just never get reference-range arrows or numeric criticality.
-  const direction = previousValue ? trendDirection(label, value, previousValue) : trusted ? noteDirection(item) || referenceDirection(label, value) : noteDirection(item);
-  const previous = previousValue ? `(${displayLabValue(label, previousValue)})` : "";
-  const text = `${label} ${displayValue}${direction}${previous}`;
-  const groupId = trusted ? groupIdForItem(item) : "other";
+  const direction = previousValue
+    ? trendDirection(comparisonKey, value, previousValue)
+    : trusted
+      ? noteDirection(item) || (specimen.key === "blood" ? referenceDirection(label, value) : "")
+      : noteDirection(item);
+  const unit = String(item.unit ?? "").trim();
+  const displayUnit = specimen.key === "blood" ? "" : unit;
+  const previous = previousValue ? `(${displayLabValueWithUnit(displayKey, previousValue, displayUnit)})` : "";
+  const text = `${label} ${displayLabValueWithUnit(displayKey, leadingCurrentValue || value, displayUnit)}${direction}${previous}`;
+  const groupId = groupIdForItem(item);
   const tone = trusted
     ? toneForText(label, value, item, chronicRenal)
     : item.important || item.isImportant || noteDirection(item) || /\babnormal\b/i.test(String(item.note ?? ""))
@@ -376,11 +430,11 @@ function visualItemFromParsed(item: ParsedLabItem, sourceIndex = 0, chronicRenal
 
   return {
     sourceId: item.id ?? "",
-    key: label.toLowerCase(),
+    key: specimenAwareLabSelectionKey(item),
     label,
     value,
     previousValue,
-    unit: String(item.unit ?? "").trim(),
+    unit,
     date: String(datedItem.date ?? "").trim(),
     dateIsExplicit: datedItem.dateIsExplicit === true,
     text,
@@ -388,6 +442,7 @@ function visualItemFromParsed(item: ParsedLabItem, sourceIndex = 0, chronicRenal
     score: scoreForItem(groupId, label, tone, sourceIndex),
     sourceIndex,
     explicitMark: false,
+    groupId,
   };
 }
 
@@ -403,19 +458,56 @@ function cleanOtherText(source: LabSourceLine) {
     .replace(/^[,;]+\s*|[,;]+$/g, "");
 }
 
+function comparableVisualLabUnit(value: string, selectionKey = "") {
+  const unit = String(value ?? "").replace(/\s+/g, "").replace(/[µμ]/g, "u").toLowerCase();
+  if (/^(?:cells?)?\/(?:ul|mm3)$/.test(unit)) return "count-per-ul";
+  if (/^(?:k\/ul|(?:x|×)?10\^?3\/ul|10\^?9\/l)$/.test(unit)) return "thousand-per-ul";
+  if (!unit && !selectionKey.startsWith("blood|") && /\|(?:wbc|rbc|anc|totalnucleatedcells|nucleatedcells|cellcount)$/.test(selectionKey)) return "count-per-ul";
+  if (!unit && !selectionKey.startsWith("blood|") && /\|(?:pmn|neu|neutrophils?|lym|lymphocytes?|mono|eos|baso)$/.test(selectionKey)) return "%";
+  return unit;
+}
+
+function visualCellCountScalePerUl(value: string, selectionKey: string) {
+  if (!/\|(?:wbc|rbc|anc|totalnucleatedcells|nucleatedcells|cellcount)$/.test(selectionKey)) return null;
+  const unit = String(value ?? "").replace(/\s+/g, "").replace(/[µμ]/g, "u").toLowerCase();
+  if (!unit || /^(?:cells?)?\/(?:ul|mm3)$/.test(unit)) return 1;
+  if (/^k\/ul$/.test(unit)) return 1000;
+  const scaled = unit.match(/^(?:x|×)?10\^?(\d{1,2})\/(ul|l)$/);
+  if (!scaled) return null;
+  return 10 ** (Number(scaled[1]) - (scaled[2] === "l" ? 6 : 0));
+}
+
+function visualPreviousValueInCurrentUnit(current: LabVisualItem, previous: LabVisualItem) {
+  const currentScale = visualCellCountScalePerUl(current.unit, current.key);
+  const previousScale = visualCellCountScalePerUl(previous.unit, previous.key);
+  if (currentScale === null || previousScale === null || currentScale === previousScale) return previous.value;
+  const match = previous.value.replace(/,/g, "").match(/^([<>]?)\s*(-?\d+(?:\.\d+)?(?:e[+-]?\d+)?)(%?\+?)$/i);
+  if (!match) return previous.value;
+  const numeric = Number(match[2]);
+  if (!Number.isFinite(numeric)) return previous.value;
+  const converted = numeric * previousScale / currentScale;
+  const formatted = Number.isInteger(converted) ? String(converted) : converted.toFixed(6).replace(/0+$/, "").replace(/\.$/, "");
+  return `${match[1]}${formatted}${match[3]}`;
+}
+
 function withPreviousVisualValue(current: LabVisualItem, previous: LabVisualItem) {
-  if (current.explicitMark || current.previousValue || current.value === previous.value || !trendEligibleLabels.has(current.label)) return current;
-  const currentUnit = current.unit.replace(/\s+/g, "").toLowerCase();
-  const previousUnit = previous.unit.replace(/\s+/g, "").toLowerCase();
-  if (currentUnit !== previousUnit) return current;
+  if (current.explicitMark || current.previousValue) return current;
+  const currentUnit = comparableVisualLabUnit(current.unit, current.key);
+  const previousUnit = comparableVisualLabUnit(previous.unit, previous.key);
+  const currentScale = visualCellCountScalePerUl(current.unit, current.key);
+  const previousScale = visualCellCountScalePerUl(previous.unit, previous.key);
+  if (currentUnit !== previousUnit && (currentScale === null || previousScale === null)) return current;
   if (current.dateIsExplicit && previous.dateIsExplicit && previous.date > current.date) return current;
-  const direction = trendDirection(current.label, current.value, previous.value);
-  if (!direction) return current;
-  const tone: LabVisualTone = current.tone === "plain" ? "important" : current.tone;
+  const previousValue = visualPreviousValueInCurrentUnit(current, previous);
+  const direction = trendDirection(current.label, current.value, previousValue);
+  const tone: LabVisualTone = direction && current.tone === "plain" ? "important" : current.tone;
+  const displayUnit = current.key.startsWith("blood|") ? "" : current.unit;
+  const currentDisplay = displayLabValueWithUnit(current.label, current.value, displayUnit);
+  const previousDisplay = displayLabValueWithUnit(current.label, previousValue, displayUnit);
   return {
     ...current,
-    previousValue: previous.value,
-    text: `${current.label} ${displayLabValue(current.label, current.value)}${direction}(${displayLabValue(current.label, previous.value)})`,
+    previousValue,
+    text: `${current.label} ${currentDisplay}${direction}(${previousDisplay})`,
     tone,
     score: current.score + (tone !== current.tone ? 200 : 0),
   };
@@ -478,25 +570,26 @@ function buildGroupsFromVisualItems(items: LabVisualItem[], options: LabVisualSu
   const requiredLabels = new Set((options.requiredLabels ?? []).map(canonicalLabSelectionKey).filter(Boolean));
   const hasAiSelection = preferredItemIds.size > 0 || preferredLabels.size > 0;
   const isPreferred = (item: LabVisualItem) =>
-    Boolean(item.sourceId && preferredItemIds.has(item.sourceId)) || preferredLabels.has(canonicalLabSelectionKey(item.label));
-  const isRequired = (item: LabVisualItem) => requiredLabels.has(canonicalLabSelectionKey(item.label));
+    Boolean(item.sourceId && preferredItemIds.has(item.sourceId)) || preferredLabels.has(item.key);
+  const isRequired = (item: LabVisualItem) => requiredLabels.has(item.key);
 
   dedupeNarrativeItems(items).forEach((item) => {
-    const parsedLikeItem = { label: item.label, name: item.label, value: item.value } satisfies ParsedLabItem;
-    const groupId = groupIdForItem(parsedLikeItem);
-    groups.set(groupId, [...(groups.get(groupId) ?? []), item]);
+    groups.set(item.groupId, [...(groups.get(item.groupId) ?? []), item]);
   });
 
   return labGroupOrder
     .map((group) => {
       const maxItems = options.maxItemsPerGroup ?? defaultGroupItemLimits[group.id];
       const coreOrder = new Map(coreDisplayKeys[group.id].map((key, index) => [key, index]));
+      const coreLabel = (item: LabVisualItem) => group.id === "gas"
+        ? item.label.replace(/^(?:ABG|VBG)\s+/i, "")
+        : item.label;
       const orderedItems = dedupeVisualItems(groups.get(group.id) ?? [])
         .sort((left, right) => {
           // Keep familiar panel order for scanning. Visibility (below), not
           // row position, guarantees that critical/abnormal values survive.
-          const leftCore = coreOrder.get(left.label);
-          const rightCore = coreOrder.get(right.label);
+          const leftCore = coreOrder.get(coreLabel(left));
+          const rightCore = coreOrder.get(coreLabel(right));
           if (leftCore !== undefined || rightCore !== undefined) {
             if (leftCore === undefined) return 1;
             if (rightCore === undefined) return -1;
@@ -506,6 +599,8 @@ function buildGroupsFromVisualItems(items: LabVisualItem[], options: LabVisualSu
           const toneRank = (tone: LabVisualTone) => tone === "critical" ? 2 : tone === "important" ? 1 : 0;
           const toneDifference = toneRank(right.tone) - toneRank(left.tone);
           if (toneDifference) return toneDifference;
+          const requiredDifference = Number(isRequired(right)) - Number(isRequired(left));
+          if (requiredDifference) return requiredDifference;
           const preferredDifference = Number(isPreferred(right)) - Number(isPreferred(left));
           if (preferredDifference) return preferredDifference;
           const leftOrder = displayOrder.get(`${group.id}|${left.label}`) ?? 99;
@@ -516,7 +611,7 @@ function buildGroupsFromVisualItems(items: LabVisualItem[], options: LabVisualSu
         if (isPreferred(item) || isRequired(item) || item.tone !== "plain" || item.explicitMark) return true;
         if (options.selectionMode === "aiFocused") return false;
         if (options.selectionMode === "complete") return item.label !== "Other";
-        return (group.id !== "other" && coreOrder.has(item.label)) ||
+        return (group.id !== "other" && coreOrder.has(coreLabel(item))) ||
           (!hasAiSelection && group.id === "other" && item.label !== "Other");
       });
       const selectedItems = new Set(focusedItems.filter((item) => item.tone !== "plain" || item.explicitMark));
@@ -589,6 +684,7 @@ export function buildLabVisualSummaryFromText(value: string, options: LabVisualS
       score: scoreForItem("infxPerfusion", "Microbiology", "important", sourceIndex),
       sourceIndex,
       explicitMark: false,
+      groupId: "infxPerfusion",
     });
   });
 
@@ -616,6 +712,7 @@ export function buildLabVisualSummaryFromText(value: string, options: LabVisualS
           score: scoreForItem("other", "Other", source.important ? "important" : "plain", sourceIndex),
           sourceIndex,
           explicitMark: false,
+          groupId: "other",
         });
       }
     }

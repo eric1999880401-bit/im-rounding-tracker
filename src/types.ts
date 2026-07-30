@@ -229,6 +229,7 @@ export type RoundSoapLabPanel =
   | "Infx/Perfusion"
   | "Urinalysis"
   | "ABG/VBG"
+  | "Fluid studies"
   | "Cardiac"
   | "Other";
 
@@ -468,6 +469,7 @@ export interface ParsedLabItem {
 export interface LabReport {
   id: string;
   date: string;
+  dateIsExplicit?: boolean;
   title: string;
   rawText: string;
   items: ParsedLabItem[];

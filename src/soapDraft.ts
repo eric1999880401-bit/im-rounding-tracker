@@ -3,6 +3,7 @@ import { ensureAntibioticApInDraft } from "./antibioticPlan";
 import { normalizeApProblems } from "./apProblemNormalizer";
 import { imageStudyKey } from "./clinicalFieldRouter";
 import { dedupeDiseaseItems, dedupeDiseaseText } from "./aiPostprocess/diseaseDedupe";
+import { isLabSpecimenHeading, labSpecimenIdentityFromText } from "./labSpecimen";
 import { normalizeLabTableSourceText, objectiveKindFromLine } from "./objectiveLineSanitizer";
 import type { AiSoapDraft, AssessmentPlanItem, DailyNote, Patient, PatientTask, TaskCategory, TaskPriority } from "./types";
 import {
@@ -360,6 +361,10 @@ export function getCanonicalSoapText(patient: Patient, dailyNotes: DailyNote[] =
 }
 
 function criticalSoapLine(line: string) {
+  const specimen = labSpecimenIdentityFromText(line);
+  const nonPeripheralSpecimen = specimen.key !== "blood";
+  const explicitClinicalRisk = /\b(?:shock|sepsis|hypotension|desat|hypox|active bleed|melena|hematemesis|stroke|ich|neutropenic fever|lactate|troponin|culture|b\/c|bcx|mrsa|enterococcus)\b/i.test(line);
+  if (nonPeripheralSpecimen && !explicitClinicalRisk) return false;
   return /\b(shock|sepsis|hypotension|desat|hypox|active bleed|melena|hematemesis|stroke|ich|neutropenic fever|lactate|troponin|k\s*(?:[<≤]\s*3|[>≥]\s*5\.5)|hb\s*(?:[<≤]\s*8|drop)|wbc\s*(?:[>≥]\s*12|[<≤]\s*3)|cr\s*(?:[>≥]\s*2)|culture|b\/c|bcx|mrsa|enterococcus)\b/i.test(line);
 }
 
@@ -477,6 +482,12 @@ export function splitGuidedSoapSource(rawText: string): Record<GuidedSoapSourceS
   normalizeLabTableSourceText(rawText).text
     .split(/\r?\n/)
     .forEach((line) => {
+      const trimmed = line.trim();
+      if (isLabSpecimenHeading(trimmed)) {
+        buckets.labs.push(trimmed);
+        current = "labs";
+        return;
+      }
       const match = line.match(/^\s*(Admission|V\/S|VS|Vitals?|Lab|Labs|Image|Img|Imaging|Pathology|Orders?|Meds?|Medication|藥囑|Consult(?:ation)?(?:\s+note)?|Description\s*\/\s*other|Other update\s*\/\s*task\s*\/\s*course|Last SOAP(?:\s*\/\s*SBAR)?|SBAR|Handoff)\s*:\s*(.*)$/i);
       if (match) {
         const matchedSection = guidedSectionKey(match[1]);
@@ -489,7 +500,6 @@ export function splitGuidedSoapSource(rawText: string): Record<GuidedSoapSourceS
         }
         return;
       }
-      const trimmed = line.trim();
       if (!trimmed) return;
       if (current !== "other") {
         if (current === "admission" && shouldRouteOutOfAdmission(trimmed)) {

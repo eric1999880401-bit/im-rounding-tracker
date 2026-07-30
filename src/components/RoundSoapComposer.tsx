@@ -894,6 +894,7 @@ function RoundSoapComposer({
             baselineText: requestBaseline,
             sourceFields: requestSourceFields,
             workflowMode: requestWorkflowMode,
+            activeProblemContext: patientContext(patient).activeProblems.join("\n"),
           })
         : isDemoMode
           ? {

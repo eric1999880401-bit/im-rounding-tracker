@@ -1,15 +1,19 @@
 import { extractActiveAntibioticNames } from "./antibioticPlan";
 import { classifyClinicalLine, type ClinicalLineKind } from "./clinicalLineClassifier";
-import { buildCanonicalLabDataset, canonicalLabSelectionKey, labSelectionKeysFromText } from "./labDataset";
+import {
+  buildCanonicalLabDataset,
+  canonicalLabItemSelectionKey,
+  canonicalLabSelectionKey,
+} from "./labDataset";
+import { specimenAwareLabDisplayLabel } from "./labSpecimen";
 import {
   buildCanonicalImageDataset,
   canonicalImageFallbackLines,
 } from "./imageDataset";
-import { formatLabVisualSummaryLinesFromText, formatLabVisualTimelineLines } from "./labVisualSummary";
+import { buildLabVisualSummaryFromText, buildLabVisualTimelineSummary } from "./labVisualSummary";
 import { normalizeObjectiveLabExportLines, objectiveKindFromLine } from "./objectiveLineSanitizer";
 import { splitGuidedSoapSource } from "./soapDraft";
 import {
-  applyAiHighlightHintsToEditorDraft,
   editorDraftToSoapText,
   parseCanonicalSoapTextToEditorDraft,
   parseSoapTextToEditorDraft,
@@ -183,7 +187,7 @@ export function normalizeRoundSoapSourceFields(
 }
 
 function looksLikeVitals(value: string) {
-  return /\b(?:BP|HR|RR|SpO2|SaO2|Temp(?:erature)?|Pulse)\s*[:=]?\s*\d|\bT\s*[:=]?\s*\d{2}(?:\.\d+)?/i.test(value);
+  return /\b(?:BP|blood\s+pressure|HR|RR|SpO2|SaO2|Temp(?:erature)?|Pulse)\s*[:=]?\s*\d|\bT\s*[:=]?\s*\d{2}(?:\.\d+)?/i.test(value);
 }
 
 function vitalDate(value: string) {
@@ -221,7 +225,7 @@ function sourceVitalLines(value: unknown) {
   const source = selected.join(" ");
   const dateDisplay = dated.find((item) => item.date.key === latestKey)?.date.display ?? "";
   const temperature = vitalValue(source, /\b(?:T|Temp(?:erature)?)\s*[:=]?\s*(\d{2}(?:\.\d+)?)\s*(?:°?\s*C)?/i);
-  const bp = vitalValue(source, /\bBP\s*[:=]?\s*(\d{2,3}\s*\/\s*\d{2,3})/i);
+  const bp = vitalValue(source, /\b(?:BP|blood\s+pressure)\s*[:=]?\s*(\d{2,3}\s*\/\s*\d{2,3})/i);
   const hr = vitalValue(source, /\b(?:HR|Pulse)\s*[:=]?\s*(\d{2,3})/i);
   const rr = vitalValue(source, /\bRR\s*[:=]?\s*(\d{1,2})/i);
   const spo2 = vitalValue(source, /\b(?:SpO2|SaO2)\s*[:=]?\s*(\d{2,3}\s*%?)/i);
@@ -258,6 +262,11 @@ function looksLikeLabs(value: string) {
   return labels.length >= 2 && numbers.length >= 2;
 }
 
+function scopedLabAnalyteKey(value: string) {
+  const parts = value.split("|");
+  return parts[parts.length - 1] ?? "";
+}
+
 function clinicallyRequiredLabLabels(
   dataset: ReturnType<typeof buildCanonicalLabDataset>,
   preferredItemIds: string[],
@@ -265,14 +274,14 @@ function clinicallyRequiredLabLabels(
   context: string,
 ) {
   const available = new Map(dataset.latestItems.map((item) => [
-    canonicalLabSelectionKey(item.name || item.label),
-    item.name || item.label,
+    canonicalLabItemSelectionKey(item),
+    specimenAwareLabDisplayLabel(item),
   ]));
   const preferredKeys = new Set([
     ...preferredLabels.map(canonicalLabSelectionKey),
     ...dataset.latestItems
       .filter((item) => preferredItemIds.includes(item.id))
-      .map((item) => canonicalLabSelectionKey(item.name || item.label)),
+      .map((item) => canonicalLabItemSelectionKey(item)),
   ]);
   const required = new Set<string>();
   const addAvailable = (labels: string[]) => labels.forEach((label) => {
@@ -282,6 +291,19 @@ function clinicallyRequiredLabLabels(
   });
   const anyAvailable = (labels: string[]) => labels.some((label) => available.has(canonicalLabSelectionKey(label)));
   const anyPreferred = (labels: string[]) => labels.some((label) => preferredKeys.has(canonicalLabSelectionKey(label)));
+  const addAvailableForSpecimens = (labels: string[], specimenKeys: string[]) => {
+    const analyteKeys = new Set(labels.map((label) => scopedLabAnalyteKey(canonicalLabSelectionKey(label))).filter(Boolean));
+    dataset.latestItems
+      .filter((item) => specimenKeys.includes(item.specimen) && analyteKeys.has(scopedLabAnalyteKey(canonicalLabItemSelectionKey(item))))
+      .forEach((item) => required.add(specimenAwareLabDisplayLabel(item)));
+  };
+
+  // A diagnostic fluid panel is one source-owned clinical unit. Its specimen
+  // identity and uncommon findings must survive even when the model does not
+  // know a particular analyte name.
+  dataset.latestItems
+    .filter((item) => item.specimen !== "blood")
+    .forEach((item) => required.add(specimenAwareLabDisplayLabel(item)));
 
   // Small orientation sets are deterministic safety anchors. AI sourceIds add
   // problem-specific labs; these anchors prevent a clinically absurd omission
@@ -308,6 +330,10 @@ function clinicallyRequiredLabLabels(
 
   if (/\b(?:dka|hhs|hyperglyc(?:emia|emic)?|anion gap|metabolic acidosis)\b/i.test(context)) {
     addAvailable(["Glucose", "AC glucose", "PC glucose", "Na", "K", "Osm", "Ketone", "pH", "HCO3", "BE"]);
+    addAvailableForSpecimens(["pH", "HCO3", "BE"], ["abg", "vbg"]);
+  }
+  if (/\b(?:hypothyroid(?:ism)?|hyperthyroid(?:ism)?|thyrotoxicosis|myxedema|thyroid)\b/i.test(context)) {
+    addAvailable(["TSH", "Free T4", "Free T3"]);
   }
   if (/\b(?:nstemi|stemi|acs|acute coronary|myocardial infarction|myocardial ischemia|ischemic chest pain|troponin)\b/i.test(context)) {
     addAvailable(["Troponin I", "Troponin T", "CK", "CK-MB"]);
@@ -316,7 +342,7 @@ function clinicallyRequiredLabLabels(
     addAvailable(["BNP", "NT-proBNP", "BUN", "Cr", "Na", "K"]);
   }
   if (/\b(?:respiratory failure|hypercapnia|co2 retention|mechanical ventilation|ventilator|bipap|cpap|abg|vbg)\b/i.test(context)) {
-    addAvailable(["pH", "pCO2", "pO2", "HCO3", "BE", "SaO2"]);
+    addAvailableForSpecimens(["pH", "pCO2", "pO2", "HCO3", "BE", "SaO2"], ["abg", "vbg"]);
   }
   if (/\b(?:dic|active bleed(?:ing)?|gi bleed|hemorrhage|coagulopathy|thrombocytopenia|anticoag(?:ulation|ulated)?)\b/i.test(context)) {
     addAvailable(["Hb", "Plt", "PT", "INR", "aPTT", "D-dimer", "Fibrinogen", "FDP"]);
@@ -344,21 +370,16 @@ function sourceLabEditorLines(
   const currentSource = String(fields.labs ?? "");
   const currentDataset = buildCanonicalLabDataset(currentSource);
   const validIds = new Set(currentDataset.latestItems.map((item) => item.id).filter(Boolean));
-  const preferredItemIds = selectedLabs
+  const preferredItemIds = [...new Set(selectedLabs
     .flatMap((item) => item.sourceIds ?? [])
-    .filter((id) => validIds.has(id));
-  // Older deployed functions do not return sourceIds. Label selection keeps
-  // those responses useful while exact values still come only from source.
-  const preferredLabels = selectedLabs
-    .filter((item) => !(item.sourceIds ?? []).some((id) => validIds.has(id)))
-    .flatMap((item) => labSelectionKeysFromText(item.values));
-  const selectedIdLabels = currentDataset.latestItems
+    .filter((id) => validIds.has(id)))];
+  const preferredLabels = currentDataset.latestItems
     .filter((item) => preferredItemIds.includes(item.id))
-    .map((item) => item.name || item.label);
+    .map((item) => specimenAwareLabDisplayLabel(item));
   const requiredLabels = clinicallyRequiredLabLabels(
     currentDataset,
     preferredItemIds,
-    [...preferredLabels, ...selectedIdLabels],
+    preferredLabels,
     `${sourceText(fields)}\n${baselineText}\n${activeProblemContext}`,
   );
   const baselineLabText = baselineText
@@ -369,30 +390,25 @@ function sourceLabEditorLines(
     : "";
   const summaryOptions = {
     includePlain: true,
-    selectionMode: "aiFocused" as const,
+    selectionMode: "complete" as const,
+    maxItemsPerGroup: 100,
     preferredItemIds,
-    preferredLabels: [...preferredLabels, ...selectedIdLabels],
-    requiredLabels,
+    preferredLabels,
+    requiredLabels: [...new Set([...requiredLabels, ...preferredLabels])],
   };
-  const focusedLines = baselineLabText
-    ? formatLabVisualTimelineLines(currentSource, baselineLabText, summaryOptions)
-    : formatLabVisualSummaryLinesFromText(currentSource, summaryOptions);
-  // If AI omitted every source ID and no disease/safety rule selected a plain
-  // current analyte, show a deterministic current-only fallback. Never let an
-  // older baseline masquerade as today's Lab simply because selection was empty.
-  const lines = focusedLines.length > 0 || currentDataset.latestItems.length === 0
-    ? focusedLines
-    : formatLabVisualSummaryLinesFromText(currentSource, {
-        includePlain: true,
-        selectionMode: "complete",
-      });
-  return lines
-    .map((text) => editorLine(text.replace(/^Lab\s*:\s*/i, ""), "lab"))
+  const groups = baselineLabText
+    ? buildLabVisualTimelineSummary(currentSource, baselineLabText, summaryOptions)
+    : buildLabVisualSummaryFromText(currentSource, summaryOptions);
+  return groups
+    .map((group) => {
+      const line = editorLine(group.text.replace(/^Lab\s*:\s*/i, ""), "lab");
+      return { ...line, tone: group.tone };
+    })
     .filter((line) => line.text);
 }
 
 function isMicrobiologyLabLine(line: SoapEditorLine) {
-  return /(?:^|\b)(?:Micro\s*:|B\/C\b|BCx\b|Blood Cx\b|U\/C\b|UCx\b|Urine Cx\b|CSF Cx\b|Sputum Cx\b|blood culture|urine culture|sputum culture|CSF culture)/i.test(line.text);
+  return /(?:^|\b)(?:Micro\s*:|B\/C\b|BCx\b|Blood Cx\b|U\/C\b|UCx\b|Urine Cx\b|CSF Cx\b|Sputum Cx\b|Joint(?: fluid)? Cx\b|Synovial Cx\b|blood culture|urine culture|sputum culture|CSF culture|joint(?: fluid)? culture|synovial culture)/i.test(line.text);
 }
 
 function uniqueEditorLines(lines: SoapEditorLine[]) {
@@ -410,6 +426,85 @@ function sourceLines(value: unknown) {
     .split(/\r?\n/)
     .map(clean)
     .filter(Boolean);
+}
+
+function sourceClinicalFragments(...values: unknown[]) {
+  return values
+    .flatMap((value) => String(value ?? "").split(/\r?\n|;\s*/))
+    .map(clean)
+    .filter(Boolean);
+}
+
+function sourceMicroEditorLines(fields: RoundSoapSourceFields) {
+  return uniqueEditorLines(
+    sourceClinicalFragments(fields.labs, fields.other, fields.admission, fields.lastSoap, fields.rawSource)
+      .filter((text) => isMicrobiologyLabLine(editorLine(text, "lab")))
+      .filter((text) => /\b(?:pending|positive|negative|growth|isolated|no growth|NGTD|susceptib|resistan|detected|not detected)\b/i.test(text))
+      .map((text) => editorLine(`Micro: ${text.replace(/^(?:Lab\s*:\s*)?Micro\s*:\s*/i, "")}`, "lab")),
+  );
+}
+
+function sourceSubjectiveEditorLines(fields: RoundSoapSourceFields) {
+  let followsExplicitProblem = false;
+  return uniqueEditorLines(
+    sourceClinicalFragments(fields.other, fields.admission, fields.lastSoap, fields.rawSource)
+      .flatMap((text) => {
+        const match = text.match(/^(?:S|Subjective|Interval(?: events?)?|Overnight(?: events?)?)\s*:\s*(.+)$/i);
+        if (match?.[1]) {
+          followsExplicitProblem = false;
+          return [editorLine(match[1], "s")];
+        }
+        const afterProblem = text.match(/^(?:Dx|Diagnosis|Primary diagnosis|Problem)\s*:\s*[^.]{1,110}\.\s*(.+)$/i)?.[1] ?? "";
+        if (afterProblem && /\b(?:improving|improved|better|worsening|worse|stable|unchanged|resolved|denies|no longer)\b/i.test(afterProblem)) {
+          followsExplicitProblem = false;
+          return [editorLine(afterProblem, "s")];
+        }
+        const isExplicitProblem = /^(?:Dx|Diagnosis|Primary diagnosis|Problem)\s*:\s*[^.]{1,110}\.?$/i.test(text);
+        const isSourceOwnedCourse = followsExplicitProblem &&
+          /\b(?:improving|improved|better|worsening|worse|stable|unchanged|resolved|denies|no longer)\b/i.test(text);
+        followsExplicitProblem = isExplicitProblem;
+        if (isSourceOwnedCourse) return [editorLine(text, "s")];
+        return [];
+      }),
+  ).slice(0, 4);
+}
+
+function sourcePeEditorLines(fields: RoundSoapSourceFields) {
+  return uniqueEditorLines(
+    sourceClinicalFragments(fields.other, fields.admission, fields.lastSoap, fields.rawSource)
+      .flatMap((text) => {
+        const match = text.match(/^(?:PE|Physical exam)\s*:\s*(.+)$/i);
+        return match?.[1] ? [editorLine(match[1], "pe")] : [];
+      }),
+  ).slice(0, 4);
+}
+
+function sourceExplicitTaskEditorLines(fields: RoundSoapSourceFields) {
+  return uniqueEditorLines(
+    sourceClinicalFragments(fields.other, fields.admission, fields.lastSoap, fields.rawSource)
+      .flatMap((text) => {
+        const match = text.match(/^(?:Task|Tasks|To-?do|Today)\s*:\s*(.+)$/i);
+        if (match?.[1]) return [editorLine(match[1], "task")];
+        if (/^(?:f\/u|follow(?:-?up)?|repeat|obtain|check|consult|arrange|schedule|remove|exchange|wean|clarify|call|discuss)\b/i.test(text)) {
+          return [editorLine(text, "task")];
+        }
+        return [];
+      }),
+  );
+}
+
+function sourceDcEditorLines(fields: RoundSoapSourceFields) {
+  return uniqueEditorLines(
+    sourceClinicalFragments(fields.other, fields.admission, fields.lastSoap, fields.rawSource)
+      .flatMap((text) => {
+        const match = text.match(/^(?:DC|Discharge|Disposition|Discharge barrier)\s*:\s*(.+)$/i);
+        if (match?.[1]) return [editorLine(match[1], "dc")];
+        if (/\b(?:discharge|disposition|placement|home|rehab|SNF|LTC|hospice)\b/i.test(text) && /\b(?:pending|barrier|planned|plan|ready|tomorrow|today|unresolved)\b/i.test(text)) {
+          return [editorLine(text, "dc")];
+        }
+        return [];
+      }),
+  );
 }
 
 function sourceImageEditorLines(fields: RoundSoapSourceFields) {
@@ -508,13 +603,15 @@ function explicitSafetyHeaderFields(value: string) {
 }
 
 function sanitizeGeneratedHeader(
-  lines: SoapEditorLine[],
+  _lines: SoapEditorLine[],
   problems: SoapEditorProblem[],
   source: string,
   baselineText: string,
 ) {
+  const sourceDiagnosisLines = source.split(/\r?\n/).map(clean).filter((line) => /^Dx\s*:/i.test(line));
+  const baselineHeaderLines = parseCanonicalSoapTextToEditorDraft(baselineText).headerLines.map((line) => line.text);
   const diagnosis = conciseSoapDiagnosisForDisplay({
-    headerLines: lines.map((line) => line.text),
+    headerLines: [...sourceDiagnosisLines, ...baselineHeaderLines],
     apTitles: problems.map((problem) => problem.title),
     maxItems: 2,
     maxChars: 110,
@@ -532,15 +629,97 @@ function sanitizeGeneratedHeader(
 }
 
 function tokenSet(value: string) {
-  return new Set(stripColorMarkup(value).toLowerCase().match(/[a-z][a-z0-9/+.-]{1,}|\d+(?:\.\d+)?|[\u4e00-\u9fff]{2,}/g) ?? []);
+  const tokens = stripColorMarkup(value).toLowerCase().match(/[a-z][a-z0-9/+.-]{1,}|\d+(?:\.\d+)?|[\u4e00-\u9fff]{2,}/g) ?? [];
+  return new Set(tokens
+    .map((token) => /^\d/.test(token) ? token : token.replace(/^[./+-]+|[./+-]+$/g, ""))
+    .filter(Boolean));
 }
 
-function titleSimilarity(a: string, b: string) {
-  const left = tokenSet(a);
-  const right = tokenSet(b);
-  if (left.size === 0 || right.size === 0) return 0;
-  const shared = [...left].filter((token) => right.has(token)).length;
-  return shared / Math.min(left.size, right.size);
+function cleanAuthoritativeProblemTitle(value: string) {
+  return clean(stripColorMarkup(value))
+    .replace(/^!{1,2}\s*/, "")
+    .replace(/^#{1,3}\s*/, "")
+    .replace(/^(?:[-*]\s*|\d{1,2}[.)]\s*)/, "")
+    .replace(/^(?:Dx|Diagnosis|Primary diagnosis|Problem|Active problems?)\s*:\s*/i, "")
+    .replace(/\s+\|\s+(?:Code|Allergy|Isolation|HD\/POD)\s*:.*$/i, "")
+    .replace(/\s*(?:[-:;,–—]\s*)?(?:active|improving|improved|worsening|stable|unchanged|uncertain)\s*$/i, "")
+    .replace(/[.;]+$/, "")
+    .trim()
+    .slice(0, 110)
+    .trim();
+}
+
+function looksLikeAuthoritativeProblemTitle(value: string) {
+  const title = cleanAuthoritativeProblemTitle(value);
+  if (!title || /^(?:none|nil|no active problems?|problem|active problem|active|improving|improved|worsening|stable|unchanged|uncertain)$/i.test(title)) return false;
+  if (/^(?:continue|f\/u|follow(?:-?up)?|monitor|trend|repeat|order|start|stop|hold|resume|restart|switch|consult|check|await|pending|schedule|arrange)\b/i.test(title)) return false;
+  if (/\b(?:culture|pathology|biopsy|imaging|scan|lab|result)\s+(?:is\s+)?pending\b/i.test(title)) return false;
+  if (/^(?:WBC|RBC|ANC|Neu|Hb|Hgb|Hct|Plt|BUN|Cr|eGFR|Na|K|Ca|Mg|Phos|Glucose|INR|Lactate|CRP|PCT)\b[^\n]*\d/i.test(title)) return false;
+  return /[A-Za-z\u4e00-\u9fff]/.test(title);
+}
+
+function authoritativeProblemTitles(activeProblemContext: string, source: string) {
+  const contextTitles = activeProblemContext
+    .split(/\r?\n|;\s*/)
+    .map(cleanAuthoritativeProblemTitle);
+  const explicitSourceTitles = source
+    .split(/\r?\n/)
+    .flatMap((line) => {
+      const match = clean(line).match(/^(Dx|Diagnosis|Primary diagnosis|Problem|Active problems?)\s*:\s*(.+)$/i);
+      if (!match?.[2]) return [];
+      const payload = /^(?:Active problems?)$/i.test(match[1])
+        ? match[2]
+        : match[2].split(/\.\s+/)[0];
+      return /^(?:Problem)$/i.test(match[1]) ? [payload.split(/;\s*/)[0]] : payload.split(/;\s*/);
+    })
+    .map(cleanAuthoritativeProblemTitle);
+  const sourceApTitles = /(?:^|\n)\s*(?:A\/P|AP|Assessment\/Plan)\s*:/im.test(source)
+    ? parseCanonicalSoapTextToEditorDraft(source).apProblems.map((problem) => cleanAuthoritativeProblemTitle(problem.title))
+    : [];
+  const titles: string[] = [];
+  [...contextTitles, ...explicitSourceTitles, ...sourceApTitles].forEach((title) => {
+    if (!looksLikeAuthoritativeProblemTitle(title)) return;
+    if (titles.some((existing) => authoritativeProblemTitleMatchScore(existing, title) > 0)) return;
+    titles.push(title);
+  });
+  return titles;
+}
+
+function meaningfulProblemTitleTokens(value: string) {
+  return [...tokenSet(value)].filter((token) =>
+    !/^(?:active|improving|improved|worsening|stable|unchanged|uncertain|acute|chronic|problem|concern|possible|suspected|with|without|from|due|and|the|for|joint|fluid|blood|serum|plasma|urine|wbc|rbc|cells?|crystals?)$/i.test(token),
+  );
+}
+
+function authoritativeProblemTitleMatchScore(candidate: string, authoritative: string) {
+  const candidateTokens = meaningfulProblemTitleTokens(candidate);
+  const authoritativeTokens = meaningfulProblemTitleTokens(authoritative);
+  if (candidateTokens.length === 0 || authoritativeTokens.length === 0) return 0;
+  const authoritativeSet = new Set(authoritativeTokens);
+  const candidateSet = new Set(candidateTokens);
+  const shared = candidateTokens.filter((token) => authoritativeSet.has(token)).length;
+  const candidateCoverage = shared / candidateTokens.length;
+  const authoritativeCoverage = authoritativeTokens.filter((token) => candidateSet.has(token)).length / authoritativeTokens.length;
+  // A generic shared word is insufficient: the candidate must be almost fully
+  // contained in one authoritative title and cover most of that title too.
+  if (candidateCoverage < 0.8 || authoritativeCoverage < 0.6) return 0;
+  return Math.min(candidateCoverage, authoritativeCoverage);
+}
+
+function matchingAuthoritativeProblemTitle(title: string, authoritativeTitles: string[]) {
+  return authoritativeTitles
+    .map((candidate) => ({ candidate, score: authoritativeProblemTitleMatchScore(title, candidate) }))
+    .filter(({ score }) => score > 0)
+    .sort((left, right) => right.score - left.score || left.candidate.localeCompare(right.candidate, "en", { sensitivity: "base" }))[0]?.candidate ?? "";
+}
+
+function problemTitleIsExplicitInNarrative(title: string, source: string) {
+  const titleTokens = meaningfulProblemTitleTokens(title);
+  if (titleTokens.length === 0) return false;
+  return source
+    .split(/\r?\n|(?<=[.!?])\s+/)
+    .map((line) => tokenSet(line))
+    .some((lineTokens) => titleTokens.every((token) => lineTokens.has(token)));
 }
 
 function numericTokens(value: string) {
@@ -555,9 +734,16 @@ function problemEvidenceIsGrounded(
   baseline: SoapEditorDraft,
   source: string,
   workflowMode: RoundSoapWorkflowMode,
+  authoritativeTitles: string[],
 ) {
-  const existing = baseline.apProblems.some((prior) => titleSimilarity(problem.problemTitle, prior.title) >= 0.6);
+  const existing = baseline.apProblems.some((prior) => authoritativeProblemTitleMatchScore(problem.problemTitle, prior.title) > 0);
   if (workflowMode === "dailyUpdate" && existing) return true;
+  const titleIsGrounded = existing ||
+    Boolean(matchingAuthoritativeProblemTitle(problem.problemTitle, authoritativeTitles)) ||
+    problemTitleIsExplicitInNarrative(problem.problemTitle, source);
+  // Evidence may support an already named problem; it may not authorize an
+  // unrelated diagnosis. Generic specimen/lab words are never enough.
+  if (!titleIsGrounded) return false;
   const available = tokenSet(workflowMode === "dailyUpdate" ? source : `${source}\n${editorDraftToSoapText(baseline)}`);
   const evidence = problem.sourceEvidence.length > 0
     ? problem.sourceEvidence.join(" ")
@@ -607,31 +793,183 @@ function planLineIsGrounded(line: string, availableText: string) {
   return matched.length >= Math.min(2, meaningful.length) || matched.length / meaningful.length >= 0.6;
 }
 
+function generatedClinicalLineIsGrounded(line: string, availableText: string) {
+  const value = clean(stripColorMarkup(line));
+  const available = clean(stripColorMarkup(availableText));
+  if (!value || !available) return false;
+  if (available.toLowerCase().includes(value.toLowerCase())) return true;
+  const allowedNumbers = new Set(numericTokens(available));
+  if (!numericTokens(value).every((number) => allowedNumbers.has(number))) return false;
+
+  const trajectoryGroups: RegExp[][] = [
+    [/\b(?:improving|improved|resolving|better)\b/i],
+    [/\b(?:worsening|worse|deteriorat(?:ing|ed)|progressing)\b/i],
+    [/\b(?:resolved|recovered|cleared)\b/i],
+    [/\b(?:positive|detected|growth|isolated)\b/i],
+    [/\b(?:negative|not detected|no growth|absent|denies|without)\b/i],
+    [/\b(?:new|newly|acute onset)\b/i],
+  ];
+  if (trajectoryGroups.some((group) => group.some((pattern) => pattern.test(value)) && !group.some((pattern) => pattern.test(available)))) {
+    return false;
+  }
+
+  const ignored = /^(?:the|and|with|without|of|for|to|from|in|on|at|a|an|is|are|was|were|patient|today|current|documented|continue|follow|f\/u|monitor|trend|repeat|review|plan|pending)$/i;
+  const meaningful = [...tokenSet(value)].filter((token) => !ignored.test(token));
+  if (meaningful.length === 0) return false;
+  const availableTokens = tokenSet(available);
+  const matched = meaningful.filter((token) => availableTokens.has(token)).length;
+  return matched >= Math.min(2, meaningful.length) && matched / meaningful.length >= 0.8;
+}
+
+function groundedGeneratedLines(lines: SoapEditorLine[], availableText: string) {
+  return uniqueEditorLines(lines.filter((line) => generatedClinicalLineIsGrounded(line.text, availableText)));
+}
+
+type ProblemStatus = StructuredRoundSoapDraft["assessmentPlan"][number]["status"];
+type BloodLabEvidence = Map<string, { label: string; value: string; previousValue: string }>;
+
+function statusFromText(value: string): ProblemStatus | "" {
+  if (/\b(?:worsening|deteriorat(?:ing|ed)|progressing)\b/i.test(value)) return "worsening";
+  if (/\b(?:improving|improved|resolving)\b/i.test(value)) return "improving";
+  if (/\b(?:stable|unchanged)\b/i.test(value)) return "stable";
+  if (/\b(?:uncertain|unclear|undetermined)\b/i.test(value)) return "uncertain";
+  if (/\bactive\b/i.test(value)) return "active";
+  return "";
+}
+
+function sourceOwnedProblemStatus(
+  title: string,
+  baseline: SoapEditorDraft,
+  source: string,
+): ProblemStatus {
+  const sourceLine = source
+    .split(/\r?\n/)
+    .map(clean)
+    .find((line) => authoritativeProblemTitleMatchScore(title, line) > 0 && statusFromText(line));
+  if (sourceLine) return statusFromText(sourceLine) || "active";
+
+  const prior = baseline.apProblems.find((problem) => authoritativeProblemTitleMatchScore(title, problem.title) > 0);
+  if (prior) {
+    const priorStatus = statusFromText(prior.lines[0]?.text ?? "");
+    if (priorStatus) return priorStatus;
+  }
+  return "active";
+}
+
+function withoutUnsupportedTrajectory(value: string, status: ProblemStatus) {
+  const allowed = trajectoryLabels[status];
+  const stripped = clean(value)
+    .replace(/^\s*(?:Active|Improving|Improved|Worsening|Stable|Unchanged|Uncertain)\b\s*[:.\-–—]?\s*/i, "")
+    .replace(/\b(?:improving|improved|worsening|deteriorating|stable|unchanged|uncertain)\b/gi, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return stripped ? `${allowed} — ${stripped}` : `${allowed}.`;
+}
+
+function sourceOwnedProblemSummary(
+  title: string,
+  status: ProblemStatus,
+  baseline: SoapEditorDraft,
+  narrativeText: string,
+  bloodLabs: BloodLabEvidence,
+) {
+  const prior = baseline.apProblems.find((problem) => authoritativeProblemTitleMatchScore(title, problem.title) > 0);
+  if (prior?.lines[0]?.text) return withoutUnsupportedTrajectory(prior.lines[0].text, status);
+  const relevantKeys = /\b(?:hypernatremia|hyponatremia)\b/i.test(title)
+    ? ["na"]
+    : /\b(?:hyperkalemia|hypokalemia)\b/i.test(title)
+      ? ["k"]
+      : /\b(?:AKI|acute kidney injury|renal failure|creatinine rise|renal dysfunction)\b/i.test(title)
+        ? ["cr", "bun", "egfr"]
+        : /\b(?:anemia|anaemia|polycythemia|erythrocytosis|Hb drop)\b/i.test(title)
+          ? ["hb", "hct"]
+          : /\b(?:leukocytosis|leukopenia|neutropenia|neutrophilia)\b/i.test(title)
+            ? ["wbc", "anc", "neu"]
+            : /\b(?:hyperglyc|hypoglyc|DKA|HHS)\b/i.test(title)
+              ? ["glucose", "hba1c"]
+              : /\b(?:hypothyroid|hyperthyroid|thyroid|myxedema|thyrotoxicosis)\b/i.test(title)
+                ? ["tsh", "free-t4"]
+                : [];
+  const labSummary = relevantKeys
+    .flatMap((key) => {
+      const item = bloodLabs.get(key);
+      return item ? [`${item.label} ${item.value}${item.previousValue ? ` (prior ${item.previousValue})` : ""}`] : [];
+    })
+    .join(", ");
+  if (labSummary) return withoutUnsupportedTrajectory(labSummary, status);
+  const sourceLine = narrativeText
+    .split(/\r?\n/)
+    .map(clean)
+    .find((line) => authoritativeProblemTitleMatchScore(title, line) > 0);
+  return withoutUnsupportedTrajectory(sourceLine ?? "", status);
+}
+
+function sourceOwnedProblemTone(title: string, status: ProblemStatus): SoapEditorProblem["tone"] {
+  const derivedTone = classifyClinicalLine(title, { fallbackKind: "ap" }).tone;
+  if (status === "worsening" || derivedTone === "critical") return "critical";
+  if (status === "uncertain" || derivedTone === "important") return "important";
+  return "plain";
+}
+
+function restoredSourceOwnedProblem(
+  title: string,
+  baseline: SoapEditorDraft,
+  source: string,
+  narrativeText: string,
+  bloodLabs: BloodLabEvidence,
+): SoapEditorProblem {
+  const status = sourceOwnedProblemStatus(title, baseline, source);
+  return {
+    id: createId("soap-ap"),
+    title,
+    tone: sourceOwnedProblemTone(title, status),
+    // Patient/source-owned problem context establishes the active problem, but
+    // it does not authorize the model to invent a treatment plan.
+    lines: [editorLine(sourceOwnedProblemSummary(title, status, baseline, narrativeText, bloodLabs), "ap")],
+  };
+}
+
 function sanitizeCandidateApProblems(
   value: StructuredRoundSoapDraft,
   generated: SoapEditorDraft,
   baseline: SoapEditorDraft,
   source: string,
   workflowMode: RoundSoapWorkflowMode,
-  authoritativeLabText: string,
+  authoritativeLabSource: string,
+  narrativeText: string,
+  authoritativeTitles: string[],
 ) {
   const availableText = `${source}\n${editorDraftToSoapText(baseline)}`;
   const allowedNumbers = new Set(numericTokens(availableText));
-  const hbValues = [...authoritativeLabText.matchAll(/\b(?:Hb|Hgb)\s*[:=]?\s*(\d+(?:\.\d+)?)/gi)].map((match) => Number(match[1]));
-  return generated.apProblems.flatMap((problem, index) => {
+  const bloodItems = buildCanonicalLabDataset(authoritativeLabSource).latestItems.filter((item) => item.specimen === "blood");
+  const bloodLabs = new Map(bloodItems.map((item) => [item.analyteKey, {
+    label: specimenAwareLabDisplayLabel(item),
+    value: String(item.value ?? ""),
+    previousValue: String(item.previousValue ?? ""),
+  }]));
+  const candidateProblems = generated.apProblems.flatMap((problem, index) => {
     const structured = value.assessmentPlan[index];
-    if (!structured || !problemEvidenceIsGrounded(structured, baseline, source, workflowMode)) return [];
-    const unsupportedAnemia = /\b(?:anemia|anaemia|Hb drop)\b/i.test(problem.title) &&
-      hbValues.length > 0 && hbValues.every((number) => number >= 11) &&
-      !/\b(?:anemia|anaemia|Hb drop|bleed|melena|hematemesis|hematochezia|transfus|PRBC)\b/i.test(source);
-    if (unsupportedAnemia) return [];
-    const lines = problem.lines.filter((line, lineIndex) => {
-      const hasTrackedClinicalValue = /\b(?:Na|sodium|K|potassium|Hb|Hgb|Cr|creatinine|eGFR|INR|lactate|CRP)\b/i.test(line.text);
+    if (!structured || !problemEvidenceIsGrounded(structured, baseline, source, workflowMode, authoritativeTitles)) return [];
+    const lines = problem.lines.slice(1).filter((line) => {
+      const hasTrackedClinicalValue = /\b(?:WBC|RBC|ANC|Neu|Na|sodium|K|potassium|Hb|Hgb|Hct|Plt|Cr|creatinine|BUN|eGFR|glucose|sugar|INR|lactate|CRP|PCT|LDH)\b/i.test(line.text);
       if (hasTrackedClinicalValue && !numericTokens(line.text).every((number) => allowedNumbers.has(number))) return false;
-      return lineIndex === 0 || planLineIsGrounded(line.text, availableText);
+      return planLineIsGrounded(line.text, availableText);
     });
-    return [{ ...problem, lines }];
+    const authoritativeTitle = matchingAuthoritativeProblemTitle(problem.title, authoritativeTitles);
+    const title = authoritativeTitle || problem.title;
+    const status = sourceOwnedProblemStatus(title, baseline, source);
+    const normalizedFirst = editorLine(sourceOwnedProblemSummary(title, status, baseline, narrativeText, bloodLabs), "ap");
+    return [{
+      ...problem,
+      title,
+      tone: sourceOwnedProblemTone(title, status),
+      lines: [normalizedFirst, ...lines],
+    }];
   });
+  const restoredProblems = authoritativeTitles
+    .filter((title) => !candidateProblems.some((problem) => authoritativeProblemTitleMatchScore(problem.title, title) > 0))
+    .map((title) => restoredSourceOwnedProblem(title, baseline, source, narrativeText, bloodLabs));
+  return [...candidateProblems, ...restoredProblems];
 }
 
 function stripRepeatedAntibioticClause(value: string, antibiotic: string) {
@@ -843,6 +1181,7 @@ export function acceptStructuredRoundSoap(params: {
   baselineText: string;
   sourceFields: RoundSoapSourceFields;
   workflowMode: RoundSoapWorkflowMode;
+  activeProblemContext?: string;
 }): StructuredRoundSoapAcceptance {
   const sourceFields = normalizeRoundSoapSourceFields(params.sourceFields);
   if (params.workflowMode === "dailyUpdate" && isVitalsOnlyDailySource(sourceFields)) {
@@ -850,15 +1189,17 @@ export function acceptStructuredRoundSoap(params: {
   }
   const baseline = parseCanonicalSoapTextToEditorDraft(params.baselineText);
   const generated = structuredRoundSoapToEditorDraft(params.value);
-  const activeProblemContext = [
-    ...params.value.headerLines,
-    ...params.value.assessmentPlan.flatMap((problem) => [
-      problem.problemTitle,
-      problem.status,
-      problem.summary,
-    ]),
-  ].filter(Boolean).join("\n");
   const source = sourceText(sourceFields);
+  // Lab visibility must not be steered by an ungrounded model diagnosis. Use
+  // only reviewed/source-owned active problems as clinical context.
+  const baselineProblemContext = baseline.apProblems
+    .flatMap((problem) => [problem.title, ...problem.lines.map((line) => line.text)])
+    .filter(Boolean)
+    .join("\n");
+  const providedActiveProblemContext = String(params.activeProblemContext ?? "").trim();
+  const labRelevanceContext = mergeSourceBlocks(baselineProblemContext, providedActiveProblemContext);
+  const problemSource = mergeSourceBlocks(source, providedActiveProblemContext);
+  const sourceOwnedProblemTitles = authoritativeProblemTitles(providedActiveProblemContext, source);
   const sourceOwnedVitals = sourceVitalLines(sourceFields.vitals);
   const sourceLabInputPresent = hasText(sourceFields.labs);
   const sourceOwnedLabs = sourceLabInputPresent
@@ -866,50 +1207,84 @@ export function acceptStructuredRoundSoap(params: {
         sourceFields,
         params.value.objective.labs,
         params.workflowMode === "dailyUpdate" ? params.baselineText : "",
-        activeProblemContext,
+        labRelevanceContext,
       )
     : [];
   const sourceOwnedImages = hasText(sourceFields.images) ? sourceImageEditorLines(sourceFields) : [];
   const sourceOwnedPathology = looksLikePathology(source) ? sourcePathologyEditorLines(sourceFields) : [];
   const sourceOwnedOrders = hasText(sourceFields.orders) ? sourceOrderEditorLines(sourceFields) : [];
-  const sourceOwnedLabText = sourceOwnedLabs.map((line) => line.text).join(" ");
+  const sourceOwnedMicro = sourceMicroEditorLines(sourceFields);
+  const sourceOwnedSubjective = sourceSubjectiveEditorLines(sourceFields);
+  const sourceOwnedPe = sourcePeEditorLines(sourceFields);
+  const sourceOwnedTasks = sourceExplicitTaskEditorLines(sourceFields);
+  const sourceOwnedDc = sourceDcEditorLines(sourceFields);
+  const narrativeText = [
+    params.baselineText,
+    sourceFields.admission,
+    sourceFields.lastSoap,
+    sourceFields.other,
+    sourceFields.orders,
+    sourceFields.images,
+    sourceFields.vitals,
+  ].filter(Boolean).join("\n");
   const generatedO = objectiveGroups(generated.oLines);
   const generatedTasks = splitSoapEditorTaskLines(generated.taskLines);
   const groundedProblems = sanitizeCandidateApProblems(
     params.value,
     generated,
     baseline,
-    source,
+    problemSource,
     params.workflowMode,
-    sourceOwnedLabText,
+    String(sourceFields.labs ?? ""),
+    narrativeText,
+    sourceOwnedProblemTitles,
   );
-  const finalizedProblems = finalizeApProblems(groundedProblems, sourceOwnedOrders, source);
-  const actionableWarnings = actionableModelWarnings(params.value.warnings);
+  const finalizedProblems = finalizeApProblems(groundedProblems, sourceOwnedOrders, problemSource);
+  const actionableWarnings = actionableModelWarnings(params.value.warnings)
+    .filter((warning) => generatedClinicalLineIsGrounded(warning, problemSource));
+  const groundedSubjective = groundedGeneratedLines(generated.sLines, problemSource);
+  const groundedPe = groundedGeneratedLines(sanitizeGeneratedPe(generatedO.pe), problemSource);
+  const groundedMicro = groundedGeneratedLines(generatedO.lab.filter(isMicrobiologyLabLine), problemSource);
+  const groundedModelLabs = groundedGeneratedLines(generatedO.lab.filter((line) => !isMicrobiologyLabLine(line)), problemSource);
+  const groundedImages = groundedGeneratedLines(generatedO.image, problemSource);
+  const groundedOrders = groundedGeneratedLines(generatedTasks.orderLines, problemSource)
+    .filter((line) => planLineIsGrounded(line.text, problemSource));
+  const groundedTasks = groundedGeneratedLines(generatedTasks.taskOnlyLines, problemSource)
+    .filter((line) => planLineIsGrounded(line.text, problemSource));
+  const groundedDc = groundedGeneratedLines(generated.dcLines, problemSource);
   // Exact O/Lab values belong to the source parser, not the language model.
   // The same source-owned policy restores omitted vitals, imaging, pathology,
   // and orders instead of rejecting an otherwise useful draft.
   const repairedGenerated: SoapEditorDraft = {
     ...generated,
     headerLines: sanitizeGeneratedHeader(generated.headerLines, groundedProblems, source, params.baselineText),
+    sLines: sourceOwnedSubjective.length > 0 ? sourceOwnedSubjective : groundedSubjective,
     oLines: [
-      ...(sourceOwnedVitals.length > 0 ? sourceOwnedVitals : generatedO.vs),
-      ...sanitizeGeneratedPe(generatedO.pe),
+      ...(sourceOwnedVitals.length > 0 ? sourceOwnedVitals : groundedGeneratedLines(generatedO.vs, problemSource)),
+      ...(sourceOwnedPe.length > 0 ? sourceOwnedPe : groundedPe),
       ...(sourceLabInputPresent
-        ? uniqueEditorLines([...sourceOwnedLabs, ...generatedO.lab.filter(isMicrobiologyLabLine)])
-        : generatedO.lab),
-      ...(sourceOwnedImages.length > 0 ? sourceOwnedImages : generatedO.image),
-      ...uniqueEditorLines([...sanitizeGeneratedObjectiveOther(generatedO.other, source), ...sourceOwnedPathology]),
+        ? uniqueEditorLines([...sourceOwnedLabs, ...(sourceOwnedMicro.length > 0 ? sourceOwnedMicro : groundedMicro)])
+        : uniqueEditorLines([...groundedModelLabs, ...(sourceOwnedMicro.length > 0 ? sourceOwnedMicro : groundedMicro)])),
+      ...(sourceOwnedImages.length > 0 ? sourceOwnedImages : groundedImages),
+      ...uniqueEditorLines([
+        ...groundedGeneratedLines(sanitizeGeneratedObjectiveOther(generatedO.other, source), problemSource),
+        ...sourceOwnedPathology,
+      ]),
     ],
     apProblems: params.workflowMode === "dailyUpdate"
       ? finalizedProblems
       : sortEditorProblemsDeterministically(finalizedProblems),
-    taskLines: uniqueEditorLines([...sourceOwnedOrders, ...generatedTasks.orderLines, ...generatedTasks.taskOnlyLines]),
+    taskLines: uniqueEditorLines([
+      ...(sourceOwnedOrders.length > 0 ? sourceOwnedOrders : groundedOrders),
+      ...(sourceOwnedTasks.length > 0 ? sourceOwnedTasks : groundedTasks),
+    ]),
+    dcLines: sourceOwnedDc.length > 0 ? sourceOwnedDc : groundedDc,
     warnings: actionableWarnings.map((warning) => editorLine(warning, "other")),
   };
   let accepted = repairedGenerated;
   let guardedReview: SoapDeltaReview | null = null;
 
-  if (params.workflowMode === "dailyUpdate") {
+  if (params.workflowMode === "dailyUpdate" || params.workflowMode === "repairSoap") {
     guardedReview = guardRoundSoapDelta({
       workflowMode: params.workflowMode,
       baselineText: params.baselineText,
@@ -926,7 +1301,7 @@ export function acceptStructuredRoundSoap(params: {
     fatalErrors.push("Current Lab text was supplied but no exact result could be parsed. Verify the pasted Lab source; the prior Lab was not substituted.");
   }
   const candidateText = editorDraftToSoapText(generated);
-  const finalDraft = applyAiHighlightHintsToEditorDraft(accepted, params.value.highlightHints);
+  const finalDraft = accepted;
   const acceptedText = editorDraftToSoapText(finalDraft);
   const changed = changedSections(baseline, finalDraft);
   const warnings = [...new Set([...(guardedReview?.warnings ?? []), ...actionableWarnings])].slice(0, 8);

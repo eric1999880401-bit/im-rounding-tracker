@@ -31,6 +31,7 @@ const compactGroupLabels: Record<LabVisualGroup["id"], string> = {
   infxPerfusion: "Infx",
   urinalysis: "U/A",
   gas: "Gas",
+  fluid: "Fluid",
   cardiac: "Cardiac",
   other: "Other",
 };

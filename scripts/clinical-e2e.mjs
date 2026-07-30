@@ -496,7 +496,7 @@ function icuTransferScenario() {
   });
   assertIncludes(dailyReview.acceptedText, /Lab: CBC\/DC: WBC 10\.4↓\(13\.2\).*Plt 82↑\(64\)/i, "ICU daily CBC trend");
   assertIncludes(dailyReview.acceptedText, /Lab: Chem\/Renal: Cr 2\.1↓\(2\.7\).*K 4\.7↓\(5\.3\)/i, "ICU daily renal trend");
-  assertIncludes(dailyReview.acceptedText, /Lab: ABG\/VBG: pCO2 52↓\(58\)/i, "ICU daily gas trend");
+  assertIncludes(dailyReview.acceptedText, /Lab: ABG\/VBG: VBG pCO2 52↓\(58\)/i, "ICU daily gas trend keeps specimen identity");
   assertNotIncludes(dailyReview.acceptedText, /Lab: Other: PCO 2/i, "ICU pCO2 should not create a partial generic lab");
   assertIncludes(dailyReview.acceptedText, /Image: CXR 5\/18 aspiration opacity improved/i, "ICU daily image study/date");
   assertIncludes(dailyReview.acceptedText, /Cholangitis sepsis s\/p ERCP, shock resolved/i, "ICU daily kept resolved shock in course");
