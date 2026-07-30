@@ -31,6 +31,7 @@ const compactGroupLabels: Record<LabVisualGroup["id"], string> = {
   infxPerfusion: "Infx",
   urinalysis: "U/A",
   gas: "Gas",
+  fluid: "Fluid",
   cardiac: "Cardiac",
   other: "Other",
 };
@@ -130,9 +131,13 @@ export function ClinicalLabTable({
     () => formatLabVisualSummaryFromLines(source, {
       includeLabPrefix: false,
       includePlain: true,
-      maxItemsPerGroup: density === "detail" ? 10 : 8,
+      // Accepted SOAP Lab lines are already clinically selected by the
+      // contract layer. Render that complete fact set on every surface so a
+      // Board/Print density cap cannot silently remove a required analyte.
+      selectionMode: "complete",
+      maxItemsPerGroup: Number.POSITIVE_INFINITY,
     }),
-    [density, source],
+    [source],
   );
   // The contract layer has already selected the clinically relevant facts.
   // Display surfaces must not perform a second clinical filter: that was why

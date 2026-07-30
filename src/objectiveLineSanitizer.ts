@@ -1,5 +1,10 @@
 import { stripClinicalMarkup } from "./clinicalLineClassifier";
 import { findLabDictionaryItem, type LabValueType } from "./data/labDictionary";
+import {
+  isLabSpecimenHeading,
+  labSpecimenIdentityFromText,
+  stripLeadingLabSpecimen,
+} from "./labSpecimen";
 
 export type ObjectiveLineKind = "vs" | "pe" | "lab" | "image" | "other";
 
@@ -11,8 +16,8 @@ export interface SanitizedObjectiveLine {
 
 const objectivePrefixPattern = /^(?:O|Objective|Other|V\/S|VS|Vitals?|PE|Physical exam|Labs?|Image|Img)\s*[:\uFF1A]\s*/i;
 const explicitObjectivePrefixPattern = /^(V\/S|VS|Vitals?|PE|Physical exam|Labs?|Image|Img)\s*[:\uFF1A]\s*/i;
-const labLabelPattern = /\b(?:WBC|Neu|Neut|Lym|Mono|Eos|Baso|NRBC|RBC|Hb|Hgb|Hct|MCV|MCH|MCHC|RDW|Plt|Platelet|MPV|MDW|BUN|Cr|CRE|Creatinine|e?GFR|Na|K|Cl|Ca|Mg|Phos|P|Osm|AST|ALT|ALP|GGT|T-?Bil|D-?Bil|Alb|PT|INR|aPTT|CRP|hsCRP|PCT|Lactate|pH|pCO2|pO2|HCO3|BE)\b/gi;
-const labResultPattern = /\b(?:WBC|Neu|Neut|Lym|Mono|Eos|Baso|NRBC|RBC|Hb|Hgb|Hct|MCV|MCH|MCHC|RDW|Plt|Platelet|MPV|MDW|BUN|Cr|CRE|Creatinine|e?GFR|Na|K|Cl|Ca|Mg|Phos|P|Osm|AST|ALT|ALP|GGT|T-?Bil|D-?Bil|Alb|PT|INR|aPTT|CRP|hsCRP|PCT|Lactate|pH|pCO2|pO2|HCO3|BE)\s*(?:[:=]\s*)?[<>]?\s*-?\d+(?:\.\d+)?/i;
+const labLabelPattern = /\b(?:WBC|Neu|Neut|ANC|Lym|Mono|Eos|Baso|NRBC|RBC|Hb|Hgb|Hct|MCV|MCH|MCHC|RDW|Plt|Platelet|MPV|MDW|BUN|Cr|CRE|Creatinine|e?GFR|Na|K|Cl|Ca|Mg|Phos|P|Osm|Uric acid|Glucose|Glu|AC glucose|PC glucose|HbA1c|TSH|Free T4|Cortisol|AST|ALT|ALP|GGT|T-?Bil|D-?Bil|Alb|Amylase|Lipase|PT|INR|aPTT|D-?dimer|Fibrinogen|FDP|CRP|hsCRP|PCT|Lactate|Ketone|Troponin(?: I| T)?|TnI|TnT|CK(?:-?MB)?|BNP|NT-?proBNP|LDH|pH|pCO2|pO2|HCO3|BE)\b/gi;
+const labResultPattern = /\b(?:WBC|Neu|Neut|ANC|Lym|Mono|Eos|Baso|NRBC|RBC|Hb|Hgb|Hct|MCV|MCH|MCHC|RDW|Plt|Platelet|MPV|MDW|BUN|Cr|CRE|Creatinine|e?GFR|Na|K|Cl|Ca|Mg|Phos|P|Osm|Uric acid|Glucose|Glu|AC glucose|PC glucose|HbA1c|TSH|Free T4|Cortisol|AST|ALT|ALP|GGT|T-?Bil|D-?Bil|Alb|Amylase|Lipase|PT|INR|aPTT|D-?dimer|Fibrinogen|FDP|CRP|hsCRP|PCT|Lactate|Ketone|Troponin(?: I| T)?|TnI|TnT|CK(?:-?MB)?|BNP|NT-?proBNP|LDH|pH|pCO2|pO2|HCO3|BE)\s*(?:[:=]\s*)?[<>]?\s*-?\d+(?:\.\d+)?/i;
 const positionalLabValuePattern = /^[<>]?-?\d+(?:,\d{3})*(?:\.\d+)?%?(?:\*+|[HL]|[\u2191\u2193\u2197\u2198])?$/i;
 const compactBloodGasPattern = /\b(ABG|VBG)\s*[:=]?\s*([<>]?-?\d+(?:\.\d+)?)\s*\/\s*([<>]?-?\d+(?:\.\d+)?)\s*\/\s*([<>]?-?\d+(?:\.\d+)?)\s*\/\s*([<>]?-?\d+(?:\.\d+)?)(?:\s*\/\s*([<>]?-?\d+(?:\.\d+)?))?/i;
 
@@ -73,8 +78,16 @@ function explicitObjectiveKind(value: string): ObjectiveLineKind | "" {
 function contentObjectiveKind(body: string): ObjectiveLineKind | "" {
   if (isPathologyResultLine(body)) return "other";
   if (/\b(?:CT|MRI|CXR|X-?ray|echo|sono|ultrasound|US|ERCP|EGD|colonoscopy|bronchoscopy|PET)\b|\bimpression\s*:/i.test(body)) return "image";
-  if (/\b(?:BP|HR|RR|SpO2|SaO2)\s*[:=]?\s*\d|\bT\s*[:=]?\s*\d{2}(?:\.\d+)?|\b(?:afebrile|room air|RA|nasal cannula|NC\s*\d*\s*L)\b/i.test(body)) return "vs";
+  if (/\b(?:BP|blood\s+pressure|HR|RR|SpO2|SaO2)\s*[:=]?\s*\d|\bT\s*[:=]?\s*\d{2}(?:\.\d+)?|\b(?:afebrile|room air|RA|nasal cannula|NC\s*\d*\s*L)\b/i.test(body)) return "vs";
+  const specimen = labSpecimenIdentityFromText(body);
+  const leadingSpecimen = stripLeadingLabSpecimen(body);
+  const explicitSpecimenResult =
+    specimen.explicit &&
+    leadingSpecimen.identity.key === specimen.key &&
+    (/[=:]/.test(body) || /\d|\b(?:positive|negative|pos|neg|detected|not detected|pending|none|few|moderate|many|rare|trace|present|absent)\b/i.test(leadingSpecimen.body));
   if (
+    isLabSpecimenHeading(body) ||
+    explicitSpecimenResult ||
     compactBloodGasPattern.test(body) ||
     labResultPattern.test(body) ||
     /\b(?:blood|urine|sputum|CSF|stool)\s*(?:culture|Cx)\b|\b(?:B\/C|BCx|U\/C|UCx)\b/i.test(body) ||
@@ -150,6 +163,8 @@ function labTableSectionGroup(value: string) {
   const match = body.match(/^\[([^\]]{1,32})\]$/);
   if (!match) return "";
   if (/(?:\u5c3f\u6db2|urine|urinalysis|U\/?A)/i.test(match[1])) return "Urinalysis";
+  const specimen = labSpecimenIdentityFromText(match[1]);
+  if (specimen.explicit && specimen.key !== "blood") return specimen.label;
   return "";
 }
 
@@ -246,7 +261,7 @@ function positionalLabRow(value: string, columns: PositionalLabColumn[], section
     return cleanValue ? [`${label} ${cleanValue}${markedAbnormal ? "*" : ""}`] : [];
   });
   if (items.length < (tabDelimited ? 1 : 2)) return "";
-  const groupPrefix = sectionGroup === "Urinalysis" ? "U/A: " : "";
+  const groupPrefix = sectionGroup === "Urinalysis" ? "U/A: " : sectionGroup ? `${sectionGroup}: ` : "";
   return `${date ? `${date} ` : ""}${groupPrefix}${items.join(", ")}`.trim();
 }
 
@@ -254,7 +269,8 @@ function isLabTableSectionHeading(value: string) {
   const body = plainObjectiveBody(value);
   const match = body.match(/^\[([^\]]{1,32})\]$/);
   if (!match) return false;
-  return /(?:\u8840\u6db2|\u751f\u5316|\u8840\u6e05|\u51dd\u8840|\u5c3f\u6db2|\u514d\u75ab|CBC|hematology|chemistry|coagulation|urine|immunology|lab)/i.test(match[1]);
+  const specimen = labSpecimenIdentityFromText(match[1]);
+  return specimen.explicit || /(?:\u8840\u6db2|\u751f\u5316|\u8840\u6e05|\u51dd\u8840|\u5c3f\u6db2|\u514d\u75ab|CBC|hematology|chemistry|coagulation|urine|immunology|lab)/i.test(match[1]);
 }
 
 function isLabTableMetadataRow(value: string) {
@@ -303,7 +319,9 @@ export function normalizeLabTableSourceText(value: string) {
       flushPendingRows();
       pendingColumns = [];
       pendingSectionGroup = labTableSectionGroup(line);
-      rejected.push(line);
+      const specimen = labSpecimenIdentityFromText(line);
+      if (pendingSectionGroup && specimen.explicit) accepted.push(`${pendingSectionGroup}:`);
+      else rejected.push(line);
       return;
     }
     if (isLabReportHeaderNoise(line)) {

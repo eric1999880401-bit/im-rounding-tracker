@@ -8,17 +8,38 @@ export function asStringArray(value: unknown) {
   return Array.isArray(value) ? value.map((item) => String(item ?? "").trim()).filter(Boolean) : [];
 }
 
+function asClinicalContextArray(value: unknown) {
+  if (Array.isArray(value)) return asStringArray(value);
+  if (typeof value !== "string") return [];
+  return value
+    .split(/\r?\n|;\s*/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
 export function sanitizePatientContext(input: CallableInput["patientContext"]) {
   if (!input || typeof input !== "object") return undefined;
 
   return {
     age: String(input.age ?? "").trim(),
     sex: String(input.sex ?? "").trim(),
-    pmh: asStringArray(input.pmh),
-    activeProblems: asStringArray(input.activeProblems),
+    pmh: asClinicalContextArray(input.pmh).slice(0, 40).map((value) => value.slice(0, 240)),
+    activeProblems: asClinicalContextArray(input.activeProblems).slice(0, 40).map((value) => value.slice(0, 240)),
     labFacts: asStringArray(input.labFacts).slice(0, 100).map((value) => value.slice(0, 240)),
     imageFacts: asStringArray(input.imageFacts).slice(0, 40).map((value) => value.slice(0, 420)),
   };
+}
+
+export function mergePatientContext(
+  stored: Record<string, unknown>,
+  requested: ReturnType<typeof sanitizePatientContext>,
+) {
+  if (!requested) return stored;
+  const meaningfulOverrides = Object.fromEntries(
+    Object.entries(requested).filter(([, value]) =>
+      Array.isArray(value) ? value.length > 0 : String(value ?? "").trim().length > 0),
+  );
+  return { ...stored, ...meaningfulOverrides };
 }
 
 export function sanitizeUserStyleProfile(input: unknown) {
@@ -694,12 +715,29 @@ export function asPlainObject(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }
 
+function firstNonEmptyText(...values: unknown[]) {
+  return values.map((value) => String(value ?? "").trim()).find(Boolean) ?? "";
+}
+
 export function compactPatientContext(data: FirebaseFirestore.DocumentData | undefined) {
   const patient = asPlainObject(data);
   const pmh = dedupeDiseaseText([
     ...asStringArray(patient.underlyingDiseaseItems),
     truncateString(patient.underlyingDiseases, 700),
     truncateString(patient.admissionPMH, 700),
+  ].filter(Boolean).join("\n"));
+  const structuredActiveProblems = Array.isArray(patient.activeProblemStructuredItems)
+    ? patient.activeProblemStructuredItems
+        .map((item) => {
+          const problem = asPlainObject(item);
+          return String(problem.title ?? problem.problemTitle ?? "").trim();
+        })
+        .filter(Boolean)
+    : [];
+  const activeProblems = dedupeDiseaseText([
+    ...asStringArray(patient.activeProblemItems),
+    ...structuredActiveProblems,
+    truncateString(patient.activeProblems, 700),
   ].filter(Boolean).join("\n"));
   return {
     age: patient.age ?? "",
@@ -708,7 +746,7 @@ export function compactPatientContext(data: FirebaseFirestore.DocumentData | und
     primaryDiagnosis: patient.primaryDiagnosis ?? "",
     oneLiner: patient.oneLiner ?? "",
     pmh,
-    activeProblems: patient.activeProblems ?? "",
+    activeProblems,
     chiefComplaint: patient.chiefComplaint ?? patient.admissionChiefConcern ?? "",
     hpi: patient.presentIllnessOrHPI ?? patient.hpiOrAdmissionStory ?? "",
     admissionSummary: patient.admissionBriefFreeText ?? patient.generatedAdmissionSummary ?? "",
@@ -727,7 +765,7 @@ export function compactPatientContext(data: FirebaseFirestore.DocumentData | und
     latestVitals: patient.vitalSigns ?? "",
     latestBloodSugar: patient.bloodSugar ?? "",
     latestPE: patient.physicalExam ?? "",
-    latestLabs: patient.newLabs ?? patient.rawLabText ?? "",
+    latestLabs: firstNonEmptyText(patient.newLabs, patient.rawLabText),
     latestImages: patient.newImaging ?? "",
     latestAssessment: patient.assessment ?? "",
     latestPlan: patient.plan ?? "",
@@ -757,7 +795,7 @@ export function compactDailyNote(noteId: string, data: FirebaseFirestore.Documen
     vitalSigns: note.vitalSigns ?? "",
     bloodSugar: note.bloodSugar ?? "",
     physicalExam: note.physicalExam ?? "",
-    labs: note.rawLabText ?? note.labSummary ?? "",
+    labs: firstNonEmptyText(note.rawLabText, note.labSummary),
     images: note.imageSummary ?? "",
     assessment: note.assessment ?? "",
     plan: note.plan ?? "",

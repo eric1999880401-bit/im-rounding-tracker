@@ -91,8 +91,21 @@ const { cleanInlineClinicalMarkers, conciseSoapDiagnosisForDisplay, soapHeaderLi
 const { applyClinicalColorMarkup, applyUserKeywordHighlights, clearClinicalColorMarkupAtSelection } = await server.ssrLoadModule("/src/clinicalColorMarkup.ts");
 const { labReferenceText, parseClinicalLabTokens } = await server.ssrLoadModule("/src/labReference.ts");
 const { boardDischargeTasks, hasBoardDischargeSoonSignal, isBoardNewAdmission } = await server.ssrLoadModule("/src/boardCockpit.ts");
-const { buildLabVisualSummaryFromText, formatLabVisualSummaryFromLines, formatLabVisualSummaryLinesFromText } = await server.ssrLoadModule("/src/labVisualSummary.ts");
-const { buildCanonicalLabDataset, canonicalLabFactsForAi } = await server.ssrLoadModule("/src/labDataset.ts");
+const {
+  buildLabVisualSummaryFromText,
+  formatLabVisualSummaryFromLines,
+  formatLabVisualSummaryLinesFromText,
+  formatLabVisualTimelineLines,
+} = await server.ssrLoadModule("/src/labVisualSummary.ts");
+const {
+  buildCanonicalLabDataset,
+  buildCanonicalLabTimelineDataset,
+  canonicalLabSelectionKey,
+  canonicalLabFactsForAi,
+} = await server.ssrLoadModule("/src/labDataset.ts");
+const {
+  specimenAwareLabSelectionKey,
+} = await server.ssrLoadModule("/src/labSpecimen.ts");
 const { buildCanonicalImageDataset, canonicalImageFactsForAi } = await server.ssrLoadModule("/src/imageDataset.ts");
 const { normalizeCompactBloodGasLine, normalizeLabTableSourceText } = await server.ssrLoadModule("/src/objectiveLineSanitizer.ts");
 const {
@@ -122,6 +135,7 @@ const { buildAiDocumentAuditWrite, buildSoapAuditWrite } = await server.ssrLoadM
 const { SoapVisualPreview } = await server.ssrLoadModule("/src/components/SoapVisualPreview.tsx");
 const { ClinicalLabTable } = await server.ssrLoadModule("/src/components/ClinicalLabTable.tsx");
 const { buildCorrectionContract, compactRoundSoapPromptHistory, makeRoundSoapPrompt } = await server.ssrLoadModule("/functions/src/roundSoapPrompt.ts");
+const { parseStructuredRoundSoapDraft } = await server.ssrLoadModule("/functions/src/roundSoapContract.ts");
 const {
   DEFAULT_BALANCED_MODEL,
   DEFAULT_FAST_MODEL,
@@ -158,7 +172,13 @@ const {
   isLatestRequest,
   isPatientReviewBoundToContext,
 } = await server.ssrLoadModule("/src/asyncRequestGuard.ts");
-const { matchExistingPatient } = await server.ssrLoadModule("/functions/src/sanitize.ts");
+const {
+  compactDailyNote,
+  compactPatientContext,
+  matchExistingPatient,
+  mergePatientContext,
+  sanitizePatientContext,
+} = await server.ssrLoadModule("/functions/src/sanitize.ts");
 const { clinicalSaveConflictReason } = await server.ssrLoadModule("/src/clinicalSaveGuard.ts");
 
 function haystack(plan) {
@@ -4959,8 +4979,8 @@ try {
   }
   const balancedDailyTuning = getResponseTuning("balanced", "roundSoapDaily");
   const balancedFullTuning = getResponseTuning("balanced", "roundSoapFull");
-  if (balancedDailyTuning.reasoning.effort !== "low") {
-    throw new Error("daily SOAP should reserve output headroom instead of spending it on hidden reasoning");
+  if (balancedDailyTuning.reasoning.effort !== "medium") {
+    throw new Error("balanced daily SOAP should keep the same clinical reasoning tier as full SOAP");
   }
   if (balancedDailyTuning.max_output_tokens !== 8_000 || balancedFullTuning.max_output_tokens !== 12_000) {
     throw new Error(`balanced SOAP output budgets no longer reserve enough visible daily JSON: daily=${balancedDailyTuning.max_output_tokens}, full=${balancedFullTuning.max_output_tokens}`);
@@ -4968,8 +4988,8 @@ try {
   if (getResponseTuning("highAccuracy", "roundSoapFull").reasoning.effort !== "high") {
     throw new Error("high-accuracy SOAP should use high reasoning");
   }
-  if (getResponseTuning("highAccuracy", "roundSoapDaily").reasoning.effort !== "low") {
-    throw new Error("daily high-quality SOAP should use Sol with low hidden reasoning and preserve output headroom");
+  if (getResponseTuning("highAccuracy", "roundSoapDaily").reasoning.effort !== "high") {
+    throw new Error("daily high-quality SOAP should preserve high clinical reasoning instead of silently downgrading");
   }
   if (getRoundSoapMaxOutputTokens("highAccuracy", "transferHandoff", 34_000) < 12_000) {
     throw new Error("long high-accuracy transfer SOAP lacks reasoning/output headroom");
@@ -5195,6 +5215,11 @@ try {
     /SILENT FINAL CHECK BEFORE RETURNING JSON/i,
     /every current high-risk fact is present once/i,
     /Each lab object must include sourceIds/i,
+    /smallest monitoring set for each active lab-driven problem/i,
+    /Do not leave objective\.labs empty/i,
+    /immediately prior supplied result/i,
+    /neutropenic fever.*ANC/i,
+    /Lab trajectory: every selected disease-relevant current lab/i,
     /application will render the source value verbatim/i,
     /Each imaging object must cite sourceIds/i,
     /Comparison statements, technique\/protocol text, study titles without findings/i,
@@ -5660,7 +5685,7 @@ try {
     if (!/clinical-lab-item-name[^>]*>ALT</.test(html) || !/>prev <\/span>41</.test(html) || !/clinical-lab-group/.test(html)) {
       throw new Error(`${density} Lab renderer did not separate analyte/current/previous cells: ${html}`);
     }
-    for (const label of ["WBC", "CRP", "ESR", "UA WBC", "Nitrite", "Bacteria"]) {
+    for (const label of ["WBC", "CRP", "ESR", "UA WBC", "Urine Nitrite", "Urine Bacteria"]) {
       if (!html.includes(`>${label}<`)) {
         throw new Error(`${density} Lab renderer omitted ${label}. SOAP: ${acceptedText} Canonical O: ${labLines.join(" | ")} Renderer: ${html}`);
       }
@@ -5886,6 +5911,7 @@ try {
     orders: "continue meropenem 1 g IV q8h",
     other: "B/C 07-20 pending; dyspnea improved",
   };
+  const authoritativeProblems = "PNA / sepsis, improving\nHypernatremia";
   const sourceLabVisual = formatLabVisualSummaryFromLines(sourceFields.labs, { includeLabPrefix: true }).text;
   if (!/CBC\/DC: WBC 12\.7.*Neu 88\.9.*Hb 12\.0.*Plt 259/i.test(sourceLabVisual)) {
     throw new Error(`adjacent H-prefixed lab label was swallowed by the prior value flag parser: ${sourceLabVisual}`);
@@ -5895,6 +5921,7 @@ try {
     baselineText: "",
     sourceFields,
     workflowMode: "newSoap",
+    activeProblemContext: authoritativeProblems,
   });
   const acceptedText = editorDraftToSoapText(accepted.draft);
   if (accepted.fatalErrors.length > 0) throw new Error(`valid structured draft was rejected: ${accepted.fatalErrors.join(" | ")}`);
@@ -5908,21 +5935,32 @@ try {
     throw new Error(`A/P significance gate failed:\n${acceptedText}`);
   }
   const highlightedNa = accepted.draft.oLines.find((line) => /\bNa 150\b/i.test(line.text));
-  const highlightedImage = accepted.draft.oLines.find((line) => /RLL opacity/i.test(line.text));
-  if (!highlightedNa || highlightedNa.tone === "plain" || !highlightedImage || highlightedImage.tone === "plain") {
-    throw new Error(`AI highlight hints were discarded after structured acceptance:\n${acceptedText}`);
+  if (!highlightedNa || highlightedNa.tone === "plain") {
+    throw new Error(`deterministic Lab severity did not mark Na 150:\n${acceptedText}`);
+  }
+  const noHintDraft = structuredClone(structuredDraft);
+  noHintDraft.highlightHints = [];
+  const noHintAcceptance = acceptStructuredRoundSoap({
+    value: noHintDraft,
+    baselineText: "",
+    sourceFields,
+    workflowMode: "newSoap",
+    activeProblemContext: authoritativeProblems,
+  });
+  if (editorDraftToSoapText(noHintAcceptance.draft) !== acceptedText) {
+    throw new Error(`candidate highlight hints changed source-owned clinical priority:\nWITH HINTS:\n${acceptedText}\nWITHOUT HINTS:\n${editorDraftToSoapText(noHintAcceptance.draft)}`);
   }
 
   const equivalentFormattingDraft = structuredClone(structuredDraft);
   equivalentFormattingDraft.objective.labs[0].values = "WBC 12.7, Neu 88.9%, Hb 12, Plt 259";
-  const equivalentFormatting = acceptStructuredRoundSoap({ value: equivalentFormattingDraft, baselineText: "", sourceFields, workflowMode: "newSoap" });
+  const equivalentFormatting = acceptStructuredRoundSoap({ value: equivalentFormattingDraft, baselineText: "", sourceFields, workflowMode: "newSoap", activeProblemContext: authoritativeProblems });
   if (equivalentFormatting.fatalErrors.length > 0) {
     throw new Error(`equivalent Lab formatting 12 vs 12.0 was rejected: ${equivalentFormatting.fatalErrors.join(" | ")}`);
   }
 
   const inventedLabDraft = structuredClone(structuredDraft);
   inventedLabDraft.objective.labs[1].values = "BUN 24, Cr 15.4, Na 150, K 4.0";
-  const invented = acceptStructuredRoundSoap({ value: inventedLabDraft, baselineText: "S:\n- baseline", sourceFields, workflowMode: "newSoap" });
+  const invented = acceptStructuredRoundSoap({ value: inventedLabDraft, baselineText: "S:\n- baseline", sourceFields, workflowMode: "newSoap", activeProblemContext: authoritativeProblems });
   const inventedText = editorDraftToSoapText(invented.draft);
   if (invented.fatalErrors.length > 0 || /Cr 15\.4/.test(inventedText) || !/Cr 1\.2/.test(inventedText)) {
     throw new Error(`invented model Lab was not replaced by source-owned O/Lab:\n${inventedText}`);
@@ -5931,15 +5969,15 @@ try {
   const missingAbxDraft = structuredClone(structuredDraft);
   missingAbxDraft.assessmentPlan[0].plan = "f/u B/C and O2 need";
   missingAbxDraft.orders = [];
-  const missingAbx = acceptStructuredRoundSoap({ value: missingAbxDraft, baselineText: "", sourceFields, workflowMode: "newSoap" });
+  const missingAbx = acceptStructuredRoundSoap({ value: missingAbxDraft, baselineText: "", sourceFields, workflowMode: "newSoap", activeProblemContext: authoritativeProblems });
   const missingAbxText = editorDraftToSoapText(missingAbx.draft);
-  if (missingAbx.fatalErrors.length > 0 || !/Order: (?:continue )?meropenem 1 g IV q8h/i.test(missingAbxText) || !/# PNA \/ sepsis, improving[\s\S]*meropenem 1 g IV q8h/i.test(missingAbxText)) {
+  if (missingAbx.fatalErrors.length > 0 || !/Order: (?:continue )?meropenem 1 g IV q8h/i.test(missingAbxText) || !/# PNA \/ sepsis\b[\s\S]*meropenem 1 g IV q8h/i.test(missingAbxText)) {
     throw new Error(`source antimicrobial was not restored without blocking the draft:\n${missingAbxText}`);
   }
 
   const repeatedAbxDraft = structuredClone(structuredDraft);
   repeatedAbxDraft.assessmentPlan[1].plan = "Continue meropenem 1 g IV q8h and repeat Na.";
-  const repeatedAbx = acceptStructuredRoundSoap({ value: repeatedAbxDraft, baselineText: "", sourceFields, workflowMode: "newSoap" });
+  const repeatedAbx = acceptStructuredRoundSoap({ value: repeatedAbxDraft, baselineText: "", sourceFields, workflowMode: "newSoap", activeProblemContext: authoritativeProblems });
   const repeatedApText = repeatedAbx.draft.apProblems.map((problem) => `${problem.title} ${problem.lines.map((line) => line.text).join(" ")}`).join("\n");
   if (repeatedAbx.fatalErrors.length > 0 || (repeatedApText.match(/meropenem/gi) ?? []).length !== 1) {
     throw new Error(`antibiotic duplication was not repaired inside A/P:\n${repeatedApText}`);
@@ -5947,7 +5985,7 @@ try {
 
   const omittedImageDraft = structuredClone(structuredDraft);
   omittedImageDraft.objective.imaging = [];
-  const omittedImage = acceptStructuredRoundSoap({ value: omittedImageDraft, baselineText: "", sourceFields, workflowMode: "newSoap" });
+  const omittedImage = acceptStructuredRoundSoap({ value: omittedImageDraft, baselineText: "", sourceFields, workflowMode: "newSoap", activeProblemContext: authoritativeProblems });
   const omittedImageText = editorDraftToSoapText(omittedImage.draft);
   if (omittedImage.fatalErrors.length > 0 || !/Image: CXR 07-20:\s*RLL opacity/i.test(omittedImageText)) {
     throw new Error(`source imaging was not restored without blocking the draft:\n${omittedImageText}`);
@@ -5956,10 +5994,10 @@ try {
   const missingCriticalApDraft = structuredClone(structuredDraft);
   missingCriticalApDraft.assessmentPlan = missingCriticalApDraft.assessmentPlan.filter((problem) => !/hypernatremia/i.test(problem.problemTitle));
   missingCriticalApDraft.warnings = ["No current medication orders supplied.", "Uncontextualized fluid balance omitted."];
-  const missingCriticalAp = acceptStructuredRoundSoap({ value: missingCriticalApDraft, baselineText: "", sourceFields, workflowMode: "newSoap" });
+  const missingCriticalAp = acceptStructuredRoundSoap({ value: missingCriticalApDraft, baselineText: "", sourceFields, workflowMode: "newSoap", activeProblemContext: authoritativeProblems });
   const missingCriticalApText = editorDraftToSoapText(missingCriticalAp.draft);
-  if (missingCriticalAp.fatalErrors.length > 0 || /# Hypernatremia|management plan not documented/i.test(missingCriticalApText) || !/Lab: Chem\/Renal:.*Na 150/i.test(missingCriticalApText)) {
-    throw new Error(`deterministic Lab display created a rule-generated A/P instead of preserving source O/Lab:\n${missingCriticalApText}`);
+  if (missingCriticalAp.fatalErrors.length > 0 || !/# Hypernatremia[\s\S]*Na 150/i.test(missingCriticalApText) || /management plan not documented/i.test(missingCriticalApText) || !/Lab: Chem\/Renal:.*Na 150/i.test(missingCriticalApText)) {
+    throw new Error(`authoritative active problem was not restored with source-owned evidence after AI omission:\n${missingCriticalApText}`);
   }
 
   const baseline = editorDraftToSoapText(structuredRoundSoapToEditorDraft(structuredDraft));
@@ -6198,6 +6236,288 @@ try {
 } catch (error) {
   failures.push({ name: "Deterministic objective and infection source contract", error: error instanceof Error ? error.message : String(error) });
   console.error(`FAIL Deterministic objective and infection source contract: ${failures[failures.length - 1].error}`);
+}
+
+try {
+  const emptyAiLabDraft = (problemTitle) => ({
+    headerLines: ["SYN-LAB 68/F", `Dx: ${problemTitle}`],
+    subjectiveLines: ["No new complaint"],
+    objective: {
+      vitalSigns: [],
+      physicalExam: [],
+      labs: [],
+      microbiology: [],
+      imaging: [],
+      pathology: [],
+      other: [],
+    },
+    assessmentPlan: [{
+      problemTitle,
+      status: "active",
+      summary: `${problemTitle} under active treatment.`,
+      plan: "Continue the source-grounded plan.",
+      sourceEvidence: [problemTitle],
+    }],
+    orders: [],
+    tasks: [],
+    discharge: [],
+    warnings: [],
+    highlightHints: [],
+  });
+
+  const dkaBaseline = [
+    "S:",
+    "- Nausea improving.",
+    "O:",
+    "- Lab: Other: Glucose 520",
+    "- Lab: Chem/Renal: Na 132, K 5.2",
+    "- Lab: ABG/VBG: pH 7.18, HCO3 12",
+    "A/P:",
+    "# DKA",
+    "- Insulin protocol under clinician review.",
+  ].join("\n");
+  const dkaReview = acceptStructuredRoundSoap({
+    value: emptyAiLabDraft("DKA"),
+    baselineText: dkaBaseline,
+    sourceFields: { labs: "Glucose 220, Na 138, K 4.0, pH 7.32, HCO3 20, TSH 2.0" },
+    workflowMode: "dailyUpdate",
+  });
+  const dkaText = editorDraftToSoapText(dkaReview.draft);
+  if (dkaReview.fatalErrors.length > 0) {
+    throw new Error(`DKA current labs were rejected: ${dkaReview.fatalErrors.join(" | ")}`);
+  }
+  for (const expected of [
+    /\bGlucose 220[^\n]*\(520\)/i,
+    /\bK 4\.0[^\n]*\(5\.2\)/i,
+    /\bpH 7\.32[^\n]*\(7\.18\)/i,
+    /\bHCO3 20[^\n]*\(12\)/i,
+  ]) {
+    if (!expected.test(dkaText)) throw new Error(`DKA lab trend ${expected} is missing:\n${dkaText}`);
+  }
+  if (!/\bTSH 2\.0\b/i.test(dkaText) || dkaText.indexOf("TSH 2.0") < dkaText.indexOf("Glucose 220")) {
+    throw new Error(`complete source preservation did not keep DKA-relevant labs ahead of the additional TSH result:\n${dkaText}`);
+  }
+
+  const nstemiReview = acceptStructuredRoundSoap({
+    value: emptyAiLabDraft("NSTEMI"),
+    baselineText: "S:\n- Chest pain resolved.\nO:\n- Lab: Cardiac: Troponin I 42\nA/P:\n# NSTEMI\n- Cardiology plan reviewed.",
+    sourceFields: { labs: "Troponin I 68, TSH 2.0" },
+    workflowMode: "dailyUpdate",
+  });
+  const nstemiText = editorDraftToSoapText(nstemiReview.draft);
+  if (!/\bTroponin I 68[^\n]*\(42\)/i.test(nstemiText) || !/\bTSH 2\.0\b/i.test(nstemiText) || nstemiText.indexOf("Troponin I 68") > nstemiText.indexOf("TSH 2.0")) {
+    throw new Error(`NSTEMI troponin was not preserved and prioritized ahead of the additional source-owned lab:\n${nstemiText}`);
+  }
+
+  const diseasePackCases = [
+    {
+      problem: "DIC",
+      baselineLabs: "D-dimer 900, Fibrinogen 350",
+      currentLabs: "D-dimer 8000, Fibrinogen 110, TSH 2.0",
+      expected: [/\bD-dimer 8000[^\n]*\(900\)/i, /\bFibrinogen 110[^\n]*\(350\)/i],
+    },
+    {
+      problem: "Acute pancreatitis",
+      baselineLabs: "Lipase 300",
+      currentLabs: "Lipase 1200, TSH 2.0",
+      expected: [/\bLipase 1200[^\n]*\(300\)/i],
+    },
+  ];
+  diseasePackCases.forEach((testCase) => {
+    const review = acceptStructuredRoundSoap({
+      value: emptyAiLabDraft(testCase.problem),
+      baselineText: `S:\n- Stable.\nO:\n- Lab: Other: ${testCase.baselineLabs}\nA/P:\n# ${testCase.problem}\n- Active plan reviewed.`,
+      sourceFields: { labs: testCase.currentLabs },
+      workflowMode: "dailyUpdate",
+    });
+    const text = editorDraftToSoapText(review.draft);
+    const firstRelevantIndex = Math.min(...testCase.expected.map((pattern) => text.search(pattern)).filter((index) => index >= 0));
+    if (review.fatalErrors.length > 0 || testCase.expected.some((pattern) => !pattern.test(text)) || !/\bTSH 2\.0\b/i.test(text) || firstRelevantIndex > text.indexOf("TSH 2.0")) {
+      throw new Error(`${testCase.problem} relevant labs were not preserved ahead of the additional source-owned lab:\n${text}`);
+    }
+  });
+
+  const neutropenicReview = acceptStructuredRoundSoap({
+    value: emptyAiLabDraft("Neutropenic fever"),
+    baselineText: [
+      "S:",
+      "- Fever under evaluation.",
+      "O:",
+      "- Lab: CBC/DC: WBC 1.2, Hb 9.2, Plt 110, ANC 80",
+      "A/P:",
+      "# Neutropenic fever",
+      "- Continue source-grounded evaluation and treatment.",
+    ].join("\n"),
+    sourceFields: { labs: "WBC 1.0, Hb 9.0, Plt 100, ANC 50, TSH 2.0" },
+    workflowMode: "dailyUpdate",
+  });
+  const neutropenicText = editorDraftToSoapText(neutropenicReview.draft);
+  if (neutropenicReview.fatalErrors.length > 0 ||
+      !/\bANC 50[^\n]*\(80\)/i.test(neutropenicText) ||
+      !/\bTSH 2\.0\b/i.test(neutropenicText) ||
+      neutropenicText.indexOf("ANC 50") > neutropenicText.indexOf("TSH 2.0")) {
+    throw new Error(`neutropenic fever lost/prioritized the ANC incorrectly or dropped a source-owned lab:\n${neutropenicText}`);
+  }
+
+  const newSoapNeutropenicReview = acceptStructuredRoundSoap({
+    value: emptyAiLabDraft("Neutropenic fever"),
+    baselineText: "",
+    sourceFields: { labs: "WBC 1.5, Hb 9.0, Plt 100, ANC 800, TSH 2.0" },
+    workflowMode: "newSoap",
+  });
+  const newSoapNeutropenicText = editorDraftToSoapText(newSoapNeutropenicReview.draft);
+  if (newSoapNeutropenicReview.fatalErrors.length > 0 ||
+      !/\bANC 800\b/i.test(newSoapNeutropenicText) ||
+      !/\bTSH 2\.0\b/i.test(newSoapNeutropenicText) ||
+      newSoapNeutropenicText.indexOf("ANC 800") > newSoapNeutropenicText.indexOf("TSH 2.0")) {
+    throw new Error(`New SOAP did not prioritize noncritical ANC while preserving the complete source Lab set:\n${newSoapNeutropenicText}`);
+  }
+
+  const plainCurrentReview = acceptStructuredRoundSoap({
+    value: emptyAiLabDraft("Diagnostic workup"),
+    baselineText: "S:\n- Stable.\nO:\n- Lab: CBC/DC: WBC 9.0, Hb 10.0, Plt 200\nA/P:\n# Diagnostic workup\n- Review results.",
+    sourceFields: { labs: "LDH 180" },
+    workflowMode: "dailyUpdate",
+  });
+  const plainCurrentText = editorDraftToSoapText(plainCurrentReview.draft);
+  if (!/\bLDH 180\b/i.test(plainCurrentText) || /\bWBC 9\.0\b/i.test(plainCurrentText)) {
+    throw new Error(`a current plain lab was lost while stale baseline labs remained:\n${plainCurrentText}`);
+  }
+
+  const routedDiseaseLabs = splitGuidedSoapSource([
+    "Lipase 1200 in acute pancreatitis.",
+    "D-dimer 8000, Fibrinogen 110 in DIC.",
+    "Troponin I 120, BNP 1800 in NSTEMI/ADHF.",
+  ].join("\n"));
+  if (!/Lipase 1200/i.test(routedDiseaseLabs.labs) ||
+      !/D-dimer 8000.*Fibrinogen 110/is.test(routedDiseaseLabs.labs) ||
+      !/Troponin I 120.*BNP 1800/is.test(routedDiseaseLabs.labs)) {
+    throw new Error(`disease-specific mixed-paste labs were not routed to Lab: ${JSON.stringify(routedDiseaseLabs)}`);
+  }
+  console.log("PASS Disease-relevant labs survive AI omission and compare with the immediately prior result");
+  supplementalPasses += 1;
+} catch (error) {
+  failures.push({ name: "Disease-relevant current/prior Lab coverage", error: error instanceof Error ? error.message : String(error) });
+  console.error(`FAIL Disease-relevant current/prior Lab coverage: ${failures[failures.length - 1].error}`);
+}
+
+try {
+  const currentDataset = buildCanonicalLabDataset("Glucose 220");
+  const timelineDataset = buildCanonicalLabTimelineDataset("Glucose 220", "Lab: Glucose 520");
+  const currentGlucose = currentDataset.latestItems.find((item) => item.label === "Glucose");
+  const timelineGlucose = timelineDataset.latestItems.find((item) => item.label === "Glucose");
+  const timelineFacts = canonicalLabFactsForAi(timelineDataset);
+  if (!currentGlucose || !timelineGlucose || currentGlucose.id !== timelineGlucose.id || timelineGlucose.previousValue !== "520") {
+    throw new Error(`canonical current source ID or prior Glucose was not preserved: ${JSON.stringify(timelineDataset)}`);
+  }
+  if (!timelineFacts.some((fact) => /Glucose 220.*previous 520/i.test(fact))) {
+    throw new Error(`AI did not receive the source-owned current/prior Lab fact: ${timelineFacts.join("\n")}`);
+  }
+
+  const unchangedImmediateDataset = buildCanonicalLabDataset([
+    "2026-07-27 Glucose 520",
+    "2026-07-28 Glucose 220",
+    "2026-07-29 Glucose 220",
+  ].join("\n"));
+  const unchangedImmediateGlucose = unchangedImmediateDataset.latestItems.find((item) => item.label === "Glucose");
+  if (unchangedImmediateGlucose?.value !== "220" || unchangedImmediateGlucose.previousValue !== "220") {
+    throw new Error(`canonical Lab skipped the unchanged immediately prior result: ${JSON.stringify(unchangedImmediateGlucose)}`);
+  }
+
+  const incompatibleUnitCases = [
+    {
+      current: "Troponin I 68 ng/L",
+      previous: "Troponin I 0.04 ng/mL",
+      forbidden: /\(0\.04\)/,
+    },
+    {
+      current: "Glucose 10 mmol/L",
+      previous: "Glucose 180 mg/dL",
+      forbidden: /\(180\)/,
+    },
+  ];
+  incompatibleUnitCases.forEach((testCase) => {
+    const dataset = buildCanonicalLabTimelineDataset(testCase.current, testCase.previous);
+    const lines = formatLabVisualTimelineLines(testCase.current, testCase.previous, {
+      includePlain: true,
+      selectionMode: "complete",
+    });
+    if (dataset.latestItems.some((item) => item.previousValue) || testCase.forbidden.test(lines.join("\n"))) {
+      throw new Error(`incompatible Lab units were rendered as a trend: ${JSON.stringify({ dataset, lines })}`);
+    }
+  });
+
+  const futurePriorDataset = buildCanonicalLabTimelineDataset(
+    "2026-07-20 Glucose 220",
+    "2026-07-21 Glucose 520",
+  );
+  const futurePriorLines = formatLabVisualTimelineLines(
+    "2026-07-20 Glucose 220",
+    "2026-07-21 Glucose 520",
+    { includePlain: true, selectionMode: "complete" },
+  );
+  if (futurePriorDataset.latestItems.some((item) => item.previousValue) || /\(520\)/.test(futurePriorLines.join("\n"))) {
+    throw new Error(`a future Lab result was treated as the immediately prior value: ${JSON.stringify({ futurePriorDataset, futurePriorLines })}`);
+  }
+
+  const sanitizedContext = sanitizePatientContext({
+    age: "",
+    sex: "",
+    pmh: "DM; CKD3\nHFrEF EF35%",
+    activeProblems: "DKA; AKI",
+    labFacts: ["[lab-glucose]; Glucose 220; previous 520"],
+  });
+  if (sanitizedContext?.pmh.length !== 3 || sanitizedContext.activeProblems.length !== 2) {
+    throw new Error(`string PMH/active problems were erased by the callable sanitizer: ${JSON.stringify(sanitizedContext)}`);
+  }
+  const mergedContext = mergePatientContext(
+    { age: 68, sex: "F", pmh: "stored PMH", activeProblems: "stored problem" },
+    sanitizePatientContext({ age: "", sex: "", pmh: [], activeProblems: [] }),
+  );
+  if (mergedContext.age !== 68 || mergedContext.pmh !== "stored PMH" || mergedContext.activeProblems !== "stored problem") {
+    throw new Error(`empty client context overwrote stored clinical context: ${JSON.stringify(mergedContext)}`);
+  }
+
+  const compactPatient = compactPatientContext({
+    newLabs: "",
+    rawLabText: "Cr 2.1",
+    parsedLabItems: [],
+    activeProblems: "",
+    activeProblemItems: ["DKA"],
+    activeProblemStructuredItems: [{ title: "AKI" }],
+  });
+  const compactNote = compactDailyNote("2026-07-20", { rawLabText: "", labSummary: "K 5.5" });
+  if (compactPatient.latestLabs !== "Cr 2.1" || compactNote.labs !== "K 5.5" || !/DKA/.test(compactPatient.activeProblems) || !/AKI/.test(compactPatient.activeProblems)) {
+    throw new Error(`empty strings hid the available Lab fallback: ${JSON.stringify({ compactPatient, compactNote })}`);
+  }
+
+  const sourceIdOnly = parseStructuredRoundSoapDraft({
+    headerLines: [],
+    subjectiveLines: [],
+    objective: {
+      vitalSigns: [],
+      physicalExam: [],
+      labs: [{ panel: "Other", values: "", sourceIds: ["lab-glucose"] }],
+      microbiology: [],
+      imaging: [],
+      pathology: [],
+      other: [],
+    },
+    assessmentPlan: [],
+    orders: [],
+    tasks: [],
+    discharge: [],
+    warnings: [],
+    highlightHints: [],
+  });
+  if (sourceIdOnly.objective.labs[0]?.sourceIds[0] !== "lab-glucose") {
+    throw new Error(`a valid source-owned Lab selection was discarded because explanatory values were blank: ${JSON.stringify(sourceIdOnly)}`);
+  }
+  console.log("PASS AI Lab context keeps active problems, current source IDs, and prior values");
+  supplementalPasses += 1;
+} catch (error) {
+  failures.push({ name: "AI Lab context and source ownership", error: error instanceof Error ? error.message : String(error) });
+  console.error(`FAIL AI Lab context and source ownership: ${failures[failures.length - 1].error}`);
 }
 
 try {
@@ -6544,6 +6864,973 @@ try {
 } catch (error) {
   failures.push({ name: "Canonical and audited SOAP safety", error: error instanceof Error ? error.message : String(error) });
   console.error(`FAIL Canonical and audited SOAP safety: ${failures[failures.length - 1].error}`);
+}
+
+try {
+  const baseline = [
+    "Dx: PNA / sepsis + AKI / hyperK",
+    "Code: DNR | Allergy: Penicillin | Isolation: Contact | HD/POD: HD 3",
+    "S:",
+    "- No fever overnight.",
+    "O:",
+    "- Lab: CBC/DC: WBC 13.0, Hb 10.0, Plt 180",
+    "- Lab: Chem/Renal: Cr 1.6, Na 140, K 5.5",
+    "A/P:",
+    "# PNA / sepsis",
+    "- Active, B/C pending.",
+    "- Ceftriaxone current; f/u B/C.",
+    "# AKI / hyperkalemia",
+    "- Active, Cr 1.6, K 5.5.",
+    "- ECG pending; avoid nephrotoxins.",
+    "Tasks:",
+    "- f/u B/C result",
+    "- f/u ECG",
+    "DC:",
+    "- Placement barrier unresolved.",
+  ].join("\n");
+  const emptyCandidate = () => ({
+    headerLines: ["Dx: PNA / sepsis + AKI / hyperK"],
+    subjectiveLines: [],
+    objective: {
+      vitalSigns: [],
+      physicalExam: [],
+      labs: [],
+      microbiology: [],
+      imaging: [],
+      pathology: [],
+      other: [],
+    },
+    assessmentPlan: [],
+    orders: [],
+    tasks: [],
+    discharge: [],
+    warnings: [],
+    highlightHints: [],
+  });
+  const completeCandidate = emptyCandidate();
+  completeCandidate.assessmentPlan = [
+    {
+      problemTitle: "AKI / hyperkalemia",
+      status: "worsening",
+      summary: "Cr 2.0 and K 6.1.",
+      plan: "Start urgent dialysis and stop all antibiotics.",
+      sourceEvidence: ["Cr 2.0 K 6.1"],
+    },
+    {
+      problemTitle: "PNA / sepsis",
+      status: "improving",
+      summary: "WBC 10.0.",
+      plan: "Continue ceftriaxone; f/u B/C.",
+      sourceEvidence: ["WBC 10.0"],
+    },
+  ];
+  const sparseCandidate = emptyCandidate();
+  sparseCandidate.assessmentPlan = [{
+    problemTitle: "AKI / hyperkalemia",
+    status: "stable",
+    summary: "Renal issue.",
+    plan: "Start urgent dialysis and stop all antibiotics.",
+    sourceEvidence: ["AKI"],
+  }];
+  const sourceFields = { labs: "WBC 10.0 Hb 9.8 Plt 175 Cr 2.0 Na 139 K 6.1" };
+  const acceptedVariants = [completeCandidate, sparseCandidate, emptyCandidate()].map((value) =>
+    acceptStructuredRoundSoap({
+      value,
+      baselineText: baseline,
+      sourceFields,
+      workflowMode: "dailyUpdate",
+    }),
+  );
+  const signatures = acceptedVariants.map((accepted, index) => {
+    if (accepted.fatalErrors.length > 0) {
+      throw new Error(`variant ${index} was rejected: ${accepted.fatalErrors.join(" | ")}`);
+    }
+    const text = editorDraftToSoapText(accepted.draft);
+    for (const required of [
+      /WBC 10\.0[^\n]*\(13\.0\)/i,
+      /Cr 2\.0[^\n]*\(1\.6\)/i,
+      /K 6\.1[^\n]*\(5\.5\)/i,
+      /# PNA \/ sepsis/i,
+      /# AKI \/ hyperkalemia/i,
+      /f\/u B\/C result/i,
+      /f\/u ECG/i,
+      /Placement barrier unresolved/i,
+    ]) {
+      if (!required.test(text)) throw new Error(`variant ${index} lost ${required}:\n${text}`);
+    }
+    if (/urgent dialysis|stop all antibiotics/i.test(text)) {
+      throw new Error(`variant ${index} accepted an unsupported high-risk plan:\n${text}`);
+    }
+    if ((text.match(/^# .*hyperkalemia/im) ?? []).length > 1) {
+      throw new Error(`variant ${index} duplicated a combined renal problem:\n${text}`);
+    }
+    const view = buildRoundNoteViewModel(text);
+    if (!/AKI|hyperkalemia/i.test(view.assessmentPlan[0]?.title.text ?? "")) {
+      throw new Error(`variant ${index} did not project the current renal threat first: ${view.assessmentPlan.map((problem) => problem.title.text).join(" | ")}`);
+    }
+    return JSON.stringify({
+      firstProblem: view.assessmentPlan[0]?.title.text,
+      problemTitles: view.assessmentPlan.map((problem) => problem.title.text).sort(),
+      hasCurrentCbc: /WBC 10\.0[^\n]*\(13\.0\)/i.test(text),
+      hasCurrentRenal: /Cr 2\.0[^\n]*\(1\.6\).*K 6\.1[^\n]*\(5\.5\)|K 6\.1[^\n]*\(5\.5\).*Cr 2\.0[^\n]*\(1\.6\)/i.test(text),
+      tasks: [/f\/u B\/C result/i, /f\/u ECG/i].map((pattern) => pattern.test(text)),
+      dc: /Placement barrier unresolved/i.test(text),
+    });
+  });
+  if (new Set(signatures).size !== 1) {
+    throw new Error(`same source produced different clinical safety signatures: ${signatures.join("\n")}`);
+  }
+  console.log("PASS Structured candidate matrix keeps the same source-owned labs, critical A/P priority, tasks, and DC barriers");
+  supplementalPasses += 1;
+} catch (error) {
+  failures.push({ name: "Structured candidate clinical stability matrix", error: error instanceof Error ? error.message : String(error) });
+  console.error(`FAIL Structured candidate clinical stability matrix: ${failures[failures.length - 1].error}`);
+}
+
+try {
+  const value = {
+    headerLines: ["Dx: sepsis + AKI"],
+    subjectiveLines: ["Weakness"],
+    objective: {
+      vitalSigns: [],
+      physicalExam: [],
+      labs: [],
+      microbiology: [],
+      imaging: [],
+      pathology: [],
+      other: [],
+    },
+    assessmentPlan: [
+      {
+        problemTitle: "Stable hypertension",
+        status: "stable",
+        summary: "BP controlled.",
+        plan: "Continue current regimen.",
+        sourceEvidence: ["Stable hypertension BP controlled continue current regimen"],
+      },
+      {
+        problemTitle: "PNA / sepsis",
+        status: "improving",
+        summary: "WBC improving.",
+        plan: "Continue ceftriaxone; f/u B/C.",
+        sourceEvidence: ["PNA sepsis WBC improving ceftriaxone B/C"],
+      },
+      {
+        problemTitle: "AKI / hyperkalemia",
+        status: "worsening",
+        summary: "Cr 2.0 and K 6.1.",
+        plan: "Start urgent dialysis and stop all antibiotics.",
+        sourceEvidence: ["AKI hyperkalemia Cr 2.0 K 6.1"],
+      },
+    ],
+    orders: ["ceftriaxone"],
+    tasks: ["f/u B/C"],
+    discharge: [],
+    warnings: ["Code status conflicting in source"],
+    highlightHints: [],
+  };
+  const accepted = acceptStructuredRoundSoap({
+    value,
+    baselineText: "",
+    sourceFields: {
+      labs: "WBC 10 Hb 9 Plt 170 Cr 2.0 Na 139 K 6.1",
+      orders: "continue ceftriaxone",
+      other: "PNA sepsis improving; B/C pending. AKI hyperkalemia worsening. Stable hypertension, BP controlled, continue current regimen. Warning: Code status conflicting in source. Code: DNR | Allergy: Penicillin | Isolation: Contact | HD/POD: HD 3",
+    },
+    workflowMode: "newSoap",
+    activeProblemContext: "Stable hypertension\nPNA / sepsis\nAKI / hyperkalemia",
+  });
+  const text = editorDraftToSoapText(accepted.draft);
+  const akiIndex = text.search(/^!!?\s*# AKI \/ hyperkalemia/im);
+  const sepsisIndex = text.search(/^!!?\s*# PNA \/ sepsis/im);
+  const stableIndex = text.search(/^# Stable hypertension/im);
+  if (!(akiIndex >= 0 && sepsisIndex > akiIndex && stableIndex > sepsisIndex)) {
+    throw new Error(`A/P status priority was not deterministic:\n${text}`);
+  }
+  for (const status of [/\bWorsening\b/i, /\bimproving\b/i, /\bStable\b/i]) {
+    if (!status.test(text)) throw new Error(`structured status ${status} disappeared:\n${text}`);
+  }
+  for (const safety of ["Code: DNR", "Allergy: Penicillin", "Isolation: Contact", "HD/POD: HD 3"]) {
+    if (!text.includes(safety)) throw new Error(`source-grounded header safety field disappeared: ${safety}\n${text}`);
+  }
+  if (/urgent dialysis|stop all antibiotics/i.test(text)) {
+    throw new Error(`unsupported treatment survived the structured plan gate:\n${text}`);
+  }
+  const view = buildRoundNoteViewModel(text);
+  if (!view.header.some((line) => /^Red flags:.*Code status conflicting/i.test(line.raw))) {
+    throw new Error(`stored source conflict was not projected to the shared warning/header path: ${view.header.map((line) => line.raw).join(" | ")}`);
+  }
+  if (!/AKI|hyperkalemia/i.test(view.assessmentPlan[0]?.title.text ?? "")) {
+    throw new Error(`shared Board/Preview/Print projection did not rank worsening AKI first: ${view.assessmentPlan.map((problem) => problem.title.text).join(" | ")}`);
+  }
+  console.log("PASS Structured status, source-grounded safety header, warning projection, and unsupported-plan blocking");
+  supplementalPasses += 1;
+} catch (error) {
+  failures.push({ name: "Structured status and safety projection", error: error instanceof Error ? error.message : String(error) });
+  console.error(`FAIL Structured status and safety projection: ${failures[failures.length - 1].error}`);
+}
+
+try {
+  const date = "2026-07-29";
+  const sourceDate = "2026-07-27";
+  const patient = {
+    ...emptyPatient(),
+    id: "synthetic-carried-soap",
+    patientCode: "SYN-CARRY",
+    bed: "C-01",
+    age: 70,
+    sex: "F",
+  };
+  const historicalSoap = [
+    "Dx: AKI / electrolyte disorder",
+    "Code: Full | Allergy: NKDA",
+    "S:",
+    "- Fever overnight.",
+    "O:",
+    "- V/S: T 39 C",
+    "- Lab: Chem/Renal: BUN 30, Cr 2.1, eGFR 25, Na 130, K 5.8, Cl 100, Ca 8.0, Mg 1.8, P 5.2, Uric acid 9.0, Osm 310",
+    "A/P:",
+    "# AKI / electrolyte disorder",
+    "- Active.",
+    "Warnings:",
+    "- Code status conflicting in source.",
+  ].join("\n");
+  const note = {
+    ...emptyDailyNote(sourceDate),
+    soapText: historicalSoap,
+    soapStatus: "reviewed",
+    soapUpdatedAt: nowIso(),
+  };
+  const canonical = getCanonicalSoapText(patient, [note], date);
+  if (canonical.source !== "latest" || canonical.sourceDate !== sourceDate || canonical.isCurrentDate) {
+    throw new Error(`historical SOAP source metadata was wrong: ${JSON.stringify(canonical)}`);
+  }
+  const carriedDraft = patientToSoapDraft(patient, [note], date);
+  if (!carriedDraft.header.includes(`Carried from: ${sourceDate}`)) {
+    throw new Error(`historical S/O could still masquerade as current: ${JSON.stringify(carriedDraft.header)}`);
+  }
+  const carriedView = buildRoundNoteViewModel(formatSoapDraft(carriedDraft));
+  const displayedHeader = soapHeaderLinesForDisplay(carriedView.header.map((line) => line.raw), {}, { maxLines: 20 });
+  if (!displayedHeader.includes(`Carried from: ${sourceDate}`)) {
+    throw new Error(`shared display path hid the carried-forward date: ${JSON.stringify(displayedHeader)}`);
+  }
+  if (!carriedView.header.some((line) => /^Red flags:.*Code status conflicting/i.test(line.raw))) {
+    throw new Error(`stored warning disappeared from the historical shared projection: ${carriedView.header.map((line) => line.raw).join(" | ")}`);
+  }
+  const labLines = carriedDraft.oLines.filter((line) => /^!{0,2}\s*Lab:/i.test(line));
+  for (const density of ["detail", "board", "print"]) {
+    const html = renderToStaticMarkup(React.createElement(ClinicalLabTable, { density, lines: labLines }));
+    for (const label of ["BUN", "Cr", "eGFR", "Na", "K", "Cl", "Ca", "Mg", "P", "Uric acid", "Osm"]) {
+      if (!html.includes(`>${label}<`)) {
+        throw new Error(`${density} performed a second Lab truncation and hid ${label}: ${html}`);
+      }
+    }
+  }
+  console.log("PASS Historical SOAP is date-labeled and complete accepted Lab facts survive Detail, Board, and Print");
+  supplementalPasses += 1;
+} catch (error) {
+  failures.push({ name: "Historical SOAP and complete cross-surface Lab projection", error: error instanceof Error ? error.message : String(error) });
+  console.error(`FAIL Historical SOAP and complete cross-surface Lab projection: ${failures[failures.length - 1].error}`);
+}
+
+try {
+  const overflow = parseStructuredRoundSoapDraft({
+    headerLines: [],
+    subjectiveLines: [],
+    objective: {
+      vitalSigns: [],
+      physicalExam: [],
+      labs: [],
+      microbiology: [],
+      imaging: [],
+      pathology: [],
+      other: [],
+    },
+    assessmentPlan: Array.from({ length: 7 }, (_, index) => ({
+      problemTitle: index === 6 ? "Hyperkalemia K 6.8" : `Routine problem ${index + 1}`,
+      status: index === 6 ? "worsening" : "stable",
+      summary: index === 6 ? "K 6.8." : "Stable.",
+      plan: "",
+      sourceEvidence: index === 6 ? ["K 6.8"] : ["stable"],
+    })),
+    orders: [],
+    tasks: [],
+    discharge: [],
+    warnings: [],
+    highlightHints: [],
+  });
+  if (overflow.assessmentPlan.length !== 7 || !/Hyperkalemia/i.test(overflow.assessmentPlan[6]?.problemTitle ?? "")) {
+    throw new Error(`server parser silently truncated the critical seventh problem: ${JSON.stringify(overflow.assessmentPlan)}`);
+  }
+  const composerSource = readFileSync("src/components/RoundSoapComposer.tsx", "utf8");
+  if (!/Unvalidated AI SOAP was not applied/.test(composerSource) || !/structured source validation was unavailable/.test(composerSource)) {
+    throw new Error("cloud text-only SOAP no longer fails closed to the reviewed baseline");
+  }
+  console.log("PASS Critical overflow survives server parsing and cloud text-only AI fails closed");
+  supplementalPasses += 1;
+} catch (error) {
+  failures.push({ name: "Structured overflow and fail-closed legacy response", error: error instanceof Error ? error.message : String(error) });
+  console.error(`FAIL Structured overflow and fail-closed legacy response: ${failures[failures.length - 1].error}`);
+}
+
+try {
+  const jointFluidSource = "Joint fluid: WBC 35820 cells/uL, PMN 91%, RBC 12000 /uL, crystals negative";
+  const parsed = parseLabText(jointFluidSource);
+  const byKey = new Map(parsed.map((item) => [specimenAwareLabSelectionKey(item), item]));
+  for (const [key, expected] of [
+    ["synovial-fluid|wbc", "35820"],
+    ["synovial-fluid|rbc", "12000"],
+    ["synovial-fluid|pmn", "91%"],
+    ["synovial-fluid|crystals", "negative"],
+  ]) {
+    if (byKey.get(key)?.value !== expected) {
+      throw new Error(`joint-fluid source fact ${key} was lost or relabeled: ${JSON.stringify(parsed)}`);
+    }
+  }
+  const visual = formatLabVisualSummaryLinesFromText(jointFluidSource, {
+    includePlain: true,
+    selectionMode: "complete",
+  }).join("\n");
+  if (!/Fluid studies:.*Joint fluid WBC 35820.*Joint fluid PMN 91%.*Joint fluid crystals negative/i.test(visual)) {
+    throw new Error(`joint-fluid diagnostic panel was incomplete: ${visual}`);
+  }
+  if (/CBC\/DC|35\.82k|WBC 35820[↑↓]|Crit/i.test(visual)) {
+    throw new Error(`joint-fluid WBC was rendered as peripheral blood WBC: ${visual}`);
+  }
+  const classification = classifyClinicalLine("Joint fluid WBC 35820", { fallbackKind: "lab" });
+  if (classification.kind !== "lab" || classification.tone === "critical") {
+    throw new Error(`joint-fluid WBC inherited a peripheral critical rule: ${JSON.stringify(classification)}`);
+  }
+  for (const [line, expectedKind] of [
+    ["CXR: right pleural effusion 2 cm", "image"],
+    ["CT: ascites 500 mL", "image"],
+    ["US: knee effusion 3 cm", "image"],
+    ["Procedure: BAL 20 mL returned", "other"],
+  ]) {
+    const result = classifyClinicalLine(line, { fallbackKind: "lab" });
+    if (result.kind !== expectedKind) throw new Error(`study/procedure intent was overridden by a specimen word: ${line} -> ${JSON.stringify(result)}`);
+  }
+  for (const line of ["Pleural fluid: WBC 800 /uL", "BAL: WBC 300 /uL"]) {
+    if (classifyClinicalLine(line, { fallbackKind: "other" }).kind !== "lab") {
+      throw new Error(`actual specimen result was not classified as Lab: ${line}`);
+    }
+  }
+  for (const density of ["detail", "board", "print"]) {
+    const html = renderToStaticMarkup(React.createElement(ClinicalLabTable, {
+      density,
+      lines: [`Lab: ${visual}`],
+    }));
+    for (const label of ["Joint fluid WBC", "Joint fluid PMN", "Joint fluid RBC", "Joint fluid crystals"]) {
+      if (!html.includes(`>${label}<`)) throw new Error(`${density} lost ${label}: ${html}`);
+    }
+  }
+  const mixedSpecimens = parseLabText("WBC 8.1, Joint fluid WBC 35820, PMN 91%, crystals negative");
+  const mixedKeys = new Set(mixedSpecimens.map(specimenAwareLabSelectionKey));
+  if (!mixedKeys.has("blood|wbc") || !mixedKeys.has("synovial-fluid|wbc")) {
+    throw new Error(`same-line blood and joint-fluid WBC were merged: ${JSON.stringify(mixedSpecimens)}`);
+  }
+  const multiline = parseLabText(["Joint fluid:", "WBC 35820", "PMN 91%", "crystals negative"].join("\n"));
+  if (!multiline.every((item) => specimenAwareLabSelectionKey(item).startsWith("synovial-fluid|"))) {
+    throw new Error(`multiline joint-fluid heading did not persist: ${JSON.stringify(multiline)}`);
+  }
+  const chineseJointHeading = `${String.fromCharCode(0x95dc, 0x7bc0, 0x6db2)}: WBC 35820, PMN 91%`;
+  if (!parseLabText(chineseJointHeading).every((item) => specimenAwareLabSelectionKey(item).startsWith("synovial-fluid|"))) {
+    throw new Error("Traditional-Chinese joint-fluid heading lost specimen identity");
+  }
+  const unknownFluid = parseLabText("Drain fluid: WBC 820, Amylase 450, appearance cloudy");
+  const unknownKeys = new Set(unknownFluid.map(specimenAwareLabSelectionKey));
+  if (!["wbc", "amylase", "appearance"].every((analyte) =>
+    [...unknownKeys].some((key) => key.startsWith("other-fluid:drain-fluid|") && key.endsWith(`|${analyte}`)))) {
+    throw new Error(`unknown body-fluid findings were dropped instead of source-preserved: ${JSON.stringify(unknownFluid)}`);
+  }
+  const sentenceFluid = parseLabText("Joint fluid: WBC 35820 cells/uL. PMN 91%. RBC 12000 /uL. Crystals negative.");
+  const sentenceKeys = new Set(sentenceFluid.map(specimenAwareLabSelectionKey));
+  for (const key of ["synovial-fluid|wbc", "synovial-fluid|pmn", "synovial-fluid|rbc", "synovial-fluid|crystals"]) {
+    if (!sentenceKeys.has(key)) throw new Error(`period-delimited joint-fluid panel lost ${key}: ${JSON.stringify(sentenceFluid)}`);
+  }
+  if ([...sentenceKeys].some((key) => /wbc35820|pmn91|rbc12000/i.test(key))) {
+    throw new Error(`period-delimited fluid fields collapsed into a bogus analyte: ${JSON.stringify(sentenceFluid)}`);
+  }
+  const sentenceSputum = parseLabText("Sputum: WBC 500 /uL. Epithelial cells 6 /HPF. Gram stain negative.");
+  const sputumKeys = new Set(sentenceSputum.map(specimenAwareLabSelectionKey));
+  for (const analyte of ["wbc", "epithelialcells", "gramstain"]) {
+    if (![...sputumKeys].some((key) => key === `other-specimen:sputum|${analyte}`)) {
+      throw new Error(`period-delimited sputum panel lost ${analyte}: ${JSON.stringify(sentenceSputum)}`);
+    }
+  }
+  console.log("PASS Joint-fluid WBC/RBC/PMN/crystals retain specimen identity without peripheral CBC interpretation");
+  supplementalPasses += 1;
+} catch (error) {
+  failures.push({ name: "Joint-fluid specimen identity and shared rendering", error: error instanceof Error ? error.message : String(error) });
+  console.error(`FAIL Joint-fluid specimen identity and shared rendering: ${failures[failures.length - 1].error}`);
+}
+
+try {
+  const currentLines = [
+    "2026-07-30 WBC 8.1 k/uL",
+    "2026-07-30 Joint fluid: WBC 35820 cells/uL, RBC 12000 /uL",
+    "2026-07-30 CSF: WBC 12 /uL, RBC 2 /uL",
+    "2026-07-30 ABG: pH 7.31, pCO2 48",
+    "2026-07-30 VBG: pH 7.27, pCO2 55",
+  ];
+  const priorLines = [
+    "2026-07-29 WBC 7.4 k/uL",
+    "2026-07-29 Joint fluid: WBC 22000 cells/uL, RBC 8000 /uL",
+    "2026-07-29 CSF: WBC 20 /uL, RBC 4 /uL",
+    "2026-07-29 ABG: pH 7.25, pCO2 52",
+    "2026-07-29 VBG: pH 7.22, pCO2 60",
+  ];
+  const timeline = buildCanonicalLabTimelineDataset(currentLines.join("\n"), priorLines.join("\n"));
+  const timelineByKey = new Map(timeline.latestItems.map((item) => [specimenAwareLabSelectionKey(item), item]));
+  for (const [key, expectedCurrent, expectedPrior] of [
+    ["blood|wbc", "8.1", "7.4"],
+    ["synovial-fluid|wbc", "35820", "22000"],
+    ["csf|wbc", "12", "20"],
+    ["abg|ph", "7.31", "7.25"],
+    ["vbg|ph", "7.27", "7.22"],
+  ]) {
+    const item = timelineByKey.get(key);
+    if (item?.value !== expectedCurrent || item.previousValue !== expectedPrior) {
+      throw new Error(`${key} crossed specimen history: ${JSON.stringify(item)}`);
+    }
+  }
+  const forwardIds = buildCanonicalLabDataset(currentLines.join("\n")).allItems.map((item) => item.id).sort();
+  const reverseIds = buildCanonicalLabDataset([...currentLines].reverse().join("\n")).allItems.map((item) => item.id).sort();
+  if (JSON.stringify(forwardIds) !== JSON.stringify(reverseIds)) {
+    throw new Error(`content-derived source IDs changed with line order: ${forwardIds.join(" | ")} vs ${reverseIds.join(" | ")}`);
+  }
+
+  const specimenMatrix = [
+    ["Blood", "blood"],
+    ["Urine", "urine"],
+    ["CSF", "csf"],
+    ["Pleural fluid", "pleural-fluid"],
+    ["Ascitic fluid", "ascitic-fluid"],
+    ["Joint fluid", "synovial-fluid"],
+  ].map(([label], index) =>
+    `2026-07-30 ${label}: WBC ${100 + index}, RBC ${200 + index}, Glucose ${60 + index}, Protein ${2 + index}, LDH ${150 + index}`,
+  ).join("\n");
+  const matrixItems = buildCanonicalLabDataset(specimenMatrix).latestItems;
+  const matrixKeys = new Set(matrixItems.map(specimenAwareLabSelectionKey));
+  for (const [, specimen] of [
+    ["Blood", "blood"], ["Urine", "urine"], ["CSF", "csf"],
+    ["Pleural fluid", "pleural-fluid"], ["Ascitic fluid", "ascitic-fluid"], ["Joint fluid", "synovial-fluid"],
+  ]) {
+    for (const analyte of ["wbc", "rbc", "glucose", "protein", "ldh"]) {
+      if (!matrixKeys.has(`${specimen}|${analyte}`)) throw new Error(`30-cell specimen matrix lost ${specimen}|${analyte}`);
+    }
+  }
+  console.log("PASS Same-analyte trends stay within blood/joint/CSF/ABG/VBG and source IDs are order-stable");
+  supplementalPasses += 1;
+} catch (error) {
+  failures.push({ name: "Specimen-aware trend and order-stability matrix", error: error instanceof Error ? error.message : String(error) });
+  console.error(`FAIL Specimen-aware trend and order-stability matrix: ${failures[failures.length - 1].error}`);
+}
+
+try {
+  const source = [
+    "2026-07-29 Joint fluid: WBC 22000 cells/uL, PMN 84%, RBC 8000 /uL, crystals negative",
+    "2026-07-30 Joint fluid: WBC 35820 cells/uL, PMN 91%, RBC 12000 /uL, crystals negative",
+  ].join("\n");
+  const dataset = buildCanonicalLabDataset(source);
+  const sourceIds = dataset.latestItems.map((item) => item.id);
+  const candidate = (status, labs) => ({
+    headerLines: ["Synthetic joint-fluid review"],
+    subjectiveLines: ["Joint pain documented."],
+    objective: {
+      vitalSigns: [], physicalExam: [], labs, microbiology: [], imaging: [], pathology: [], other: [],
+    },
+    assessmentPlan: [{
+      problemTitle: "Septic arthritis concern",
+      status,
+      summary: "Joint aspirate requires source-grounded interpretation.",
+      plan: "Follow the documented culture and treatment plan.",
+      sourceEvidence: ["Septic arthritis concern"],
+    }],
+    orders: [], tasks: [], discharge: [], warnings: [], highlightHints: [],
+  });
+  const variants = [
+    candidate("improving", [{ panel: "Fluid studies", values: "model rewrite", sourceIds }]),
+    candidate("worsening", []),
+    candidate("worsening", [{ panel: "CBC/DC", values: "WBC 999, RBC 1, crystals positive", sourceIds: sourceIds.slice(0, 1) }]),
+  ].map((value) => acceptStructuredRoundSoap({
+    value,
+    baselineText: "",
+    sourceFields: { labs: source, other: "Septic arthritis concern; joint culture pending." },
+    workflowMode: "newSoap",
+    activeProblemContext: "Septic arthritis concern",
+  }));
+  const texts = variants.map((result) => editorDraftToSoapText(result.draft));
+  const labSignatures = texts.map((text) => parseSoapText(text).oLines.filter((line) => /Lab: Fluid studies:/i.test(line)).join("\n"));
+  if (variants.some((result) => result.fatalErrors.length > 0) || labSignatures.some((line) => !line)) {
+    throw new Error(`candidate variance removed the source-owned fluid panel: ${texts.join("\n---\n")}`);
+  }
+  if (new Set(labSignatures).size !== 1 || texts.some((text) => /\b999\b|RBC 1\b|crystals positive/i.test(text))) {
+    throw new Error(`complete/sparse/contradictory candidates changed exact fluid facts: ${texts.join("\n---\n")}`);
+  }
+  if (texts.some((text) => !/\bActive\b/i.test(text) || /\b(?:Improving|Worsening)\b/i.test(text))) {
+    throw new Error(`unsupported model trajectory changed the accepted status: ${texts.join("\n---\n")}`);
+  }
+  console.log("PASS Complete, sparse, and contradictory AI candidates converge to one source-owned fluid panel and trajectory");
+  supplementalPasses += 1;
+} catch (error) {
+  failures.push({ name: "AI candidate variance convergence for fluid studies", error: error instanceof Error ? error.message : String(error) });
+  console.error(`FAIL AI candidate variance convergence for fluid studies: ${failures[failures.length - 1].error}`);
+}
+
+try {
+  const sourceFields = {
+    labs: "2026-07-30 Joint fluid: WBC 35820 cells/uL, PMN 91%, crystals negative",
+    other: "Problem: Septic arthritis. Pain improved; PE: Knee remains swollen; repeat aspiration tomorrow; rehab placement pending; joint culture pending.",
+    orders: "Continue vancomycin\nf/u joint culture",
+  };
+  const blank = () => ({
+    headerLines: [], subjectiveLines: [],
+    objective: { vitalSigns: [], physicalExam: [], labs: [], microbiology: [], imaging: [], pathology: [], other: [] },
+    assessmentPlan: [], orders: [], tasks: [], discharge: [], warnings: [], highlightHints: [],
+  });
+  const full = blank();
+  full.headerLines = ["Dx: Septic arthritis"];
+  full.subjectiveLines = ["Pain improved"];
+  full.objective.physicalExam = ["Knee remains swollen"];
+  full.assessmentPlan = [{
+    problemTitle: "Septic arthritis",
+    status: "improving",
+    summary: "Pain improved; knee remains swollen.",
+    plan: "",
+    sourceEvidence: ["Septic arthritis", "Pain improved"],
+  }];
+  full.tasks = ["repeat aspiration tomorrow"];
+  full.discharge = ["rehab placement pending"];
+  full.highlightHints = ["Joint fluid WBC 35820"];
+
+  const adversarial = blank();
+  adversarial.subjectiveLines = ["New seizure"];
+  adversarial.objective.physicalExam = ["Meningismus"];
+  adversarial.objective.microbiology = ["Blood culture MRSA positive"];
+  adversarial.objective.imaging = [{ study: "CT brain", date: "today", finding: "ICH" }];
+  adversarial.assessmentPlan = [{
+    problemTitle: "Septic arthritis",
+    status: "worsening",
+    summary: "New neurologic deterioration.",
+    plan: "Stop vancomycin; urgent dialysis.",
+    sourceEvidence: ["Septic arthritis"],
+  }];
+  adversarial.tasks = ["Urgent LP", "Order MRI brain", "Transfuse 2U PRBC"];
+  adversarial.discharge = ["ICU transfer"];
+  adversarial.warnings = ["Active intracranial hemorrhage"];
+  adversarial.highlightHints = ["CT brain ICH"];
+
+  const accepted = [full, blank(), adversarial].map((value) => acceptStructuredRoundSoap({
+    value,
+    baselineText: "",
+    sourceFields,
+    workflowMode: "newSoap",
+    activeProblemContext: "Septic arthritis",
+  }));
+  const texts = accepted.map((result) => editorDraftToSoapText(result.draft));
+  if (accepted.some((result) => result.fatalErrors.length > 0) || new Set(texts).size !== 1) {
+    throw new Error(`same source did not converge after complete/empty/adversarial AI candidates:\n${texts.join("\n---\n")}`);
+  }
+  const text = texts[0];
+  for (const required of [
+    /# Septic arthritis/i, /Joint fluid WBC 35820/i, /Pain improved/i,
+    /Knee remains swollen/i, /repeat aspiration tomorrow/i, /rehab placement pending/i,
+    /Continue vancomycin/i, /joint culture pending/i,
+  ]) {
+    if (!required.test(text)) throw new Error(`source-owned New SOAP fact disappeared (${required}):\n${text}`);
+  }
+  if (/seizure|meningismus|MRSA|ICH|urgent LP|MRI brain|Transfuse|urgent dialysis|stop vancomycin|ICU transfer/i.test(text)) {
+    throw new Error(`candidate-only New SOAP fact survived source grounding:\n${text}`);
+  }
+  const semicolonSourceFields = {
+    other: "Problem: Septic arthritis. Pain improved; repeat aspiration tomorrow; rehab placement pending.",
+  };
+  const semicolonCandidate = blank();
+  semicolonCandidate.subjectiveLines = ["Pain improved"];
+  const semicolonTexts = [semicolonCandidate, blank()].map((value) => editorDraftToSoapText(acceptStructuredRoundSoap({
+    value,
+    baselineText: "",
+    sourceFields: semicolonSourceFields,
+    workflowMode: "newSoap",
+    activeProblemContext: "Septic arthritis",
+  }).draft));
+  if (new Set(semicolonTexts).size !== 1 || !/Pain improved/i.test(semicolonTexts[0]) ||
+      !/repeat aspiration tomorrow/i.test(semicolonTexts[0]) || !/rehab placement pending/i.test(semicolonTexts[0])) {
+    throw new Error(`semicolon-form source facts remained candidate-dependent:\n${semicolonTexts.join("\n---\n")}`);
+  }
+  for (const { title, plan } of [
+    { title: "Poor oral intake", plan: "Encourage oral intake." },
+    { title: "Dysphagia", plan: "Maintain aspiration precautions." },
+    { title: "Wound care need", plan: "Daily wound care." },
+  ]) {
+    const candidate = blank();
+    candidate.assessmentPlan = [{
+      problemTitle: title,
+      status: "stable",
+      summary: title,
+      plan,
+      sourceEvidence: [title],
+    }];
+    const acceptedPlanText = editorDraftToSoapText(acceptStructuredRoundSoap({
+      value: candidate,
+      baselineText: "",
+      sourceFields: { other: `Problem: ${title}. ${plan}` },
+      workflowMode: "newSoap",
+      activeProblemContext: title,
+    }).draft);
+    if (!acceptedPlanText.includes(plan)) {
+      throw new Error(`first grounded A/P plan disappeared after source acceptance (${plan}):\n${acceptedPlanText}`);
+    }
+  }
+  const normalizedBloodPressure = normalizeRoundSoapSourceFields({ other: "Blood pressure 120/80" });
+  const acceptedBloodPressure = editorDraftToSoapText(acceptStructuredRoundSoap({
+    value: blank(),
+    baselineText: "",
+    sourceFields: { other: "Blood pressure 120/80" },
+    workflowMode: "newSoap",
+  }).draft);
+  if (!/Blood pressure 120\/80/i.test(normalizedBloodPressure.vitals) ||
+      !/V\/S:.*(?:BP|Blood pressure) 120\/80/i.test(acceptedBloodPressure)) {
+    throw new Error(`shared SOAP objective routing dropped a spelled-out blood pressure:\n${JSON.stringify(normalizedBloodPressure)}\n${acceptedBloodPressure}`);
+  }
+  console.log("PASS New SOAP complete, empty, and adversarial candidates converge to one source-grounded clinical fact set");
+  supplementalPasses += 1;
+} catch (error) {
+  failures.push({ name: "New SOAP full-candidate source grounding", error: error instanceof Error ? error.message : String(error) });
+  console.error(`FAIL New SOAP full-candidate source grounding: ${failures[failures.length - 1].error}`);
+}
+
+try {
+  const source = [
+    "2026-07-29 WBC 7.0, Hb 12.0, Plt 220, TSH 2.0, SPEP M-spike 0.8, Kappa/lambda ratio 2.4",
+    "2026-07-30 WBC 7.0, Hb 12.0, Plt 220, TSH 2.0, SPEP M-spike 0.8, Kappa/lambda ratio 2.4",
+  ].join("\n");
+  const dataset = buildCanonicalLabDataset(source);
+  const customIds = dataset.latestItems
+    .filter((item) => /M-spike|Kappa\/lambda/i.test(item.name || item.label))
+    .map((item) => item.id);
+  const tshId = dataset.latestItems.find((item) => (item.name || item.label) === "TSH")?.id ?? "";
+  const draft = (sourceIds) => ({
+    headerLines: [], subjectiveLines: [],
+    objective: {
+      vitalSigns: [], physicalExam: [],
+      labs: sourceIds.length ? [{ panel: "Other", values: "source-selected", sourceIds }] : [],
+      microbiology: [], imaging: [], pathology: [], other: [],
+    },
+    assessmentPlan: [], orders: [], tasks: [], discharge: [], warnings: [], highlightHints: [],
+  });
+  const texts = [customIds, [], [tshId]].map((sourceIds) => editorDraftToSoapText(acceptStructuredRoundSoap({
+    value: draft(sourceIds.filter(Boolean)),
+    baselineText: "",
+    sourceFields: { labs: source },
+    workflowMode: "newSoap",
+    activeProblemContext: "Monoclonal gammopathy",
+  }).draft));
+  const signatures = texts.map((text) => {
+    const facts = buildCanonicalLabDataset(parseSoapText(text).oLines.filter((line) => /Lab:/i.test(line)).join("\n")).latestItems;
+    return JSON.stringify(facts
+      .map((item) => [specimenAwareLabSelectionKey(item), item.value, item.previousValue])
+      .sort((left, right) => left[0].localeCompare(right[0])));
+  });
+  if (new Set(signatures).size !== 1) {
+    throw new Error(`valid/empty/different AI Lab selections changed source fact membership or trends: ${signatures.join("\n")}`);
+  }
+  for (const text of texts) {
+    for (const required of [/WBC 7\.0/i, /TSH 2\.0/i, /SPEP M-spike 0\.8/i, /Kappa\/lambda ratio 2\.4/i]) {
+      if (!required.test(text)) throw new Error(`complete novel Lab fact set lost ${required}:\n${text}`);
+    }
+  }
+  const selectedOther = parseSoapText(texts[0]).oLines.find((line) => /Lab: Other:/i.test(line)) ?? "";
+  if (selectedOther.indexOf("SPEP M-spike") > selectedOther.indexOf("TSH 2.0")) {
+    throw new Error(`validated source IDs did not boost novel disease-relevant labs within the complete source panel:\n${selectedOther}`);
+  }
+  console.log("PASS AI may rank validated novel Lab source IDs but cannot change complete membership, values, or immediate-prior trends");
+  supplementalPasses += 1;
+} catch (error) {
+  failures.push({ name: "Bounded AI relevance over complete source-owned Labs", error: error instanceof Error ? error.message : String(error) });
+  console.error(`FAIL Bounded AI relevance over complete source-owned Labs: ${failures[failures.length - 1].error}`);
+}
+
+try {
+  const mixed = buildCanonicalLabDataset([
+    "2026-07-30 Blood: WBC 8.1 k/uL",
+    "2026-07-30 Sputum WBC 50 /uL, Epithelial cells 6",
+    "2026-07-30 Semen WBC 50 /uL",
+    "2026-07-30 Wound swab WBC 50 /uL",
+    "2026-07-30 PD effluent WBC 50 cells/uL",
+    "2026-07-30 Bronchial washing WBC 50 /uL",
+    "2026-07-30 Bone marrow WBC 50 /uL",
+  ].join("\n"));
+  const mixedKeys = new Set(mixed.latestItems.map(specimenAwareLabSelectionKey));
+  if (!mixedKeys.has("blood|wbc")) throw new Error(`peripheral WBC disappeared: ${JSON.stringify(mixed.latestItems)}`);
+  for (const scope of ["sputum", "semen", "wound-swab", "pd-effluent", "bronchial-washing", "bone-marrow"]) {
+    const key = `other-specimen:${scope}|wbc`;
+    if (!mixedKeys.has(key)) throw new Error(`dynamic specimen ${key} disappeared or became blood: ${JSON.stringify([...mixedKeys])}`);
+    if (canonicalLabSelectionKey(key) !== key) throw new Error(`scoped key was not idempotent: ${key} -> ${canonicalLabSelectionKey(key)}`);
+  }
+  for (const line of [
+    "Sputum WBC 50 /uL", "Semen WBC 50 /uL", "Wound swab WBC 50 /uL",
+    "PD effluent WBC 50 /uL", "Bronchial washing WBC 50 /uL", "Bone marrow WBC 50 /uL",
+    "Synovium WBC 50 /uL", "Tracheal secretion WBC 50 /uL", "Vitreous WBC 50 /uL",
+  ]) {
+    const classified = classifyClinicalLine(line, { fallbackKind: "lab" });
+    if (classified.kind !== "lab" || classified.tone === "critical") {
+      throw new Error(`unpunctuated nonblood WBC inherited a peripheral critical threshold: ${line} -> ${JSON.stringify(classified)}`);
+    }
+  }
+  for (const line of ["Vitreous WBC 50 /uL", "Synovium WBC 50 /uL"]) {
+    const facts = canonicalLabFactsForAi(buildCanonicalLabDataset(line));
+    if (facts.length === 0 || !facts.some((fact) => fact.toLowerCase().includes(line.split(" WBC")[0].toLowerCase())) ||
+        facts.some((fact) => /\bspecimen Blood\b/i.test(fact))) {
+      throw new Error(`unrecognized specimen was asserted to AI as Blood: ${line} -> ${JSON.stringify(facts)}`);
+    }
+  }
+  for (const [line, expectedKind] of [
+    ["Fluid restriction 1.5 L/day", "other"],
+    ["Blood pressure 120/80", "vs"],
+    ["Plasma exchange 2 sessions", "other"],
+  ]) {
+    const items = buildCanonicalLabDataset(line).latestItems;
+    const classified = classifyClinicalLine(line, { fallbackKind: "other" });
+    if (items.length > 0 || classified.kind !== expectedKind) {
+      throw new Error(`ordinary treatment/vital phrase was misrouted as specimen Lab: ${line} -> ${JSON.stringify({ items, classified })}`);
+    }
+  }
+  const suffixScopedJoint = buildCanonicalLabDataset([
+    "2026-07-29 Joint fluid right knee: WBC 35000 cells/uL",
+    "2026-07-30 Joint fluid left knee: WBC 1200 cells/uL",
+  ].join("\n")).latestItems.filter((item) => item.specimen === "synovial-fluid" && item.analyteKey === "wbc");
+  const suffixScopes = suffixScopedJoint.map((item) => item.specimenScope);
+  if (suffixScopedJoint.length !== 2 || new Set(suffixScopes).size !== 2 ||
+      !suffixScopes.some((scope) => /right.*knee|knee.*right/i.test(scope)) ||
+      !suffixScopes.some((scope) => /left.*knee|knee.*left/i.test(scope)) ||
+      suffixScopedJoint.some((item) => item.previousValue)) {
+    throw new Error(`post-specimen joint site/laterality crossed immediate-prior scope: ${JSON.stringify(suffixScopedJoint)}`);
+  }
+  const unpunctuatedJointSuffix = parseLabText("Joint fluid right knee WBC 35000 cells/uL");
+  if (!unpunctuatedJointSuffix.some((item) => specimenAwareLabSelectionKey(item).endsWith("|wbc")) ||
+      unpunctuatedJointSuffix.some((item) => /rightkneewbc/i.test(specimenAwareLabSelectionKey(item)))) {
+    throw new Error(`post-specimen joint site leaked into analyte identity: ${JSON.stringify(unpunctuatedJointSuffix)}`);
+  }
+  const novelSpecimenItems = parseLabText([
+    "Bone marrow blasts 25%",
+    "Bone marrow cellularity 80%",
+    "Sputum epithelial cells 6",
+    "PD effluent total nucleated cells 820 /uL",
+    "Wound swab alpha defensin positive",
+  ].join("\n"));
+  const novelSpecimenKeys = new Set(novelSpecimenItems.map(specimenAwareLabSelectionKey));
+  for (const key of [
+    "other-specimen:bone-marrow|blasts",
+    "other-specimen:bone-marrow|cellularity",
+    "other-specimen:sputum|epithelialcells",
+    "other-specimen:pd-effluent|totalnucleatedcells",
+    "other-specimen:wound-swab|alphadefensin",
+  ]) {
+    if (!novelSpecimenKeys.has(key)) throw new Error(`open-ended specimen/analyte grammar lost ${key}: ${JSON.stringify(novelSpecimenItems)}`);
+  }
+
+  for (const [line, requiredText] of [
+    ["PD effluent: WBC 820, appearance cloudy, Gram stain no organisms seen", ["appearance cloudy", "Gram stain no organisms seen"]],
+    ["Sputum: WBC 500, epithelial cells few, Gram stain mixed flora", ["epithelial cells few", "Gram stain mixed flora"]],
+    ["Urine: dysmorphic RBC 30%, casts present, bacteria many", ["casts present", "bacteria many"]],
+  ]) {
+    const items = parseLabText(line);
+    const preserved = items.map((item) => `${item.label} ${item.value}`).join(" | ");
+    for (const text of requiredText) {
+      if (!preserved.toLowerCase().includes(text.toLowerCase())) {
+        throw new Error(`specimen qualitative finding disappeared (${text}): ${JSON.stringify(items)}`);
+      }
+    }
+  }
+  const urineModified = parseLabText("Urine: dysmorphic RBC 30%, casts present, bacteria many");
+  const urineModifiedKeys = urineModified.map(specimenAwareLabSelectionKey);
+  if (urineModifiedKeys.includes("urine|rbc") || !urineModifiedKeys.includes("urine|dysmorphicrbc")) {
+    throw new Error(`modified urine RBC produced a duplicate routine UA RBC: ${JSON.stringify(urineModified)}`);
+  }
+  const marrowResidual = parseLabText("Bone marrow: cellularity 80%, blasts 25%, fibrosis MF-2");
+  const marrowText = marrowResidual.map((item) => `${item.label} ${item.value}`).join(" | ");
+  if (!/fibrosis MF-2/i.test(marrowText) || marrowResidual.some((item) => !specimenAwareLabSelectionKey(item).startsWith("other-specimen:bone-marrow|"))) {
+    throw new Error(`numeric specimen residual was dropped or lost scope: ${JSON.stringify(marrowResidual)}`);
+  }
+  for (const line of [
+    "Total WBC 8.1", "Random glucose 120", "Fasting glucose 90",
+    "Reticulocyte Hb 29", "Ionized Ca 1.1", "Morning cortisol 5.2", "Free T4 1.2",
+  ]) {
+    const items = parseLabText(line);
+    if (items.length === 0 || items.some((item) => !specimenAwareLabSelectionKey(item).startsWith("blood|"))) {
+      throw new Error(`compound analyte modifier became a fake specimen: ${line} -> ${JSON.stringify(items)}`);
+    }
+  }
+  if (classifyClinicalLine("Free T4 1.2", { fallbackKind: "lab" }).kind !== "lab") {
+    throw new Error("Free T4 was misclassified as a temperature vital sign");
+  }
+  const bloodWbc = mixed.latestItems.find((item) => specimenAwareLabSelectionKey(item) === "blood|wbc");
+  if (bloodWbc?.previousValue) throw new Error(`nonblood WBC crossed into CBC trend: ${JSON.stringify(bloodWbc)}`);
+
+  const numeric = buildCanonicalLabDataset([
+    "2026-07-29 Joint fluid:",
+    "WBC 22000",
+    "RBC 8.0e3 /uL",
+    "",
+    "2026-07-30 Joint fluid:",
+    "WBC 35,820 cells/uL",
+    "RBC 1.2e4 /uL",
+  ].join("\n"));
+  const numericByKey = new Map(numeric.latestItems.map((item) => [specimenAwareLabSelectionKey(item), item]));
+  const jointWbc = numericByKey.get("synovial-fluid|wbc");
+  const jointRbc = numericByKey.get("synovial-fluid|rbc");
+  if (jointWbc?.value !== "35,820" || jointWbc.previousValue !== "22000") {
+    throw new Error(`thousands format or unitless immediate-prior WBC comparison failed: ${JSON.stringify(jointWbc)}`);
+  }
+  if (jointRbc?.value.toLowerCase() !== "1.2e4" || jointRbc.previousValue.toLowerCase() !== "8.0e3") {
+    throw new Error(`scientific-notation same-specimen comparison failed: ${JSON.stringify(jointRbc)}`);
+  }
+
+  const microscopy = buildCanonicalLabDataset([
+    "2026-07-29 Urine: WBC 100 /uL, Casts 3 /HPF",
+    "2026-07-30 Urine: WBC 50 /HPF, Casts 10 /LPF",
+  ].join("\n"));
+  for (const item of microscopy.latestItems) {
+    if (item.previousValue) throw new Error(`incompatible microscopy units produced a false trend: ${JSON.stringify(item)}`);
+  }
+  const scaledCellCount = buildCanonicalLabDataset([
+    "2026-07-29 Joint fluid: WBC 22000 cells/uL",
+    "2026-07-30 Joint fluid: WBC 35.8 x10^3/uL",
+  ].join("\n")).latestItems.find((item) => specimenAwareLabSelectionKey(item) === "synovial-fluid|wbc");
+  if (scaledCellCount?.value !== "35.8" || scaledCellCount.unit.toLowerCase() !== "x10^3/ul" || scaledCellCount.previousValue !== "22") {
+    throw new Error(`equivalent scaled cell-count units did not compare in the current unit: ${JSON.stringify(scaledCellCount)}`);
+  }
+  const scaledPeripheralRbc = buildCanonicalLabDataset([
+    "2026-07-29 RBC 4.2 x10^6/uL",
+    "2026-07-30 RBC 4.5 x10^12/L",
+  ].join("\n")).latestItems.find((item) => specimenAwareLabSelectionKey(item) === "blood|rbc");
+  if (scaledPeripheralRbc?.value !== "4.5" || scaledPeripheralRbc.unit.toLowerCase() !== "x10^12/l" ||
+      scaledPeripheralRbc.previousValue !== "4.2") {
+    throw new Error(`equivalent peripheral RBC units did not preserve immediate prior: ${JSON.stringify(scaledPeripheralRbc)}`);
+  }
+  const scaledPeripheralRbcVisual = formatLabVisualTimelineLines(
+    "2026-07-30 RBC 4.5 x10^12/L",
+    "2026-07-29 RBC 4.2 x10^6/uL",
+    { selectionMode: "complete" },
+  ).join("\n");
+  if (!/\bRBC 4\.5[^\n]*\(4\.2\)/i.test(scaledPeripheralRbcVisual)) {
+    throw new Error(`shared Lab visual path lost equivalent-unit RBC prior: ${scaledPeripheralRbcVisual}`);
+  }
+  const unchangedCrVisual = formatLabVisualTimelineLines(
+    "2026-07-30 Cr 2.0 mg/dL",
+    "2026-07-29 Cr 2.0 mg/dL",
+    { selectionMode: "complete" },
+  ).join("\n");
+  if (!/\bCr 2\.0\(2\.0\)/i.test(unchangedCrVisual)) {
+    throw new Error(`unchanged immediate-prior Cr was not displayed deterministically: ${unchangedCrVisual}`);
+  }
+  const futurePrior = buildCanonicalLabTimelineDataset(
+    "2026-07-29 Joint fluid:\nWBC 100 /uL",
+    "2026-07-30 Joint fluid: WBC 200 /uL",
+  ).latestItems.find((item) => specimenAwareLabSelectionKey(item) === "synovial-fluid|wbc");
+  if (futurePrior?.previousValue) {
+    throw new Error(`dated multiline specimen heading accepted a future value as prior: ${JSON.stringify(futurePrior)}`);
+  }
+
+  const novel = buildCanonicalLabDataset("M protein 0.5 g/dL, SPEP M-spike 0.4 g/dL, Kappa/lambda ratio 2.1, Tacrolimus 8.2 ng/mL");
+  const novelLabels = novel.latestItems.map((item) => item.name || item.label);
+  for (const expected of [/^M protein$/i, /^SPEP M-spike$/i, /^Kappa\/lambda ratio$/i, /^Tacrolimus$/i]) {
+    if (!novelLabels.some((label) => expected.test(label))) throw new Error(`novel analyte ${expected} disappeared: ${JSON.stringify(novel.latestItems)}`);
+  }
+  if (novelLabels.some((label) => /^Protein$/i.test(label))) {
+    throw new Error(`M-protein was truncated into an unrelated routine Protein result: ${JSON.stringify(novel.latestItems)}`);
+  }
+  console.log("PASS Dynamic specimens, novel analytes, numeric formats, and unitless prior values remain source-owned and specimen-scoped");
+  supplementalPasses += 1;
+} catch (error) {
+  failures.push({ name: "Open-ended specimen and analyte preservation", error: error instanceof Error ? error.message : String(error) });
+  console.error(`FAIL Open-ended specimen and analyte preservation: ${failures[failures.length - 1].error}`);
+}
+
+try {
+  const emptyStructured = () => ({
+    headerLines: [],
+    subjectiveLines: ["No documented overnight event."],
+    objective: { vitalSigns: [], physicalExam: [], labs: [], microbiology: [], imaging: [], pathology: [], other: [] },
+    assessmentPlan: [],
+    orders: [], tasks: [], discharge: [], warnings: [], highlightHints: [],
+  });
+  const hallucinationCases = [
+    { title: "Metastatic pancreatic cancer", labs: "WBC 8.1", evidence: ["WBC 8.1"] },
+    { title: "Acute leukemia", labs: "WBC 8.1", evidence: ["WBC 8.1"] },
+    { title: "Meningitis", labs: "Joint fluid: WBC 35820 cells/uL", evidence: ["Joint fluid WBC 35820"] },
+    { title: "Thrombocytopenia", labs: "Joint fluid: RBC 12000 /uL", evidence: ["Joint fluid RBC 12000"] },
+    { title: "Systemic leukocytosis", labs: "Sputum: WBC 500 /uL", evidence: ["Sputum WBC 500"] },
+    { title: "WBC leukemia", labs: "Joint fluid: WBC 35820 cells/uL", other: "Problem: Septic arthritis concern", evidence: ["Joint fluid WBC 35820"] },
+    { title: "Joint fluid meningitis", labs: "Joint fluid: WBC 35820 cells/uL", other: "Problem: Septic arthritis concern", evidence: ["Joint fluid WBC 35820"] },
+    { title: "Joint fluid metastatic cancer", labs: "Joint fluid: WBC 35820 cells/uL", other: "Problem: Septic arthritis concern", evidence: ["Joint fluid WBC 35820"] },
+    { title: "Septic leukemia", labs: "Joint fluid: WBC 35820 cells/uL", other: "Problem: Septic arthritis concern", evidence: ["Septic", "Joint fluid WBC 35820"] },
+    { title: "Crystals gout", labs: "Joint fluid: crystals negative", other: "Problem: Septic arthritis concern", evidence: ["crystals negative"] },
+  ];
+  for (const testCase of hallucinationCases) {
+    const value = emptyStructured();
+    value.assessmentPlan = [{
+      problemTitle: testCase.title,
+      status: "worsening",
+      summary: testCase.evidence[0],
+      plan: "Escalate treatment.",
+      sourceEvidence: testCase.evidence,
+    }];
+    value.headerLines = [`Dx: ${testCase.title}`];
+    const accepted = acceptStructuredRoundSoap({
+      value,
+      baselineText: "",
+      sourceFields: { labs: testCase.labs, other: testCase.other ?? "" },
+      workflowMode: "newSoap",
+    });
+    const text = editorDraftToSoapText(accepted.draft);
+    if (new RegExp(testCase.title.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i").test(text)) {
+      throw new Error(`unrelated diagnosis was authorized only by a numeric lab token: ${testCase.title}\n${text}`);
+    }
+  }
+  for (const testCase of [
+    { title: "Community-acquired pneumonia", source: "Physician assessment is community-acquired pneumonia." },
+    { title: "Acute kidney injury", source: "Cr rose, consistent with acute kidney injury." },
+    { title: "DKA", source: "Patient admitted for DKA." },
+    { title: "Septic arthritis", source: "Orthopedics documents septic arthritis." },
+  ]) {
+    const value = emptyStructured();
+    value.assessmentPlan = [{
+      problemTitle: testCase.title,
+      status: "active",
+      summary: testCase.title,
+      plan: "",
+      sourceEvidence: [testCase.title],
+    }];
+    const accepted = acceptStructuredRoundSoap({
+      value,
+      baselineText: "",
+      sourceFields: { other: testCase.source },
+      workflowMode: "newSoap",
+    });
+    const titles = accepted.draft.apProblems.map((problem) => problem.title);
+    if (!titles.some((title) => title.toLowerCase() === testCase.title.toLowerCase())) {
+      throw new Error(`explicit narrative diagnosis was rejected: ${testCase.title} -> ${editorDraftToSoapText(accepted.draft)}`);
+    }
+  }
+  const pollutedContextAcceptance = acceptStructuredRoundSoap({
+    value: emptyStructured(),
+    baselineText: "",
+    sourceFields: { other: "Problem: Septic arthritis; joint culture pending." },
+    workflowMode: "newSoap",
+    activeProblemContext: "Septic arthritis\ncontinue ceftriaxone\nf/u culture\nCr 2.0",
+  });
+  const pollutedTitles = pollutedContextAcceptance.draft.apProblems.map((problem) => problem.title);
+  if (JSON.stringify(pollutedTitles) !== JSON.stringify(["Septic arthritis"])) {
+    throw new Error(`task/result fragments were promoted to authoritative A/P titles: ${JSON.stringify(pollutedTitles)}`);
+  }
+  console.log("PASS Numeric lab evidence cannot authorize unrelated systemic or diagnostic A/P titles");
+  supplementalPasses += 1;
+} catch (error) {
+  failures.push({ name: "Structural A/P title grounding", error: error instanceof Error ? error.message : String(error) });
+  console.error(`FAIL Structural A/P title grounding: ${failures[failures.length - 1].error}`);
 }
 
 await server.close();

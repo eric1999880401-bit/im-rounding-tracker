@@ -59,13 +59,25 @@ export function prioritizeRoundNoteProblems(problems: RoundNoteProblemView[]) {
     info: 2,
     plain: 3,
   };
+  const clinicalRank = (problem: RoundNoteProblemView) => {
+    const text = [problem.title, ...problem.lines].map((line) => line.text).join(" ");
+    if (/\b(?:worsening|unstable|shock|active bleed|respiratory failure|hyperkalemia|STEMI|stroke|neutropenic fever|DKA|HHS)\b/i.test(text)) return 0;
+    if (/\b(?:sepsis|bacteremia|hypox|new oxygen|AKI|renal dysfunction|GI bleed|ACS|NSTEMI|arrhythmia|delirium|AMS|coagulopathy|DIC)\b/i.test(text)) return 1;
+    if (/\b(?:active|uncertain|unresolved|pending)\b/i.test(text)) return 2;
+    if (/\b(?:improving|resolved|stable|chronic)\b/i.test(text)) return 4;
+    return 3;
+  };
   return problems
-    .map((problem, index) => ({
+    .map((problem) => ({
       problem,
-      index,
       priority: Math.min(...[problem.title, ...problem.lines].map((line) => toneRank[line.tone] ?? 3)),
+      clinicalPriority: clinicalRank(problem),
     }))
-    .sort((left, right) => left.priority - right.priority || left.index - right.index)
+    .sort((left, right) =>
+      left.priority - right.priority ||
+      left.clinicalPriority - right.clinicalPriority ||
+      left.problem.title.text.localeCompare(right.problem.title.text, "en", { sensitivity: "base" }),
+    )
     .map(({ problem }) => problem);
 }
 
@@ -153,8 +165,21 @@ export function buildRoundNoteViewModelFromDraft(draft: SoapDraft, options: Roun
   const objective = normalizeObjectiveLabExportLines(draft.oLines)
     .map((line, index) => objectiveLine(line, index, options));
   const taskOrOrderLines = draft.taskLines.map((line, index) => ({ line, index, order: isOrderSoapLine(line) }));
+  const warningText = draft.warnings.map((line) => line.trim()).filter(Boolean).slice(0, 3).join("; ");
+  const headerSource = warningText && !draft.header.some((line) => /^Red flags:/i.test(line))
+    ? [...draft.header, `Red flags: ${warningText}`]
+    : draft.header.map((line) =>
+        /^Red flags:/i.test(line) && warningText
+          ? `${line.replace(/\s+$/, "")}; ${warningText}`
+          : line,
+      );
+  const assessmentPlan = prioritizeRoundNoteProblems(
+    draft.apProblems.map((problem, index) => problemView(problem, index, options)),
+  );
   return {
-    header: draft.header.map((line, index) => makeRoundNoteLineView(line, "header", "header", `header-${index}`, options)),
+    header: headerSource.map((line, index) =>
+      makeRoundNoteLineView(line, "header", /^Red flags:/i.test(line) ? "red" : "header", `header-${index}`, options),
+    ),
     subjective: draft.sLines.map((line, index) => makeRoundNoteLineView(line, "subjective", "s", `s-${index}`, options)),
     objective: {
       all: objective,
@@ -164,7 +189,7 @@ export function buildRoundNoteViewModelFromDraft(draft: SoapDraft, options: Roun
       images: objective.filter((line) => line.kind === "image"),
       other: objective.filter((line) => line.kind === "other"),
     },
-    assessmentPlan: draft.apProblems.map((problem, index) => problemView(problem, index, options)),
+    assessmentPlan,
     orders: taskOrOrderLines
       .filter((item) => item.order)
       .map((item) => makeRoundNoteLineView(item.line, "orders", "task", `order-${item.index}`, options)),

@@ -8,16 +8,30 @@ import {
 } from "./data/labDictionary";
 import { dateFromClinicalText, normalizeDateKey, stripLeadingClinicalDate, todayKey } from "./dates";
 import { plainClinicalText } from "./clinicalTextFormat";
+import {
+  isBodyFluidSpecimen,
+  isAmbiguousSpecimenUsage,
+  isLabSpecimenHeading,
+  labAnalyteLabelForItem,
+  labSpecimenIdentityForItem,
+  labSpecimenIdentityFromText,
+  specimenAwareLabDisplayLabel,
+  specimenAwareLabSelectionKey,
+  stripLeadingLabSpecimen,
+} from "./labSpecimen";
 
 function todayDate() {
   return todayKey();
 }
 
-const labValuePattern = "([<>]?[0-9]+(?:\\.[0-9]+)?%?\\+?)";
+// Capture the whole laboratory token or reject it. In particular, never turn
+// `35,820` into `35` or `3.58e4` into `3.58`.
+const labNumericCorePattern = "(?:(?:[0-9]{1,3}(?:,[0-9]{3})+)|[0-9]+)(?:\\.[0-9]+)?(?:[eE][+-]?[0-9]+)?";
+const labValuePattern = `([<>]?\\s*-?${labNumericCorePattern}%?\\+?)(?![0-9eE]|,\\d{3}|\\.\\d)`;
 // H/L flags must be standalone. Without the trailing guard, `Neu 88.9 Hb 12`
 // consumes the H in Hb as a high flag and silently drops the Hb result.
 const labFlagPattern = "(?:\\s*(?:\\[?([HL])\\]?(?![A-Za-z])|([↑↓↗↘])|\\b(high|low|elevated|decreased|abnormal|positive|negative|pos|neg|reactive|nonreactive|detected|not detected)\\b))?";
-const labUnitPattern = "(ng\\/mL|ng\\/L|pg\\/mL|ug\\/mL|µg\\/mL|mcg\\/mL|mg\\/dL|g\\/dL|k\\/uL|10\\^3\\/uL|mmol\\/L|mEq\\/L|U\\/L|IU\\/L|%)";
+const labUnitPattern = "(ng\\/mL|ng\\/L|pg\\/mL|ug\\/mL|µg\\/mL|μg\\/mL|mcg\\/mL|mg\\/dL|mg\\/L|g\\/dL|g\\/L|k\\/uL|(?:x|×)?10(?:\\^)?[369]\\/(?:u|µ|μ)?L|cells?\\/(?:u|µ|μ)L|cells?\\/mm3|\\/(?:u|µ|μ)L|\\/mm3|\\/HPF|\\/LPF|mmol\\/L|mEq\\/L|U\\/L|IU\\/L|%|[A-Za-zµμ0-9^×x]+\\/[A-Za-zµμ0-9^×x]+)";
 
 function escapeRegExp(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -49,18 +63,49 @@ function normalizeGenericLabLabel(value: string) {
     .trim();
   const dictionary = findLabDictionaryItem(clean);
   if (dictionary) return dictionary.displayName;
-  const canonical = canonicalLabKey(clean);
-  if (canonical && canonical.toLowerCase() !== clean.toLowerCase()) return canonical;
   return /^[A-Za-z0-9+./-]{2,4}$/.test(clean) ? clean.replace(/[a-z]/g, (letter) => letter.toUpperCase()) : clean;
 }
 
 function shouldSkipGenericLabLabel(value: string) {
   const clean = value.trim();
-  if (clean.length < 2 || clean.length > 30) return true;
+  if (clean.length < 1 || clean.length > 80) return true;
   if (findLabDictionaryItem(clean)) return true;
-  const compact = clean.toLowerCase().replace(/[^a-z0-9]+/g, "");
+  const compact = clean.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
   if (!compact || /^\d+$/.test(compact)) return true;
+  if (isAmbiguousSpecimenUsage(clean)) return true;
   return /^(bp|hr|rr|bt|temp|spo2|sat|fio2|ef|pasp|pco|hco|day|date|age|bed|room|rm|pt|patient|code|dose|qd|bid|tid|qid|mg|kg|cm|min|hour|hr|afebrile|febrile|fever)$/i.test(compact);
+}
+
+function splitLabSegments(value: string) {
+  const result: string[] = [];
+  let start = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    const char = value[index];
+    if (char !== "," && char !== ";" && char !== "|") continue;
+    // A comma inside a numeric token is not a clinical field separator.
+    if (char === "," && /\d/.test(value[index - 1] ?? "") && /\d/.test(value[index + 1] ?? "")) continue;
+    result.push(value.slice(start, index).trim());
+    start = index + 1;
+  }
+  result.push(value.slice(start).trim());
+  return result.filter(Boolean);
+}
+
+function splitLabSentenceSegments(value: string) {
+  const result: string[] = [];
+  let start = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    if (value[index] !== ".") continue;
+    if (/\d/.test(value[index - 1] ?? "") && /\d/.test(value[index + 1] ?? "")) continue;
+    const left = value.slice(start, index).trim();
+    const right = value.slice(index + 1).trimStart();
+    if (!left || !right || !/^[\p{L}\[]/u.test(right)) continue;
+    if (!/(?:\d|%|\+|[A-Za-zµμ0-9^×x]*\/[A-Za-zµμ0-9^×x]+|positive|negative|pos|neg|present|absent|detected|pending|no growth)\s*$/i.test(left)) continue;
+    result.push(left);
+    start = index + 1;
+  }
+  result.push(value.slice(start).trim());
+  return result.filter(Boolean);
 }
 
 function looksLikeMicrobiologyLabel(value: string) {
@@ -80,7 +125,8 @@ function parsedLabItem(
   const normalizedLabel = normalizeLabDisplayName(label);
   const dictionaryGroup = dictionaryItem?.group ?? labGroupFor(normalizedLabel);
   const group = groupHint || dictionaryGroup;
-  const commonUnit = dictionaryItem?.commonUnits[0] ?? "";
+  const specimen = labSpecimenIdentityFromText(group);
+  const commonUnit = specimen.key === "blood" ? dictionaryItem?.commonUnits[0] ?? "" : "";
   const unit = unitOverride || (/^Troponin(?:\s+[IT])?$/i.test(normalizedLabel) ? "" : commonUnit);
 
   return {
@@ -97,14 +143,58 @@ function parsedLabItem(
   };
 }
 
-function parseLabItemsFromLine(line: string, important: boolean, groupHint = "") {
+function parseLabItemsFromLine(
+  line: string,
+  important: boolean,
+  groupHint = "",
+  allowSpecimenSegments = true,
+): ParsedLabItem[] {
+  if (allowSpecimenSegments) {
+    const sentenceSegments = splitLabSentenceSegments(line);
+    if (sentenceSegments.length > 1) {
+      let activeGroup = groupHint;
+      return sentenceSegments.flatMap((segment) => {
+        const stripped = stripLeadingLabSpecimen(segment);
+        if (stripped.identity.explicit && stripped.body !== segment) {
+          activeGroup = stripped.identity.key === "other-specimen"
+            ? `Specimen: ${stripped.identity.label}`
+            : stripped.identity.label;
+        }
+        return parseLabItemsFromLine(segment, important, activeGroup, false);
+      });
+    }
+    const segments = splitLabSegments(line);
+    // Keep a normal `Joint fluid: WBC, PMN, RBC` panel together. Split only
+    // when a later segment explicitly changes specimen (e.g. `; serum WBC`).
+    const hasSpecimenSwitch = segments.slice(1).some((segment) => {
+      const stripped = stripLeadingLabSpecimen(segment);
+      return stripped.identity.explicit && stripped.body !== segment;
+    });
+    if (segments.length > 1 && hasSpecimenSwitch) {
+      let activeGroup = groupHint;
+      return segments.flatMap((segment) => {
+        const stripped = stripLeadingLabSpecimen(segment);
+        if (stripped.identity.explicit && stripped.body !== segment) activeGroup = stripped.identity.label;
+        return parseLabItemsFromLine(segment, important, activeGroup, false);
+      });
+    }
+  }
+  const leadingSpecimen = stripLeadingLabSpecimen(line);
+  const hintedSpecimen = labSpecimenIdentityFromText(groupHint);
+  const hasLeadingSpecimen = leadingSpecimen.identity.explicit && leadingSpecimen.body !== line;
+  const specimen = hasLeadingSpecimen ? leadingSpecimen.identity : hintedSpecimen;
+  if (hasLeadingSpecimen) line = leadingSpecimen.body;
+  if (specimen.explicit && specimen.key !== "blood") {
+    groupHint = specimen.key === "other-specimen" ? `Specimen: ${specimen.label}` : specimen.label;
+  }
   // HIS/LIS exports commonly mark an out-of-range cell with a trailing `*`.
   // Convert that cell-local flag to text understood by the regular parser;
   // never promote the entire table row to Important because one cell is abnormal.
-  line = line.replace(/([<>]?-?\d+(?:\.\d+)?%?)\*+(?=\s|[,;]|$)/g, "$1 abnormal");
+  line = line.replace(new RegExp(`([<>]?\\s*-?${labNumericCorePattern}%?)\\*+(?=\\s|[,;]|$)`, "g"), "$1 abnormal");
   if (/^\s*(?:U\/?A|urine|urinalysis)\s*$/i.test(groupHint)) groupHint = "Urinalysis";
   const items: ParsedLabItem[] = [];
   const directionalKeys = new Set<string>();
+  const genericLabelPattern = "([^,;|:\\n]{1,80}?)";
   const tumorMarkerPattern = new RegExp(
     `\\b(CA\\s*19[-\\s]?9|CA\\s*125|CA\\s*15[-\\s]?3|AFP|CEA|SCC|PSA)\\s*${labValuePattern}(?:\\s*(?:\\(\\s*${labValuePattern}\\s*\\)|from(?:\\s+baseline)?\\s*${labValuePattern}))?${labFlagPattern}`,
     "gi",
@@ -118,30 +208,30 @@ function parseLabItemsFromLine(line: string, important: boolean, groupHint = "")
   // without it the dictionary pattern misses and the generic pattern skips
   // dictionary labels, so the value vanished entirely.
   const directionalPattern = new RegExp(
-    `(?:^|\\b)(${labAliasPattern()})\\.?\\s*(?:[:=]\\s*)?${labValuePattern}\\s*(?:->|→|to)\\s*${labValuePattern}${labFlagPattern}`,
+    `(?:^|\\b)(${labAliasPattern()})(?![A-Za-z0-9])\\.?\\s*(?:[:=]\\s*)?${labValuePattern}\\s*(?:->|→|to)\\s*${labValuePattern}${labFlagPattern}`,
     "gi",
   );
   const compactVisualTrendPattern = new RegExp(
-    `(?:^|\\b)(${labAliasPattern()})\\.?\\s*(?:[:=]\\s*)?${labValuePattern}\\s*([↑↓↗↘])\\s*\\(\\s*${labValuePattern}\\s*\\)`,
+    `(?:^|\\b)(${labAliasPattern()})(?![A-Za-z0-9])\\.?\\s*(?:[:=]\\s*)?${labValuePattern}\\s*([↑↓↗↘])\\s*\\(\\s*${labValuePattern}\\s*\\)`,
     "gi",
   );
   const genericDirectionalPattern = new RegExp(
-    `(?:^|[,;])\\s*([A-Za-z][A-Za-z0-9+./() -]{1,28}?)\\s*${labValuePattern}\\s*(?:->|→|to)\\s*${labValuePattern}${labFlagPattern}`,
+    `(?:^|[,;])\\s*${genericLabelPattern}(?:\\s*[:=]\\s*|\\s+)${labValuePattern}\\s*(?:->|→|to)\\s*${labValuePattern}${labFlagPattern}`,
     "gi",
   );
   const pattern = new RegExp(
-    `(?:^|\\b)(${labAliasPattern()})\\.?\\s*(?:[:=]\\s*)?${labValuePattern}(?:\\s*(?:\\(\\s*${labValuePattern}\\s*\\)|(?:from(?:\\s+baseline)?|prior(?:\\s+value)?|previous(?:\\s+value)?)\\s*${labValuePattern}))?${labFlagPattern}`,
+    `(?:^|\\b)(${labAliasPattern()})(?![A-Za-z0-9])\\.?\\s*(?:[:=]\\s*)?${labValuePattern}(?:\\s*(?:\\(\\s*${labValuePattern}\\s*\\)|(?:from(?:\\s+baseline)?|prior(?:\\s+value)?|previous(?:\\s+value)?)\\s*${labValuePattern}))?${labFlagPattern}`,
     "gi",
   );
   const genericPattern = new RegExp(
-    `(?:^|[,;])\\s*([A-Za-z][A-Za-z0-9+./() -]{1,28}?)\\s*(?:[:=])?\\s*${labValuePattern}(?:\\s*(?:\\(\\s*${labValuePattern}\\s*\\)|(?:from(?:\\s+baseline)?|prior(?:\\s+value)?|previous(?:\\s+value)?)\\s*${labValuePattern}))?${labFlagPattern}`,
+    `(?:^|[,;])\\s*${genericLabelPattern}(?:\\s*[:=]\\s*|\\s+)${labValuePattern}(?:\\s*(?:\\(\\s*${labValuePattern}\\s*\\)|(?:from(?:\\s+baseline)?|prior(?:\\s+value)?|previous(?:\\s+value)?)\\s*${labValuePattern}))?${labFlagPattern}`,
     "gi",
   );
   const qualitativePattern = new RegExp(
-    `(?:^|\\b)(${labAliasPattern()})\\.?\\s*(?::|=)?\\s*(positive|negative|pos|neg|reactive|nonreactive|detected|not detected|pending|no growth|growth[^,;\\n]*)`,
+    `(?:^|\\b)(${labAliasPattern()})(?![A-Za-z0-9])\\.?\\s*(?::|=)?\\s*(positive|negative|pos|neg|reactive|nonreactive|detected|not detected|pending|no growth|growth[^,;\\n]*)`,
     "gi",
   );
-  const genericQualitativePattern = /(?:^|[,;])\s*([A-Za-z][A-Za-z0-9+./() -]{1,28}?)\s*(?::|=)\s*(positive|negative|pos|neg|reactive|nonreactive|detected|not detected|pending|no growth|growth[^,;\n]*)/gi;
+  const genericQualitativePattern = /(?:^|[,;])\s*([^,;|:\n]{1,80}?)(?:\s*[:=]\s*|\s+)(positive|negative|pos|neg|reactive|nonreactive|detected|not detected|pending|no growth|growth[^,;\n]*)/gi;
   // "U/A" (with slash) is the common bedside spelling — without it, urine
   // WBC >1000 / RBC land in the blood CBC line as a fake critical count.
   const uaContext = /\b(U\/?A|urine|urinalysis)\b/i.test(groupHint) || /\b(U\/?A|urine|urinalysis)\s*:?\b/i.test(line);
@@ -221,31 +311,21 @@ function parseLabItemsFromLine(line: string, important: boolean, groupHint = "")
         : uaContext && normalizedLabel === "Glucose"
           ? "Glucose urine"
         : normalizedLabel;
-    const commonUnit = dictionaryItem?.commonUnits[0] ?? "";
-    const inlineUnit = unitAfterMatch(line, match.index, match[2]);
-    const unit = inlineUnit || (/^Troponin(?:\s+[IT])?$/i.test(label) ? "" : commonUnit);
-
-    items.push({
+    items.push(parsedLabItem(
       label,
-      name: label,
-      value: match[2],
-      previousValue: match[3] ?? match[4] ?? "",
-      group: label.startsWith("UA ") || label === "Glucose urine" ? "Urinalysis" : group,
+      match[2],
+      match[3] ?? match[4] ?? "",
       important,
-      isImportant: important,
-      unit: unit === "%" && match[2].includes("%") ? "" : unit,
-      color: "",
-      note: normalizeLabNote(match[5], match[6], match[7]),
-    });
+      label.startsWith("UA ") || label === "Glucose urine" ? "Urinalysis" : group,
+      normalizeLabNote(match[5], match[6], match[7]),
+      unitAfterMatch(line, match.index, match[2]),
+    ));
   });
 
   Array.from(line.matchAll(genericPattern)).forEach((match) => {
     const label = normalizeGenericLabLabel(match[1]);
     if (directionalKeys.has(canonicalLabKey(label)) || shouldSkipGenericLabLabel(label) || findLabDictionaryItem(label) || looksLikeMicrobiologyLabel(label)) return;
     const note = normalizeLabNote(match[5], match[6], match[7]);
-    const hasContext = Boolean(groupHint) || /\b(lab|cbc|chem|renal|electrolyte|coag|tumou?r|marker|level|culture|serum|plasma|urine)\b/i.test(line);
-    const hasSignal = Boolean(note || match[3] || match[4]);
-    if (!hasContext && !hasSignal && /\s/.test(label)) return;
     items.push(parsedLabItem(label, match[2], match[3] ?? match[4] ?? "", important, groupHint || "Other labs", note, unitAfterMatch(line, match.index, match[2])));
   });
 
@@ -262,9 +342,46 @@ function parseLabItemsFromLine(line: string, important: boolean, groupHint = "")
     items.push(parsedLabItem(label, normalizeLabNote(match[2]) || match[2], "", important, groupHint || "Other labs", normalizeLabNote(match[2])));
   });
 
+  const preserveQualitativeRemainder = specimen.explicit && (
+    specimen.key !== "blood" || /\b(?:smear|morphology)\b/i.test(`${groupHint} ${line}`)
+  );
+  if (preserveQualitativeRemainder) {
+    const freeQualitativePattern = /(?:^|[,;])\s*([^,;|:\n]{1,80}?)\s+(positive|negative|pos|neg|reactive|nonreactive|detected|not detected|present|absent|none seen|not seen|no organisms seen|organisms seen|pending|clear|cloudy|turbid|bloody|few|many|moderate|mixed flora|straw(?:-colored)?)\b/gi;
+    Array.from(line.matchAll(freeQualitativePattern)).forEach((match) => {
+      const label = normalizeGenericLabLabel(match[1]);
+      if (shouldSkipGenericLabLabel(label)) return;
+      if (items.some((item) => canonicalLabKey(item.label) === canonicalLabKey(label))) return;
+      const value = normalizeLabNote(match[2]) || match[2];
+      items.push(parsedLabItem(label, value, "", important, groupHint || specimen.label, value));
+    });
+
+    const residual = line
+      .split(/[,;]/)
+      .map((part) => part.trim())
+      .filter(Boolean)
+      .filter((part) => !items.some((item) => {
+        const lower = part.toLowerCase();
+        const label = String(item.label ?? "").toLowerCase();
+        const analyte = String(labAnalyteLabelForItem(item) ?? "").toLowerCase();
+        const value = String(item.value ?? "").toLowerCase();
+        return Boolean(value && (label || analyte) && (lower.includes(label) || lower.includes(analyte)) && lower.includes(value));
+      }))
+      .join("; ");
+    if (residual && !items.some((item) => item.label === "Findings" && item.value === residual)) {
+      items.push(parsedLabItem("Findings", residual, "", important, groupHint || specimen.label));
+    }
+  }
+
   // Drop a leftover composite "A/B" item when both parts already exist as their
   // own split-out items (e.g. a stray "Na/K 137" alongside real Na and K).
   return items.filter((item) => {
+    const itemLabelKey = String(labAnalyteLabelForItem(item) ?? "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
+    const shadowedByLongerAnalyte = items.some((other) => {
+      if (other === item || String(other.value ?? "").trim() !== String(item.value ?? "").trim()) return false;
+      const otherLabelKey = String(labAnalyteLabelForItem(other) ?? "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
+      return otherLabelKey.length > itemLabelKey.length && otherLabelKey.endsWith(itemLabelKey);
+    });
+    if (shadowedByLongerAnalyte) return false;
     if (!item.label.includes("/")) return true;
     const parts = item.label.split("/").map((part) => part.trim());
     if (parts.length < 2 || !parts.every((part) => findLabDictionaryItem(part))) return true;
@@ -276,6 +393,11 @@ function parseLabItemsFromLine(line: string, important: boolean, groupHint = "")
 }
 
 function splitLabLineTitle(line: string) {
+  const specimen = stripLeadingLabSpecimen(line);
+  if (specimen.identity.explicit && specimen.body && specimen.body !== line) {
+    return { title: specimen.identity.label, body: specimen.body };
+  }
+
   const colonMatch = line.match(/^([^:]{2,32}):\s*(.+)$/);
   if (colonMatch && !findLabDictionaryItem(colonMatch[1])) {
     return { title: colonMatch[1].trim(), body: colonMatch[2].trim() };
@@ -289,6 +411,21 @@ function splitLabLineTitle(line: string) {
   return { title: "", body: line };
 }
 
+function isKnownLabPanelTitle(value: string) {
+  return /^(?:lab(?:s|oratory)?|CBC(?:\/?DC)?|DC|hematology|chem(?:istry)?|chem\s*\/\s*renal|metabolic|renal|electrolytes?|liver|LFT|liver\s*\/\s*coag|coag(?:ulation)?|cardiac|thyroid|endocrine|tumou?r(?: markers?)?|drug levels?|inflammation|infection|infx\s*\/\s*perfusion|fluid studies?|urinalysis|U\/?A|ABG\s*\/\s*VBG|other(?: labs?)?|special(?: labs?)?)$/i.test(value.trim());
+}
+
+function specimenGroupForReportTitle(value: string) {
+  const title = value.trim();
+  if (!title || isKnownLabPanelTitle(title)) return title;
+  const identity = labSpecimenIdentityFromText(title);
+  return identity.explicit ? identity.label : `Specimen: ${title}`;
+}
+
+function looksLikeResultInsideActiveSpecimen(line: string) {
+  return /^[^:]{1,80}:\s*(?:[<>]?\s*-?(?:(?:\d{1,3}(?:,\d{3})+)|\d+)(?:\.\d+)?(?:e[+-]?\d+)?%?\+?|positive|negative|pos|neg|present|absent|detected|not detected|pending|no growth)\b/i.test(line);
+}
+
 function reportId(rawText: string, index: number) {
   return `lab-${index}-${rawText.slice(0, 24).replace(/[^A-Za-z0-9]+/g, "-")}`;
 }
@@ -300,23 +437,51 @@ export function parseLabText(value: string): ParsedLabItem[] {
 export function parseLabReports(value: string, date = todayDate(), defaultTitle = ""): LabReport[] {
   const reports: LabReport[] = [];
   const fallbackDate = normalizeDateKey(date);
+  let activeSpecimenTitle = "";
+  let activeSpecimenDate = "";
 
   value.split(/\r?\n/).forEach((rawLine) => {
     const trimmedLine = rawLine.trim();
-    if (!trimmedLine) return;
+    if (!trimmedLine) {
+      activeSpecimenTitle = "";
+      activeSpecimenDate = "";
+      return;
+    }
 
     const important = trimmedLine.startsWith("!");
     const lineWithDate = important ? trimmedLine.slice(1).trim() : trimmedLine;
     const leadingDate = lineWithDate.match(/^\s*(?:20\d{2}[-/]\d{1,2}[-/]\d{1,2}|\d{1,2}\/\d{1,2})\b/)?.[0] ?? "";
     const lineDate = leadingDate ? dateFromClinicalText(leadingDate, fallbackDate) : fallbackDate;
     const line = stripLeadingClinicalDate(lineWithDate);
-    const { title, body } = splitLabLineTitle(line);
-    const reportTitle = title || defaultTitle;
-    const items = parseLabItemsFromLine(body, important, reportTitle);
+    if (isLabSpecimenHeading(line)) {
+      activeSpecimenTitle = stripLeadingLabSpecimen(line).identity.label;
+      activeSpecimenDate = leadingDate ? lineDate : "";
+      return;
+    }
+    const unknownStandaloneHeading = line.match(/^([^:]{1,80})\s*:\s*$/);
+    if (unknownStandaloneHeading && !isKnownLabPanelTitle(unknownStandaloneHeading[1])) {
+      activeSpecimenTitle = `Specimen: ${unknownStandaloneHeading[1].trim()}`;
+      activeSpecimenDate = leadingDate ? lineDate : "";
+      return;
+    }
+    const { title, body } = activeSpecimenTitle && looksLikeResultInsideActiveSpecimen(line)
+      ? { title: "", body: line }
+      : splitLabLineTitle(line);
+    // An inline title applies to that line only. Persistent context is created
+    // only by a standalone specimen heading and ends at a blank line.
+    const inheritedSpecimenDate = !leadingDate && activeSpecimenTitle ? activeSpecimenDate : "";
+    if (title) {
+      activeSpecimenTitle = "";
+      activeSpecimenDate = "";
+    }
+    const reportTitle = title || activeSpecimenTitle || defaultTitle;
+    const parseGroup = title ? specimenGroupForReportTitle(title) : reportTitle;
+    const items = parseLabItemsFromLine(body, important, parseGroup);
 
     reports.push({
       id: reportId(line, reports.length),
-      date: lineDate,
+      date: inheritedSpecimenDate || lineDate,
+      dateIsExplicit: Boolean(leadingDate || inheritedSpecimenDate),
       title: reportTitle,
       rawText: rawLine,
       items,
@@ -329,10 +494,11 @@ export function parseLabReports(value: string, date = todayDate(), defaultTitle 
 export function labSummary(items: ParsedLabItem[], fallbackText = "", maxItems = 8) {
   if (items.length === 0) return plainClinicalText(fallbackText, "-");
 
-  const wbc = items.find((item) => item.label === "WBC");
-  const neu = items.find((item) => item.label === "N" || item.label === "Neu");
-  const cr = items.find((item) => item.label === "Cr");
-  const egfr = items.find((item) => item.label === "eGFR");
+  const isBloodItem = (item: ParsedLabItem) => labSpecimenIdentityForItem(item).key === "blood";
+  const wbc = items.find((item) => isBloodItem(item) && item.label === "WBC");
+  const neu = items.find((item) => isBloodItem(item) && (item.label === "N" || item.label === "Neu"));
+  const cr = items.find((item) => isBloodItem(item) && item.label === "Cr");
+  const egfr = items.find((item) => isBloodItem(item) && item.label === "eGFR");
   const used = new Set<ParsedLabItem>();
   const result: string[] = [];
 
@@ -347,9 +513,9 @@ export function labSummary(items: ParsedLabItem[], fallbackText = "", maxItems =
   }
 
   items.forEach((item) => {
-    if (used.has(item) || item.group === "Urinalysis" || item.label === "Cr" || item.label === "eGFR") return;
+    if (used.has(item) || item.group === "Urinalysis" || (isBloodItem(item) && (item.label === "Cr" || item.label === "eGFR"))) return;
     const prev = item.previousValue ? `(${item.previousValue})` : "";
-    result.push(`${item.group ? `${item.group} ` : ""}${item.label}${item.value}${prev}`);
+    result.push(`${specimenAwareLabDisplayLabel(item)} ${item.value}${prev}`);
     used.add(item);
   });
 
@@ -371,9 +537,12 @@ export function labSummary(items: ParsedLabItem[], fallbackText = "", maxItems =
 }
 
 export function formatLabItem(item: ParsedLabItem) {
-  const label = item.name ?? item.label;
+  const label = specimenAwareLabDisplayLabel(item);
+  const specimen = labSpecimenIdentityForItem(item);
   const value =
-    label === "WBC" && Number(item.value) >= 1000 ? `${(Number(item.value) / 1000).toFixed(1)}k` : item.value;
+    specimen.key === "blood" && label === "WBC" && Number(item.value) >= 1000
+      ? `${(Number(item.value) / 1000).toFixed(1)}k`
+      : item.value;
   return { label, value, previous: item.previousValue ? `prev ${item.previousValue}` : "" };
 }
 
@@ -425,7 +594,7 @@ export interface LabFocusOptions {
 }
 
 function numericLabValue(value: string) {
-  const normalized = value.replace(/,/g, "").match(/[<>]?\s*(-?\d+(?:\.\d+)?)/)?.[1];
+  const normalized = value.replace(/,/g, "").match(/[<>]?\s*(-?\d+(?:\.\d+)?(?:e[+-]?\d+)?)/i)?.[1];
   if (!normalized) return null;
   const parsed = Number(normalized);
   return Number.isFinite(parsed) ? parsed : null;
@@ -821,10 +990,58 @@ function defaultLabFocusCategory(key: string) {
   return "";
 }
 
+function nonBloodCategory(specimenKey: ReturnType<typeof labSpecimenIdentityForItem>["key"]) {
+  if (specimenKey === "urine") return "Urine";
+  if (specimenKey === "abg" || specimenKey === "vbg") return "Gas";
+  if (specimenKey === "stool") return "Stool";
+  if (specimenKey === "other-specimen") return "Specimen";
+  return "Fluid";
+}
+
+function nonBloodLabLevel(
+  specimenKey: ReturnType<typeof labSpecimenIdentityForItem>["key"],
+  analyteKey: string,
+  value: number | null,
+  item: ParsedLabItem,
+) {
+  const qualitative = labQualitativeLevel(analyteKey, item);
+  if (specimenKey !== "abg" && specimenKey !== "vbg") return qualitative;
+  if (value === null) return qualitative;
+  if (analyteKey === "pH") return value < 7.2 || value > 7.6 ? 2 : value < 7.35 || value > 7.45 ? 1 : qualitative;
+  if (/^pCO2$/i.test(analyteKey)) return value < 20 || value > 60 ? 2 : value < 35 || value > 45 ? 1 : qualitative;
+  if (/^pO2$/i.test(analyteKey)) return value < 60 ? 2 : value < 80 ? 1 : qualitative;
+  if (/^HCO3$/i.test(analyteKey)) return value < 15 || value > 40 ? 2 : value < 22 || value > 26 ? 1 : qualitative;
+  return qualitative;
+}
+
 export function interpretLabItem(item: ParsedLabItem, patient?: Patient): LabInterpretation {
-  const key = canonicalLabKey(item.name || item.label);
+  const specimen = labSpecimenIdentityForItem(item);
+  const key = canonicalLabKey(labAnalyteLabelForItem(item));
   const rawValue = numericLabValue(item.value);
   const rawPrevious = numericLabValue(item.previousValue ?? "");
+  if (specimen.key !== "blood") {
+    const changed = rawValue !== null && rawPrevious !== null && rawValue !== rawPrevious;
+    const level = nonBloodLabLevel(specimen.key, key, rawValue, item);
+    const anchor = isBodyFluidSpecimen(specimen);
+    const severity: LabInterpretationSeverity = level >= 2
+      ? "critical"
+      : level >= 1
+        ? "abnormal"
+        : changed
+          ? "trend"
+          : anchor
+            ? "anchor"
+            : "normal";
+    return {
+      severity,
+      category: nonBloodCategory(specimen.key),
+      label: specimenAwareLabDisplayLabel(item),
+      value: item.value,
+      previous: item.previousValue ? `prev ${item.previousValue}` : "",
+      badge: severity === "critical" ? "Crit" : severity === "abnormal" ? "Abn" : severity === "trend" ? "Trend" : severity === "anchor" ? "Anchor" : "",
+      important: level >= 1 || Boolean(item.important || item.isImportant),
+    };
+  }
   const value = labClinicalNumericValue(key, rawValue);
   const previous = labClinicalNumericValue(key, rawPrevious);
   const qualitativeLevel = labQualitativeLevel(key, item);
@@ -847,7 +1064,7 @@ export function interpretLabItem(item: ParsedLabItem, patient?: Patient): LabInt
 }
 
 function groupLabFocusSignals(entries: LabFocusEntry[]): LabFocusSignal[] {
-  const categoryOrder = ["Infx", "Anemia", "Lyte/Renal", "TLS", "Cardiac", "Onc/nutrition", ""];
+  const categoryOrder = ["Fluid", "Infx", "Anemia", "Lyte/Renal", "TLS", "Cardiac", "Onc/nutrition", ""];
   const severityOrder: LabFocusSeverity[] = ["critical", "abnormal", "trend", "anchor"];
   const groups = new Map<string, LabFocusEntry[]>();
   entries.forEach((entry) => {
@@ -885,8 +1102,8 @@ function collectLabObservations(patient: Patient, notes: DailyNote[] = []) {
       const label = item.name || item.label;
       if (!label || !String(item.value ?? "").trim()) return;
       observations.push({
-        key: canonicalLabKey(label),
-        label,
+        key: specimenAwareLabSelectionKey(item),
+        label: specimenAwareLabDisplayLabel(item),
         value: String(item.value ?? ""),
         unit: String(item.unit ?? ""),
         previousValue: String(item.previousValue ?? ""),
@@ -937,7 +1154,7 @@ export function getLabFocusSummary(
   options: LabFocusOptions = {},
 ): LabFocusSummary {
   const maxCritical = options.maxCritical ?? 2;
-  const maxTrend = options.maxTrend ?? 3;
+  const maxTrend = options.maxTrend ?? 4;
   const maxAnchors = options.maxAnchors ?? 2;
   const separator = options.separator ?? "\n";
   const observations = collectLabObservations(patient, notes);
@@ -951,22 +1168,39 @@ export function getLabFocusSummary(
 
   const entries: LabFocusEntry[] = [];
 
-  byKey.forEach((group, key) => {
+  byKey.forEach((group, scopedKey) => {
     const ordered = [...group].sort((a, b) => a.date.localeCompare(b.date));
     const latest = ordered[ordered.length - 1];
-    const previousObservation = [...ordered].reverse().find((item) => item.date < latest.date && item.value !== latest.value);
+    const previousObservation = [...ordered].reverse().find((item) => item.date < latest.date);
+    const specimen = labSpecimenIdentityForItem(latest.item);
+    const key = canonicalLabKey(labAnalyteLabelForItem(latest.item));
     const rawValue = numericLabValue(latest.value);
     const rawPrevious = numericLabValue(latest.previousValue) ?? numericLabValue(previousObservation?.value ?? "");
-    const value = labClinicalNumericValue(key, rawValue);
-    const previous = labClinicalNumericValue(key, rawPrevious);
+    const bodyFluid = isBodyFluidSpecimen(specimen);
+    const nonBlood = specimen.key !== "blood";
+    const value = nonBlood ? rawValue : labClinicalNumericValue(key, rawValue);
+    const previous = nonBlood ? rawPrevious : labClinicalNumericValue(key, rawPrevious);
     const qualitativeLevel = labQualitativeLevel(key, latest.item);
-    const level = contextAdjustedLabLevel(key, Math.max(labAbnormalLevel(key, value), qualitativeLevel), patient);
-    const hasDelta = meaningfulLabDelta(key, value, previous);
-    const anchor = isDiseaseAnchorLab(key, patient) && shouldShowAnchorLab(key, level);
-    const direction = value !== null ? labDirection(key, value, previous) : latest.previousValue ? `(${latest.previousValue})` : "";
-    const formattedValue = value !== null ? formatLabFocusValue(key, value) : latest.value;
-    const text = `${labDisplayLabel(key)} ${formattedValue}${labFocusUnitText(key, latest.item)}${direction}${labFocusSuffix(latest.item)}`;
-    const category = labFocusCategory(key, patient);
+    const level = nonBlood
+      ? nonBloodLabLevel(specimen.key, key, rawValue, latest.item)
+      : contextAdjustedLabLevel(key, Math.max(labAbnormalLevel(key, value), qualitativeLevel), patient);
+    const hasDelta = nonBlood
+      ? rawValue !== null && rawPrevious !== null && rawValue !== rawPrevious
+      : meaningfulLabDelta(key, value, previous);
+    const anchor = bodyFluid || (!nonBlood && isDiseaseAnchorLab(key, patient) && shouldShowAnchorLab(key, level));
+    const direction = value !== null
+      ? nonBlood
+        ? previous !== null && previous !== value ? `${value > previous ? "↑" : "↓"}(${formatNumeric(previous)})` : ""
+        : labDirection(key, value, previous)
+      : latest.previousValue ? `(${latest.previousValue})` : "";
+    const formattedValue = value !== null ? nonBlood ? formatNumeric(value) : formatLabFocusValue(key, value) : latest.value;
+    const displayLabel = nonBlood ? specimenAwareLabDisplayLabel(latest.item) : labDisplayLabel(key);
+    const explicitUnit = String(latest.item.unit ?? "").trim();
+    const unitText = nonBlood && explicitUnit && !String(latest.value).includes(explicitUnit)
+      ? ` ${explicitUnit}`
+      : labFocusUnitText(key, latest.item);
+    const text = `${displayLabel} ${formattedValue}${unitText}${direction}${labFocusSuffix(latest.item)}`;
+    const category = nonBlood ? nonBloodCategory(specimen.key) : labFocusCategory(key, patient);
     const critical = level >= 2;
     const trend = hasDelta || qualitativeLevel >= 1 || level >= 1;
     const severity = entrySeverity(level, hasDelta, anchor);
@@ -978,7 +1212,7 @@ export function getLabFocusSummary(
       Number(latest.item.important || latest.item.isImportant) * 40;
 
     if (critical || trend || anchor) {
-      entries.push({ key, text, score, category, anchor, critical, trend, severity });
+      entries.push({ key: scopedKey, text, score, category, anchor, critical, trend, severity });
     }
   });
 

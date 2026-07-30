@@ -69,7 +69,7 @@ import {
   suggestedRoundSoapWorkflow,
   type RoundSoapWorkflowMode,
 } from "../roundSoapWorkflow";
-import { buildCanonicalLabDataset, canonicalLabFactsForAi } from "../labDataset";
+import { buildCanonicalLabTimelineDataset, canonicalLabFactsForAi } from "../labDataset";
 import { buildCanonicalImageDataset, canonicalImageFactsForAi } from "../imageDataset";
 import { buildSoapAuditWrite } from "../clinicalAudit";
 import {
@@ -218,12 +218,44 @@ const emptyPendingOrderSources: Record<WorkflowMode, boolean> = {
   repairSoap: false,
 };
 
+function clinicalContextItems(...values: unknown[]) {
+  const seen = new Set<string>();
+  return values
+    .flatMap((value) => Array.isArray(value) ? value : [value])
+    .flatMap((value) => String(value ?? "").split(/\r?\n|;\s*/))
+    .map((item) => item.trim())
+    .filter((item) => {
+      const key = item.toLowerCase();
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+}
+
+function previousLabTextFromSoap(value: string) {
+  if (!value.trim()) return "";
+  return parseCanonicalSoapTextToEditorDraft(value).oLines
+    .filter((line) =>
+      line.kind === "lab" &&
+      !/(?:^|\b)(?:Micro\s*:|B\/C\b|BCx\b|Blood Cx\b|U\/C\b|UCx\b|Urine Cx\b|Sputum Cx\b)/i.test(line.text))
+    .map((line) => line.text)
+    .join("\n");
+}
+
 function patientContext(patient: Patient) {
   return {
     age: patient.age,
     sex: patient.sex,
-    pmh: patient.underlyingDiseases,
-    activeProblems: patient.activeProblems,
+    pmh: clinicalContextItems(
+      patient.underlyingDiseases,
+      patient.underlyingDiseaseItems,
+      patient.admissionPMH,
+    ),
+    activeProblems: clinicalContextItems(
+      patient.activeProblems,
+      patient.activeProblemItems,
+      patient.activeProblemStructuredItems.map((item) => item.title),
+    ),
   };
 }
 
@@ -752,7 +784,10 @@ function RoundSoapComposer({
       source: canonical.source,
     });
     const requestSourceFields = currentSourceFields(requestWorkflowMode);
-    const canonicalLabFacts = canonicalLabFactsForAi(buildCanonicalLabDataset(String(requestSourceFields.labs ?? "")));
+    const canonicalLabFacts = canonicalLabFactsForAi(buildCanonicalLabTimelineDataset(
+      String(requestSourceFields.labs ?? ""),
+      previousLabTextFromSoap(requestBaseline),
+    ));
     const canonicalImageFacts = canonicalImageFactsForAi(buildCanonicalImageDataset(
       [requestSourceFields.images, requestSourceFields.rawSource].filter(Boolean).join("\n"),
     ));
@@ -859,8 +894,10 @@ function RoundSoapComposer({
             baselineText: requestBaseline,
             sourceFields: requestSourceFields,
             workflowMode: requestWorkflowMode,
+            activeProblemContext: patientContext(patient).activeProblems.join("\n"),
           })
-        : {
+        : isDemoMode
+          ? {
             draft: parseSoapTextToEditorDraft(result.soapText.trim() || requestBaseline || canonical.text),
             fatalErrors: [] as string[],
             review: {
@@ -869,10 +906,26 @@ function RoundSoapComposer({
               candidateText: result.soapText,
               acceptedText: result.soapText,
               changedSections: [],
-              warnings: [...(result.warnings ?? []), "Legacy text-only AI response received; structured validation was unavailable."],
+              warnings: [...(result.warnings ?? []), "Demo mode used the deterministic local SOAP path."],
               highRiskWarnings: [],
             } satisfies SoapDeltaReview,
-          };
+          }
+          : {
+              // Cloud AI output may only enter the editor through the
+              // structured clinical contract. Preserve the reviewed baseline
+              // when an old/text-only response bypasses that contract.
+              draft: parseSoapTextToEditorDraft(requestBaseline || canonical.text),
+              fatalErrors: ["AI returned an unvalidated text-only SOAP response. The reviewed baseline was preserved; retry generation."],
+              review: {
+                workflowMode: requestWorkflowMode,
+                baselineText: requestBaseline,
+                candidateText: result.soapText,
+                acceptedText: requestBaseline || canonical.text,
+                changedSections: [],
+                warnings: ["Text-only AI response blocked because structured source validation was unavailable."],
+                highRiskWarnings: ["Unvalidated AI SOAP was not applied."],
+              } satisfies SoapDeltaReview,
+            };
       if (accepted.fatalErrors.length > 0) {
         setWarnings([...new Set([...(result.warnings ?? []), ...accepted.review.warnings])].slice(0, 8));
         setDeltaReview(accepted.review);

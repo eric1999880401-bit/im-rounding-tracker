@@ -25,7 +25,7 @@ import type { CallableInput, DocumentCallableInput, DocumentType, PatientBatchCa
 import { OPENAI_API_KEY, extractOutputText, extractRefusal, getModel, getModelForQuality, getOpenAiApiKey, getOpenAiErrorMessage, getResponseTuning, openAiBackgroundState, openAiHttpsError, postOpenAiResponse, retrieveOpenAiResponse, sanitizeQualityMode } from "./openai";
 import type { AiQualityMode } from "./openai";
 import { getRoundSoapMaxOutputTokens, resolveDocumentQuality, resolveRoundSoapQuality, ROUND_SOAP_FUNCTION_TIMEOUT_SECONDS, ROUND_SOAP_OPENAI_RESPONSE_TIMEOUT_MS, roundSoapHistoryLimit, shouldUseBackgroundRoundSoap } from "./modelRouting";
-import { asPlainObject, compactDailyNote, compactPatientContext, findTargetPatientForBatch, sanitizeExistingPatientsForBatch, sanitizePatientBatchImportMode, sanitizePatientBatchOutput, sanitizePatientContext, sanitizeUserStyleProfile, truncateString } from "./sanitize";
+import { asPlainObject, compactDailyNote, compactPatientContext, findTargetPatientForBatch, mergePatientContext, sanitizeExistingPatientsForBatch, sanitizePatientBatchImportMode, sanitizePatientBatchOutput, sanitizePatientContext, sanitizeUserStyleProfile, truncateString } from "./sanitize";
 import { MAX_ROUND_SOAP_RAW_CHARS, prepareRoundSoapSource, type RoundSoapWorkflowMode } from "./sourceCompaction";
 import { buildSoapPatch } from "./soapPatch";
 import { formatStructuredRoundSoapDraft, parseStructuredRoundSoapDraft } from "./roundSoapContract";
@@ -426,10 +426,10 @@ export const generateRoundSoap = onCall(
     const dailyNotes = notesSnapshot.docs
       .map((noteDoc) => compactDailyNote(noteDoc.id, noteDoc.data()))
       .reverse();
-    const patientContext = {
-      ...compactPatientContext(patientSnapshot.data()),
-      ...(sanitizePatientContext(data.patientContext) ?? {}),
-    };
+    const patientContext = mergePatientContext(
+      compactPatientContext(patientSnapshot.data()),
+      sanitizePatientContext(data.patientContext),
+    );
     const userStyleProfile = sanitizeUserStyleProfile(data.userStyleProfile);
     const requestedModel = getModelForQuality(qualityMode);
     const tuning = getResponseTuning(qualityMode, workflowMode === "dailyUpdate" ? "roundSoapDaily" : "roundSoapFull");
@@ -459,11 +459,10 @@ export const generateRoundSoap = onCall(
       background,
       deferBackground: background && supportsBackgroundPolling,
       payload: {
-        reasoning: retryAttempt > 0
-          ? { effort: "low" }
-          : workflowMode === "repairSoap" && qualityMode === "highAccuracy"
-          ? { effort: "medium" }
-          : tuning.reasoning,
+        // A retry asks the model to complete the same clinical contract; it
+        // must not silently downgrade reasoning and produce a different
+        // priority set from the same source.
+        reasoning: tuning.reasoning,
         max_output_tokens: maxOutputTokens,
         prompt_cache_key: `${tuning.prompt_cache_key}:${workflowMode}`,
         input: [
@@ -784,10 +783,10 @@ export const analyzeClinicalText = onCall(
     const requestedModel = getModel();
     const qualityMode: AiQualityMode = "balanced";
     const tuning = getResponseTuning(qualityMode, "intake");
-    const patientContext = {
-      ...compactPatientContext(patientSnapshot.data()),
-      ...(sanitizePatientContext(data.patientContext) ?? {}),
-    };
+    const patientContext = mergePatientContext(
+      compactPatientContext(patientSnapshot.data()),
+      sanitizePatientContext(data.patientContext),
+    );
     const { response: openAiResponse, body: responseBody, model } = await postOpenAiResponse({
       apiKey,
       model: requestedModel,

@@ -10,6 +10,7 @@ import { formatLabVisualSummaryFromLines } from "./labVisualSummary";
 import { isPathologyResultLine, objectiveKindFromLine, prefixedObjectiveLine, sanitizeObjectiveLines } from "./objectiveLineSanitizer";
 import { formatSoapDraft, parseSoapText, splitGuidedSoapSource, type SoapApProblem, type SoapDraft } from "./soapDraft";
 import { parseLabReports, safeClinicalLine, safeClinicalLinePreservingMarks, stripColorMarkup } from "./utils";
+import { specimenAwareLabSelectionKey } from "./labSpecimen";
 import type { SoapPatch } from "./types";
 
 export type RoundSoapWorkflowMode = "dailyUpdate" | "newSoap" | "transferHandoff" | "repairSoap";
@@ -417,10 +418,14 @@ function sourceFragments(value: string) {
 
 function isUsableSourceLabLine(value: string) {
   const text = stripColorMarkup(String(value ?? ""));
-  const hasNumericResult = /\b(?:WBC|Neu|Neut|Lym|Mono|Eos|Baso|RBC|Hb|Hgb|Hct|MCV|MCH|MCHC|RDW|Plt|Platelet|MPV|MDW|BUN|Cr|CRE|Creatinine|e?GFR|Na|K|Cl|Ca|Mg|Phos|P|Osm|AST|ALT|ALP|GGT|T-?Bil|D-?Bil|Alb|PT|INR|aPTT|CRP|hsCRP|PCT|Lactate|pH|pCO2|pO2|HCO3|BE|Troponin|BNP)\s*(?:[:=]\s*)?[<>]?\s*-?\d+(?:\.\d+)?/i.test(text);
+  // The canonical parser, not a finite analyte allow-list, decides whether a
+  // line contains a usable source observation. This keeps novel assays and
+  // specimen-specific results from disappearing during the Daily guard.
+  const hasParsedResult = parseLabReports(text).some((report) =>
+    report.items.some((item) => String(item.value ?? "").trim().length > 0));
   const hasMicroResult = /\b(?:blood|urine|sputum|CSF|stool)\s*(?:culture|Cx)\b.*\b(?:positive|negative|growth|isolated|NGTD|susceptib|resistan|pending)\b|\b(?:B\/C|BCx|U\/C|UCx)\b.*\b(?:positive|negative|growth|NGTD|pending)\b/i.test(text);
   const hasStoolResult = /\b(?:O\s*&\s*P|O\/P|occult blood|FOBT|C\.?\s*difficile|C\.?\s*diff)\b.*\b(?:positive|negative|neg\.?|detected|not detected)\b/i.test(text);
-  return hasNumericResult || hasMicroResult || hasStoolResult;
+  return hasParsedResult || hasMicroResult || hasStoolResult;
 }
 
 function sourceVitalsLines(value: string) {
@@ -447,8 +452,39 @@ function lineUsesSourceNumbers(line: string, sourceLines: string[]) {
   return candidateNumbers.every((value) => sourceNumbers.has(value));
 }
 
+function lineUsesCurrentLabValues(line: string, sourceLines: string[]) {
+  const sourceItems = parseLabReports(sourceLines.join("\n")).flatMap((report) => report.items);
+  const candidateItems = parseLabReports(line).flatMap((report) => report.items);
+  if (sourceItems.length === 0 || candidateItems.length === 0) return false;
+  const comparableValue = (value: unknown) => {
+    const normalized = labValueKey(String(value ?? "")).replace(/[↑↓?]/g, "");
+    const numeric = normalized.match(/^[<>]?\s*(-?\d+(?:\.\d+)?)/)?.[1];
+    if (numeric !== undefined) return String(Number(numeric));
+    return normalized.toLowerCase();
+  };
+  const currentByKey = new Map<string, string>();
+  sourceItems.forEach((item) => {
+    const key = specimenAwareLabSelectionKey(item);
+    const value = comparableValue(item.value);
+    if (key && value) currentByKey.set(key, value);
+  });
+  let matched = 0;
+  for (const item of candidateItems) {
+    const key = specimenAwareLabSelectionKey(item);
+    const sourceValue = currentByKey.get(key);
+    if (!sourceValue) continue;
+    matched += 1;
+    if (comparableValue(item.value) !== sourceValue) return false;
+  }
+  return matched > 0;
+}
+
 function sourceLabLines(value: string) {
-  const summary = formatLabVisualSummaryFromLines(value, { includeLabPrefix: true });
+  const summary = formatLabVisualSummaryFromLines(value, {
+    includeLabPrefix: true,
+    selectionMode: "complete",
+    maxItemsPerGroup: Number.POSITIVE_INFINITY,
+  });
   return uniqueLines(summary.lines.filter(isUsableSourceLabLine), 12);
 }
 
@@ -1010,10 +1046,6 @@ function taskExplicitlyCompleted(task: string, sourceText: string) {
   return false;
 }
 
-function labItemKey(label: string) {
-  return String(label ?? "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "");
-}
-
 function labValueKey(value: string) {
   return String(value ?? "").trim().replace(/,/g, "");
 }
@@ -1026,7 +1058,7 @@ function previousLabValues(lines: string[]) {
   const values = new Map<string, string>();
   parseLabReports(lines.join("\n")).forEach((report) => {
     report.items.forEach((item) => {
-      const key = labItemKey(item.name || item.label);
+      const key = specimenAwareLabSelectionKey(item);
       const value = labValueKey(String(item.value ?? ""));
       if (!key || !value || values.has(key)) return;
       values.set(key, value);
@@ -1137,7 +1169,7 @@ function labDerivedSourceProblems(fields: RoundSoapSourceFields, baseline: SoapD
   const latest = new Map<string, { label: string; value: string; previous: string }>();
   currentItems.forEach((item) => {
     const label = String(item.name || item.label || "").trim();
-    const key = labItemKey(label);
+    const key = specimenAwareLabSelectionKey(item);
     const value = labValueKey(String(item.value ?? ""));
     if (!key || !value) return;
     latest.set(key, { label, value, previous: labValueKey(String(item.previousValue ?? "")) || baselineValues.get(key) || "" });
@@ -1149,7 +1181,7 @@ function labDerivedSourceProblems(fields: RoundSoapSourceFields, baseline: SoapD
     if (!evidence || problems.some((problem) => apKey(problem.title) === key)) return;
     problems.push({ title, lines: [evidence] });
   };
-  const cr = latest.get("cr") ?? latest.get("creatinine");
+  const cr = latest.get("blood|cr") ?? latest.get("blood|creatinine");
   if (cr) {
     const current = numericLabValue(cr.value);
     const previous = numericLabValue(cr.previous);
@@ -1157,21 +1189,21 @@ function labDerivedSourceProblems(fields: RoundSoapSourceFields, baseline: SoapD
       add("Cr rise / renal dysfunction", `Cr ${cr.value}(${cr.previous})`);
     }
   }
-  const na = latest.get("na") ?? latest.get("sodium");
+  const na = latest.get("blood|na") ?? latest.get("blood|sodium");
   const naValue = numericLabValue(na?.value ?? "");
   if (na && naValue !== null && naValue <= 130) add("Hyponatremia", `Na ${na.value}${na.previous ? `(${na.previous})` : ""}`);
   if (na && naValue !== null && naValue >= 150) add("Hypernatremia", `Na ${na.value}${na.previous ? `(${na.previous})` : ""}`);
-  const potassium = latest.get("k") ?? latest.get("potassium");
+  const potassium = latest.get("blood|k") ?? latest.get("blood|potassium");
   const potassiumValue = numericLabValue(potassium?.value ?? "");
   if (potassium && potassiumValue !== null && potassiumValue <= 3) add("Hypokalemia", `K ${potassium.value}${potassium.previous ? `(${potassium.previous})` : ""}`);
   if (potassium && potassiumValue !== null && potassiumValue >= 5.5) add("Hyperkalemia", `K ${potassium.value}${potassium.previous ? `(${potassium.previous})` : ""}`);
-  const ast = latest.get("ast");
-  const alt = latest.get("alt");
+  const ast = latest.get("blood|ast");
+  const alt = latest.get("blood|alt");
   const liverValues = [ast, alt].filter(Boolean) as Array<{ label: string; value: string; previous: string }>;
   if (liverValues.some((item) => (numericLabValue(item.value) ?? 0) >= 200)) {
     add("Liver injury / transaminitis", liverValues.map((item) => `${item.label} ${item.value}${item.previous ? `(${item.previous})` : ""}`).join(", "));
   }
-  const hb = latest.get("hb") ?? latest.get("hgb") ?? latest.get("hemoglobin");
+  const hb = latest.get("blood|hb") ?? latest.get("blood|hgb") ?? latest.get("blood|hemoglobin");
   const hbValue = numericLabValue(hb?.value ?? "");
   const hbPrevious = numericLabValue(hb?.previous ?? "");
   if (hb && hbValue !== null && (hbValue < 8 || (hbPrevious !== null && hbPrevious - hbValue >= 2))) {
@@ -1229,7 +1261,7 @@ function enrichLabLineWithPreviousValues(line: string, previousValues: Map<strin
   let next = line;
   const candidateItems = parseLabReports(line).flatMap((report) => report.items);
   candidateItems.forEach((item) => {
-    const key = labItemKey(item.name || item.label);
+    const key = specimenAwareLabSelectionKey(item);
     const current = labValueKey(String(item.value ?? ""));
     const sourcePrevious = labValueKey(String(item.previousValue ?? ""));
     if (sourcePrevious) return;
@@ -1261,7 +1293,7 @@ function labVisualGroupKey(line: string) {
   return stripColorMarkup(String(line ?? ""))
     .replace(/^!+\s*/, "")
     .replace(/^Lab\s*:\s*/i, "")
-    .match(/^(CBC\/DC|Chem\/Renal|Liver\/Coag|Micro|ABG\/VBG|Cardiac|Other)\s*:/i)?.[1]
+    .match(/^(CBC\/DC|Chem\/Renal|Liver\/Coag|Micro|ABG\/VBG|Fluid studies|Cardiac|Other)\s*:/i)?.[1]
     ?.toLowerCase() ?? "";
 }
 
@@ -1325,45 +1357,190 @@ function hasEquivalentLine(lines: string[], target: string) {
   }));
 }
 
-function carryForwardProtectedDraft(baseline: SoapDraft, candidate: SoapDraft) {
+const repairCoverageStopWords = new Set([
+  "active",
+  "adequate",
+  "and",
+  "continue",
+  "continued",
+  "current",
+  "improved",
+  "improving",
+  "monitor",
+  "pending",
+  "plan",
+  "prior",
+  "stable",
+  "the",
+  "today",
+  "unchanged",
+  "with",
+]);
+
+function repairCoverageTokens(value: string) {
+  const normalized = stripColorMarkup(String(value ?? ""))
+    .toLowerCase()
+    .replace(/\bblood\s+cultures?\b|\bb\s*\/\s*c\b|\bbcx\b/g, " bloodculture ")
+    .replace(/\burine\s+cultures?\b|\bu\s*\/\s*c\b|\bucx\b/g, " urineculture ")
+    .replace(/\bf\s*\/\s*u\b|\bfollow[- ]?up\b/g, " follow ")
+    .replace(/\b(?:o2|oxygen|spo2)\b/g, " oxygen ")
+    .replace(/\b(?:cr|creatinine)\b/g, " creatinine ")
+    .replace(/\b(?:uo|u\/o|urine output)\b/g, " urineoutput ")
+    .replace(/\b(?:dc|discharge)\b/g, " discharge ")
+    .replace(/\b(?:pna|pneumonia)\b/g, " pneumonia ")
+    .replace(/\b(?:abx|antibiotics?)\b/g, " antibiotic ");
+  return new Set(
+    (normalized.match(/[a-z][a-z0-9/+.-]{1,}|[\u4e00-\u9fff]{2,}/g) ?? [])
+      .map((token) => token.replace(/^[+.-]+|[+.-]+$/g, ""))
+      .filter((token) => token && !/^\d/.test(token) && !repairCoverageStopWords.has(token)),
+  );
+}
+
+function repairLineIsCovered(target: string, candidateLines: string[]) {
+  if (hasEquivalentLine(candidateLines, target)) return true;
+  const targetTokens = repairCoverageTokens(target);
+  if (targetTokens.size === 0) return false;
+  const candidateTokens = repairCoverageTokens(candidateLines.join("\n"));
+  return [...targetTokens].every((token) => candidateTokens.has(token));
+}
+
+function repairProblemIsCovered(problem: SoapApProblem, candidateProblems: SoapApProblem[]) {
+  const baselineKey = apKey(problem.title);
+  const baselineSignatures = problemSignatures(problem);
+  if (candidateProblems.some((candidate) => {
+    const candidateKey = apKey(candidate.title);
+    if (baselineKey && candidateKey && (candidateKey === baselineKey || candidateKey.includes(baselineKey))) return true;
+    const candidateSignatures = problemSignatures(candidate);
+    return baselineSignatures.length > 0 && baselineSignatures.some((signature) => candidateSignatures.includes(signature));
+  })) return true;
+  const candidateLines = candidateProblems.flatMap((candidate) => [candidate.title, ...candidate.lines]);
+  return repairLineIsCovered(problem.title, candidateLines);
+}
+
+interface RepairCoverageGap {
+  kind: "SOAP body" | "numeric fact" | "A/P problem" | "task" | "DC" | "safety item";
+  value: string;
+}
+
+function repairCoverageGaps(baseline: SoapDraft, candidate: SoapDraft) {
+  const gaps: RepairCoverageGap[] = [];
+  if (hasSoapBody(baseline) && !hasSoapBody(candidate)) {
+    gaps.push({ kind: "SOAP body", value: "reviewed SOAP content" });
+  }
+  const baselineText = formatSoapDraft(baseline);
+  const candidateText = formatSoapDraft(candidate);
+  const candidateNumbers = new Set(lineNumericTokens(candidateText));
+  [...new Set(lineNumericTokens(baselineText))].forEach((value) => {
+    if (!candidateNumbers.has(value)) gaps.push({ kind: "numeric fact", value });
+  });
+
+  baseline.apProblems.forEach((problem) => {
+    if (!repairProblemIsCovered(problem, candidate.apProblems)) {
+      gaps.push({ kind: "A/P problem", value: problem.title });
+    }
+  });
+  baseline.taskLines.forEach((line) => {
+    if (!repairLineIsCovered(line, candidate.taskLines)) gaps.push({ kind: "task", value: line });
+  });
+  baseline.dcLines.forEach((line) => {
+    if (!repairLineIsCovered(line, candidate.dcLines)) gaps.push({ kind: "DC", value: line });
+  });
+
+  const safetySections: Array<[string[], string[]]> = [
+    [
+      baseline.header.filter((line) => isProtectedLine(line) || /\b(?:code|allerg|isolation|alert|unstable)\b/i.test(line)),
+      candidate.header,
+    ],
+    [baseline.sLines.filter(isProtectedLine), candidate.sLines],
+    [baseline.oLines.filter(isProtectedLine), candidate.oLines],
+  ];
+  // Problem titles are checked with problem-aware consolidation matching above;
+  // checking them again as literal safety lines would reject valid merges such
+  // as "CXR infiltrate" into a source-equivalent pneumonia problem.
+  const baselineApSafety = baseline.apProblems.flatMap((problem) => problem.lines).filter(isProtectedLine);
+  const candidateApLines = candidate.apProblems.flatMap((problem) => [problem.title, ...problem.lines]);
+  safetySections.forEach(([baselineLines, candidateLines]) => baselineLines.forEach((line) => {
+    if (!repairLineIsCovered(line, candidateLines)) gaps.push({ kind: "safety item", value: line });
+  }));
+  baselineApSafety.forEach((line) => {
+    if (!repairLineIsCovered(line, candidateApLines)) gaps.push({ kind: "safety item", value: line });
+  });
+  return gaps;
+}
+
+function carryForwardProtectedDraft(baseline: SoapDraft, candidate: SoapDraft, preserveAllReviewed = false) {
   let changed = false;
   const next: SoapDraft = {
     ...candidate,
+    header: preserveAllReviewed
+      ? uniqueLines([...candidate.header, ...baseline.header], Math.max(candidate.header.length + baseline.header.length, 8))
+      : candidate.header,
+    sLines: preserveAllReviewed
+      ? uniqueLines([...candidate.sLines, ...baseline.sLines], Math.max(candidate.sLines.length + baseline.sLines.length, 8))
+      : candidate.sLines,
+    oLines: preserveAllReviewed
+      ? uniqueLines([...candidate.oLines, ...baseline.oLines], Math.max(candidate.oLines.length + baseline.oLines.length, 24))
+      : candidate.oLines,
     apProblems: candidate.apProblems.map((problem) => ({ ...problem, lines: [...problem.lines] })),
     taskLines: [...candidate.taskLines],
     dcLines: [...candidate.dcLines],
   };
+  if (preserveAllReviewed && (
+    !sameLines(next.header, candidate.header) ||
+    !sameLines(next.sLines, candidate.sLines) ||
+    !sameLines(next.oLines, candidate.oLines)
+  )) changed = true;
 
   baseline.apProblems.forEach((baselineProblem) => {
-    const protectedApLines = baselineProblem.lines.filter(isProtectedLine);
-    if (protectedApLines.length === 0 && !isProtectedLine(baselineProblem.title)) return;
+    const protectedApLines = preserveAllReviewed ? baselineProblem.lines : baselineProblem.lines.filter(isProtectedLine);
+    if (!preserveAllReviewed && protectedApLines.length === 0 && !isProtectedLine(baselineProblem.title)) return;
     let target = findMatchingProblem(baselineProblem, next.apProblems);
     if (!target) {
+      const distinctiveTitleTokens = apKey(baselineProblem.title)
+        .split(/\s+/)
+        .filter((token) => token.length >= 3 && !/^(?:the|and|with|prior|active|stable|improving|problem)$/.test(token));
+      const candidateProblemText = apKey(next.apProblems
+        .flatMap((problem) => [problem.title, ...problem.lines])
+        .join(" "));
+      if (preserveAllReviewed && distinctiveTitleTokens.some((token) => candidateProblemText.includes(token))) return;
+      if (preserveAllReviewed && !/\b(?:AKI|renal|hyperk|hypok|sepsis|shock|bleed|respiratory failure|hypox|oxygen|delirium|AMS|stroke|ACS|STEMI|NSTEMI|arrhythmia|DIC|coagulopathy)\b/i.test(
+        `${baselineProblem.title} ${baselineProblem.lines.join(" ")}`,
+      )) return;
       target = { title: baselineProblem.title, lines: [] };
       next.apProblems.push(target);
       changed = true;
     }
     const missingLines = protectedApLines.filter((line) => !hasEquivalentLine(next.apProblems.flatMap((problem) => problem.lines), line));
     if (missingLines.length > 0) {
-      target.lines = uniqueLines([...missingLines, ...target.lines], 2);
+      target.lines = uniqueLines([...missingLines, ...target.lines], Math.max(2, missingLines.length + target.lines.length));
       changed = true;
     }
   });
 
-  const missingTasks = baseline.taskLines.filter((line) => isProtectedLine(line) && !hasEquivalentLine(next.taskLines, line));
+  const missingTasks = baseline.taskLines.filter((line) => (preserveAllReviewed || isProtectedLine(line)) && !hasEquivalentLine(next.taskLines, line));
   if (missingTasks.length > 0) {
-    next.taskLines = uniqueLines([...next.taskLines, ...missingTasks], 8);
+    next.taskLines = uniqueLines(
+      [...next.taskLines, ...missingTasks],
+      preserveAllReviewed ? next.taskLines.length + missingTasks.length : 8,
+    );
     changed = true;
   }
-  const missingDc = baseline.dcLines.filter((line) => isProtectedLine(line) && !hasEquivalentLine(next.dcLines, line));
+  const missingDc = baseline.dcLines.filter((line) => (preserveAllReviewed || isProtectedLine(line)) && !hasEquivalentLine(next.dcLines, line));
   if (missingDc.length > 0) {
-    next.dcLines = uniqueLines([...next.dcLines, ...missingDc], 6);
+    next.dcLines = uniqueLines(
+      [...next.dcLines, ...missingDc],
+      preserveAllReviewed ? next.dcLines.length + missingDc.length : 6,
+    );
     changed = true;
   }
 
   return {
     draft: next,
-    warnings: changed ? ["Protected antibiotic/culture/DC item(s) were carried forward from reviewed SOAP."] : [],
+    warnings: changed
+      ? [preserveAllReviewed
+          ? "Reviewed SOAP facts omitted during repair were carried forward."
+          : "Protected antibiotic/culture/DC item(s) were carried forward from reviewed SOAP."]
+      : [],
   };
 }
 
@@ -1426,7 +1603,17 @@ function draftForDailyUpdate(baseline: SoapDraft, candidate: SoapDraft, fields: 
         const exactCandidate = candidateObjective.vs.filter((line) => lineUsesSourceNumbers(line, sourceOwnedLines));
         nextObjective.vs = uniqueLines(exactCandidate.length > 0 ? exactCandidate : sourceOwnedLines, 4);
       } else if (section === "lab") {
-        nextObjective.lab = mergeLabLinesForDaily(baseObjective.lab, sourceOwnedLines, 12);
+        const canonicalCandidate = formatLabVisualSummaryFromLines(candidateObjective.lab, {
+          includeLabPrefix: true,
+          selectionMode: "complete",
+          maxItemsPerGroup: Number.POSITIVE_INFINITY,
+        }).lines;
+        const exactCandidate = canonicalCandidate.filter((line) => lineUsesCurrentLabValues(line, sourceOwnedLines));
+        nextObjective.lab = mergeLabLinesForDaily(
+          baseObjective.lab,
+          exactCandidate.length > 0 ? exactCandidate : sourceOwnedLines,
+          12,
+        );
       } else if (section === "image") {
         const incomingImages = newestImageStudyLines(sourceOwnedLines, 8);
         const incomingStudyKeys = new Set(incomingImages.map(imageStudyKey).filter(Boolean));
@@ -1529,7 +1716,26 @@ function draftForDailyUpdate(baseline: SoapDraft, candidate: SoapDraft, fields: 
         ...supplementalLines,
       ], 2);
     } else {
-      candidateApProblems.push(problem);
+      // Multiple current facts may belong to one reviewed combined problem
+      // (for example Cr rise + hyperkalemia under "AKI / hyperK"). Coalesce
+      // them before the one-to-one baseline assignment so model omission or
+      // ordering cannot create a duplicate seventh problem.
+      const baselineMatch = baseline.apProblems
+        .map((baselineProblem) => ({ baselineProblem, score: problemMatchScore(problem, baselineProblem) }))
+        .filter((item) => item.score > 0)
+        .sort((left, right) => right.score - left.score)[0]?.baselineProblem;
+      const existingForBaseline = baselineMatch
+        ? candidateApProblems.find((candidateProblem) => problemMatchScore(candidateProblem, baselineMatch) > 0)
+        : undefined;
+      if (baselineMatch && existingForBaseline) {
+        existingForBaseline.title = baselineMatch.title;
+        existingForBaseline.lines = uniqueLines([...existingForBaseline.lines, ...problem.lines], 3);
+      } else {
+        candidateApProblems.push({
+          ...problem,
+          title: baselineMatch?.title ?? problem.title,
+        });
+      }
     }
   });
   let nextApProblems = baseline.apProblems;
@@ -1630,6 +1836,7 @@ export function guardRoundSoapDelta({
   sourceFields,
   candidateWarnings = [],
   selectedDate = "",
+  candidateObjectiveIsSourceOwned = false,
 }: {
   workflowMode: RoundSoapWorkflowMode;
   baselineText: string;
@@ -1637,6 +1844,7 @@ export function guardRoundSoapDelta({
   sourceFields: RoundSoapSourceFields;
   candidateWarnings?: string[];
   selectedDate?: string;
+  candidateObjectiveIsSourceOwned?: boolean;
 }): SoapDeltaReview {
   const baselineSanitized = sanitizeDraftObjective(parseSoapText(baselineText));
   const candidateSanitized = sanitizeDraftObjective(parseSoapText(candidateText || baselineText));
@@ -1648,7 +1856,9 @@ export function guardRoundSoapDelta({
   const beforeAntibioticText = formatSoapDraft(significanceFiltered.draft).toLowerCase();
   const missingAntibiotics = activeAntibiotics.filter((name) => !beforeAntibioticText.includes(name));
   const antibioticGroundedCandidate = ensureAntibioticApInDraft(significanceFiltered.draft, sourceText, selectedDate);
-  const objectiveGrounded = ensureSourceObjectiveCoverage(antibioticGroundedCandidate, sourceFields);
+  const objectiveGrounded = candidateObjectiveIsSourceOwned
+    ? { draft: antibioticGroundedCandidate, warnings: [] as string[] }
+    : ensureSourceObjectiveCoverage(antibioticGroundedCandidate, sourceFields);
   const sourceGroundedCandidate = objectiveGrounded.draft;
   const afterAntibioticText = formatSoapDraft(sourceGroundedCandidate).toLowerCase();
   const restoredAntibiotics = missingAntibiotics.filter((name) => afterAntibioticText.includes(name));
@@ -1666,13 +1876,49 @@ export function guardRoundSoapDelta({
       : []),
   ];
   const malformedDailyCandidate = workflowMode === "dailyUpdate" && candidateText.trim().length > 0 && !hasSoapBody(parsedCandidate);
-  const protectedCandidate = carryForwardProtectedDraft(baseline, sourceGroundedCandidate);
-  const candidate = workflowMode === "dailyUpdate" || workflowMode === "repairSoap"
+  // Repair is all-or-nothing. Merging omitted reviewed lines into a rewritten
+  // draft can retain both stale and current values (for example Cr 1.2 and Cr
+  // 2.0). Validate coverage below and either accept the consolidated draft or
+  // return the reviewed baseline unchanged.
+  const protectedCandidate = workflowMode === "repairSoap"
+    ? { draft: sourceGroundedCandidate, warnings: [] as string[] }
+    : carryForwardProtectedDraft(baseline, sourceGroundedCandidate);
+  const candidate = workflowMode === "dailyUpdate"
     ? sourceGroundedCandidate
     : protectedCandidate.draft;
   const normalizedBaselineText = formatSoapDraft(baseline);
   const normalizedCandidateText = formatSoapDraft(candidate);
   const coverageWarnings = sourceCoverageWarnings(sourceText, normalizedCandidateText);
+  if (workflowMode === "repairSoap") {
+    const gaps = repairCoverageGaps(baseline, candidate);
+    if (gaps.length > 0) {
+      const gapSummary = gaps
+        .slice(0, 4)
+        .map((gap) => `${gap.kind}: ${safeClinicalLine(gap.value, 60)}`)
+        .join("; ");
+      return {
+        workflowMode,
+        baselineText: normalizedBaselineText,
+        candidateText: normalizedCandidateText,
+        acceptedText: normalizedBaselineText,
+        changedSections: analyzeChangedSections(baseline, candidate).map((section) => ({
+          ...section,
+          risk: "high",
+          blocked: true,
+          reason: "Repair was rejected because it did not fully cover the reviewed clinical baseline.",
+        })),
+        warnings: uniqueLines([
+          ...candidateWarnings,
+          ...fidelityWarnings,
+          ...coverageWarnings,
+          "Repair output was incomplete; the reviewed SOAP was left unchanged.",
+        ], 8),
+        highRiskWarnings: uniqueLines([
+          `Repair blocked: ${gapSummary}${gaps.length > 4 ? `; +${gaps.length - 4} more` : ""}.`,
+        ], 8),
+      };
+    }
+  }
   if (workflowMode !== "dailyUpdate") {
     return {
       workflowMode,
@@ -1683,12 +1929,10 @@ export function guardRoundSoapDelta({
       warnings: uniqueLines([
         ...candidateWarnings,
         ...fidelityWarnings,
-        ...(workflowMode === "repairSoap" ? [] : protectedCandidate.warnings),
+        ...protectedCandidate.warnings,
         ...coverageWarnings,
       ], 8),
-      highRiskWarnings: workflowMode === "repairSoap" || protectedCandidate.warnings.length === 0
-        ? []
-        : protectedCandidate.warnings,
+      highRiskWarnings: protectedCandidate.warnings.length === 0 ? [] : protectedCandidate.warnings,
     };
   }
 

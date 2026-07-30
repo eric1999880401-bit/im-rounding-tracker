@@ -3,6 +3,7 @@ import { ensureAntibioticApInDraft } from "./antibioticPlan";
 import { normalizeApProblems } from "./apProblemNormalizer";
 import { imageStudyKey } from "./clinicalFieldRouter";
 import { dedupeDiseaseItems, dedupeDiseaseText } from "./aiPostprocess/diseaseDedupe";
+import { isLabSpecimenHeading, labSpecimenIdentityFromText } from "./labSpecimen";
 import { normalizeLabTableSourceText, objectiveKindFromLine } from "./objectiveLineSanitizer";
 import type { AiSoapDraft, AssessmentPlanItem, DailyNote, Patient, PatientTask, TaskCategory, TaskPriority } from "./types";
 import {
@@ -338,6 +339,7 @@ export function getCanonicalSoapText(patient: Patient, dailyNotes: DailyNote[] =
       text: canonicalSoap,
       source: "selected" as const,
       sourceDate: selectedNote?.date ?? selectedDate,
+      isCurrentDate: true,
     };
   }
 
@@ -346,6 +348,7 @@ export function getCanonicalSoapText(patient: Patient, dailyNotes: DailyNote[] =
       text: canonicalSoap,
       source: "latest" as const,
       sourceDate: canonicalNote.date,
+      isCurrentDate: canonicalNote.date === selectedDate,
     };
   }
 
@@ -353,10 +356,15 @@ export function getCanonicalSoapText(patient: Patient, dailyNotes: DailyNote[] =
     text: formatSoapDraft(patientToFallbackSoapDraft(patient, eligibleNotes, selectedDate)),
     source: "fallback" as const,
     sourceDate: selectedDate,
+    isCurrentDate: true,
   };
 }
 
 function criticalSoapLine(line: string) {
+  const specimen = labSpecimenIdentityFromText(line);
+  const nonPeripheralSpecimen = specimen.key !== "blood";
+  const explicitClinicalRisk = /\b(?:shock|sepsis|hypotension|desat|hypox|active bleed|melena|hematemesis|stroke|ich|neutropenic fever|lactate|troponin|culture|b\/c|bcx|mrsa|enterococcus)\b/i.test(line);
+  if (nonPeripheralSpecimen && !explicitClinicalRisk) return false;
   return /\b(shock|sepsis|hypotension|desat|hypox|active bleed|melena|hematemesis|stroke|ich|neutropenic fever|lactate|troponin|k\s*(?:[<≤]\s*3|[>≥]\s*5\.5)|hb\s*(?:[<≤]\s*8|drop)|wbc\s*(?:[>≥]\s*12|[<≤]\s*3)|cr\s*(?:[>≥]\s*2)|culture|b\/c|bcx|mrsa|enterococcus)\b/i.test(line);
 }
 
@@ -474,6 +482,12 @@ export function splitGuidedSoapSource(rawText: string): Record<GuidedSoapSourceS
   normalizeLabTableSourceText(rawText).text
     .split(/\r?\n/)
     .forEach((line) => {
+      const trimmed = line.trim();
+      if (isLabSpecimenHeading(trimmed)) {
+        buckets.labs.push(trimmed);
+        current = "labs";
+        return;
+      }
       const match = line.match(/^\s*(Admission|V\/S|VS|Vitals?|Lab|Labs|Image|Img|Imaging|Pathology|Orders?|Meds?|Medication|藥囑|Consult(?:ation)?(?:\s+note)?|Description\s*\/\s*other|Other update\s*\/\s*task\s*\/\s*course|Last SOAP(?:\s*\/\s*SBAR)?|SBAR|Handoff)\s*:\s*(.*)$/i);
       if (match) {
         const matchedSection = guidedSectionKey(match[1]);
@@ -486,7 +500,6 @@ export function splitGuidedSoapSource(rawText: string): Record<GuidedSoapSourceS
         }
         return;
       }
-      const trimmed = line.trim();
       if (!trimmed) return;
       if (current !== "other") {
         if (current === "admission" && shouldRouteOutOfAdmission(trimmed)) {
@@ -835,7 +848,19 @@ export function patientToSoapDraft(patient: Patient, dailyNotes: DailyNote[] = [
   const canonical = getCanonicalSoapText(patient, eligibleNotes, selectedDate);
   // A complete reviewed SOAP is canonical. Re-injecting legacy patient/note
   // orders here made deleted or corrected orders reappear after Save.
-  if (canonical.source !== "fallback") return parseSoapText(canonical.text);
+  if (canonical.source !== "fallback") {
+    const draft = parseSoapText(canonical.text);
+    if (canonical.isCurrentDate || !canonical.sourceDate) return draft;
+    return {
+      ...draft,
+      header: uniqueSoapLines(
+        [...draft.header.filter((line) => !/^Carried from:/i.test(line)), `Carried from: ${canonical.sourceDate}`],
+        Math.max(8, draft.header.length + 1),
+        150,
+        false,
+      ),
+    };
+  }
   return patientToFallbackSoapDraft(patient, eligibleNotes, selectedDate);
 }
 
